@@ -13,6 +13,17 @@ export interface SyncFileDetails {
   updatedAt?: string;
 }
 
+export interface DocumentOcrOverview {
+  total: number;
+  queued: number;
+  running: number;
+  completed: number;
+  failed: number;
+  cancelled: number;
+  latestAt: string | null;
+  latestCompletedAt: string | null;
+}
+
 export interface SyncFileActivity {
   id: number;
   sourceId: string;

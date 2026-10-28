@@ -581,16 +581,6 @@ async function executeTask(task: ProductTask, kind: BrainEngine['kind']) {
         result.searchOptimizeError=true;
       }
     }
-    if(imported.errors===0){
-      const automaticEnabled=await engine.getConfig('dream.entity_capture.enabled')!=='false';
-      if(!automaticEnabled)result.knowledgeStatus='disabled';
-      else if(!(await chooseCaptureModel(engine,{})).ok)result.knowledgeStatus='model_unavailable';
-      else{
-        let pending:string[]=[];
-        try{const parsed=JSON.parse(await engine.getConfig('dream.entity_capture.pending.'+sourceId)??'null');if(Array.isArray(parsed?.slugs))pending=parsed.slugs.filter((slug:unknown):slug is string=>typeof slug==='string');}catch{}
-        if(embedSlugs.some(slug=>pending.includes(slug)))result.knowledgeStatus='queued';
-      }
-    }
   } else if (task.type === 'dream') {
     result = await runWithDreamBudget(task.input,async()=>({...await runDreamTask(engine,task.input)}),request=>rpc('task.budget',[request]) as Promise<TaskBudgetReply>);
   } else if (task.type === 'sync') {

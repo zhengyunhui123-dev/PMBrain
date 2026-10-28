@@ -40,8 +40,8 @@ describe('Admin 任务中心与 Dream 忙碌态', () => {
   });
 
   test('有实际运行任务时不显示 PGLite 残留占用恢复卡片', () => {
-    expect(taskCenterSource).toContain('activeRows.length === 0 && snapshot?.pglite_owner');
-    expect(taskCenterSource).toContain("const activeRows = rows.filter(isActive);");
+    expect(taskCenterSource).toContain('activeRows.length === 0 && ocrSummary.running+ocrSummary.queued===0 && snapshot?.pglite_owner');
+    expect(taskCenterSource).toContain("const activeRows = ordinaryRows.filter(isActive);");
     expect(taskCenterSource).toContain('暂无任务记录');
   });
 

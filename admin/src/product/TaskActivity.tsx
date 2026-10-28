@@ -30,7 +30,7 @@ export function TaskActivityProvider({ enabled, children }: { enabled: boolean; 
         if (!live) return;
         for (const run of rows) {
           const old = previous.current.get(run.id);
-          if (run.kind!=='conversation_memory'&&(old === 'running' || old === 'queued') && !['running', 'queued'].includes(run.status)) setNotice(run);
+          if (run.kind!=='conversation_memory'&&run.kind!=='document_ocr'&&(old === 'running' || old === 'queued') && !['running', 'queued'].includes(run.status)) setNotice(run);
         }
         previous.current = new Map(rows.map(run => [run.id, run.status]));
         setSnapshot({ rows, error: '', loaded: true });
@@ -46,7 +46,7 @@ export function TaskActivityProvider({ enabled, children }: { enabled: boolean; 
   const running = snapshot.rows.find(run => run.kind!=='conversation_memory'&&run.status === 'running') ?? snapshot.rows.find(run => run.kind!=='conversation_memory'&&run.status === 'queued');
   const waiting = running?.searchOptimize && running.status === 'queued';
   return <TasksContext.Provider value={{ ...snapshot, imports, setImports }}>{children}
-    {running && <button type="button" className={`product-task-activity${waiting ? ' is-waiting' : ''}`} onClick={() => taskLink(running)}>{waiting ? <Clock3 size={15} /> : <LoaderCircle size={15} />}<span>{running.product?.name ?? taskName(running.kind)} · {running.product?.stage ?? '等待执行'}{taskPercent(running) != null ? ` ${taskPercent(running)}%` : ''}</span></button>}
+    {running && <button type="button" className={`product-task-activity${waiting ? ' is-waiting' : ''}`} onClick={() => running.kind==='document_ocr'?window.location.hash='tasks?ocr=1':taskLink(running)}>{waiting ? <Clock3 size={15} /> : <LoaderCircle size={15} />}<span>{running.product?.name ?? taskName(running.kind)} · {running.product?.stage ?? '等待执行'}{taskPercent(running) != null ? ` ${taskPercent(running)}%` : ''}</span></button>}
     {notice && <div className="product-task-notice" role="status"><button type="button" onClick={() => taskLink(notice)}>{notice.product?.name ?? taskName(notice.kind)} · {taskStatus(notice)}{notice.product?.metrics.filter(metric => metric.value > 0).slice(0, 2).map(metric => ` · ${metric.label} ${metric.value}`)}</button><button type="button" aria-label="关闭任务通知" onClick={() => setNotice(null)}><X size={16} /></button></div>}
   </TasksContext.Provider>;
 }

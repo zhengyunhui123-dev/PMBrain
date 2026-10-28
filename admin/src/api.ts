@@ -219,6 +219,7 @@ export const api = {
     message: string;
   }>('/admin/api/search-index-repair', { method: 'POST' }),
   taskCenter: (summary = false) => apiFetch(`/admin/api/task-center${summary ? '?summary=1' : ''}`),
+  documentOcrRuns: (before: number | null = null): Promise<{ rows: import('./lib/shared').ConsoleRun[]; next: number | null }> => apiFetch(`/admin/api/document-ocr-runs${before === null ? '' : `?before=${before}`}`),
   terminatePgliteOwner: (pid: number) => apiFetch('/admin/api/pglite-owner/terminate', {
     method: 'POST',
     body: JSON.stringify({ pid }),

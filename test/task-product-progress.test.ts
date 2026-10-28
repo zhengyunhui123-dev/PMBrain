@@ -6,11 +6,13 @@ import type {ConsoleRun} from '../shared/contracts/common.ts';
 import type { MaintenanceCheckpoint } from '../src/product/tasks/types.ts';
 
 describe('任务的产品进度', () => {
-  test('资料保存与后台识图区分，重载时以剩余识图结果更新状态',()=>{
+  test('资料已保存就显示导入成功，待识图和识图失败在详情中保留',()=>{
     const adapter=new TaskProgressAdapter('import_path'),result={imported:1,skipped:0,errors:0,ocrPending:3};
     const pending={id:'task-1',kind:'import_path',status:'completed',result,product:finishTaskProgress(adapter.view,'completed',result,null)} as ConsoleRun;
-    expect(taskStatus(pending)).toBe('已保存，识图待完成');expect(pending.product!.stage).toContain('后台补齐');
-    expect(taskStatus({...pending,result:{...result,ocrFailed:1}})).toBe('已保存，识图未完成');expect(taskStatus({...pending,result:{...result,ocrPending:0}})).toBe('导入成功');
+    expect(taskStatus(pending)).toBe('导入成功');expect(pending.product!.stage).toContain('导入成功');expect(pending.product!.stage).toContain('后台补齐');
+    const failedOcr={...result,ocrFailed:1};
+    expect(taskStatus({...pending,result:failedOcr})).toBe('导入成功');expect(finishTaskProgress(adapter.view,'completed',failedOcr,null).stage).toContain('识图未完成');
+    expect(taskStatus({...pending,result:{...result,ocrPending:0}})).toBe('导入成功');
   });
   test('导入切换文件及逐图识别时保留整批文件计数，识图进度单独更新', () => {
     const adapter = new TaskProgressAdapter('import_path');

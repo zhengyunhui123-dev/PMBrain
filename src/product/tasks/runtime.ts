@@ -5,7 +5,7 @@ import { dirname, basename } from 'node:path';
 import type { BrainEngine } from '../../core/engine.ts';
 import { MinionQueue } from '../../core/minions/queue.ts';
 import { MinionWorker } from '../../core/minions/worker.ts';
-import { MINION_DEFERRED, type MinionJob, type MinionJobContext } from '../../core/minions/types.ts';
+import { MINION_DEFERRED, rowToMinionJob, type MinionJob, type MinionJobContext } from '../../core/minions/types.ts';
 import type { ConsoleRun } from '../../commands/natural-lang/types.ts';
 import { resolveImportSourceIdForPath } from '../../commands/natural-lang/api.ts';
 import { ALL_PHASES } from '../../core/cycle.ts';
@@ -18,7 +18,7 @@ import { DEFAULT_PRODUCT_TASK_TIMEOUT_MS, DREAM_TASK_TIMEOUT_KEY, parseTaskTimeo
 import { FileProjection } from './file-projection.ts';
 import { WorkerPgliteEngine } from '../database/worker-engine.ts';
 import { TaskProgressAdapter, finishTaskProgress,applyTaskBudget } from './progress-adapter.ts';
-import { taskUsesFileQueue, usesSyncFileQueue, type TaskProductProgress } from '../../../shared/task-progress.ts';
+import { taskUsesFileQueue, usesSyncFileQueue, type DocumentOcrOverview, type TaskProductProgress } from '../../../shared/task-progress.ts';
 import { withDatabasePriority } from '../database/priority';
 import { SyncFileQueue, SYNC_FILE_QUEUE, SYNC_FILE_TASK } from './sync-file-queue.ts';
 import type { MaintenanceCheckpoint, SyncFileInput } from './types.ts';
@@ -27,7 +27,6 @@ import { recordSyncedGitFile, commitQuickMaintenanceSource } from './synced-git.
 import type { SyncResult } from '../../commands/sync.ts';
 import { maintenanceFailure } from './maintenance-orchestration.ts';
 import { claimMaintenanceCapture } from './maintenance-orchestration.ts';
-import { enqueueImportedEntityCapture } from './imported-entity-capture.ts';
 import {
   SEARCH_OPTIMIZE_JOB_KEY, SEARCH_OPTIMIZE_NOTICE, SEARCH_OPTIMIZE_PAUSED, assignSearchOptimizeAcceptance, vectorizationInterrupted, vectorizationRetryDelay,
   type SearchOptimizeAcceptance,
@@ -108,11 +107,14 @@ export class ProductTaskRuntime {
   private failure: Error | null = null;
   private cached: ConsoleRun[] = [];
   private refreshingRuns: Promise<void> | null = null;
+  private ocrOverviewCache: DocumentOcrOverview | null = null;
+  private ocrOverviewRefreshing: Promise<void> | null = null;
+  private ocrOverviewAt = 0;
+  private ocrOverviewError: string | null = null;
   private executions = new Map<number, { background?: boolean; pause?: () => void; cancel: (reason?:string) => void; done: Promise<unknown>; run: () => ConsoleRun; ownsLockedTransaction: () => boolean; adjust:(constrained:boolean)=>void }>();
   private resources:TaskResourceGuard;
   private background: BackgroundVectorizationScheduler;
   private foregroundCheck?: () => boolean;
-  private submittingEntityCapture=false;
   private resourceDrain:Promise<void>|null=null;
   private resourceTimer:ReturnType<typeof setInterval>|null=null;
   private idleTimer:ReturnType<typeof setTimeout>|null=null;
@@ -148,7 +150,7 @@ export class ProductTaskRuntime {
     this.fileWorker = new MinionWorker(engine, { ...memoryOptions, queue: SYNC_FILE_QUEUE, concurrency: engine.kind==='pglite'?1:2, pollInterval: 100, healthCheckInterval: 0, lockDuration: 30_000, stalledInterval: 5000, ownsLockedTransaction: id => this.executions.get(id)?.ownsLockedTransaction() === true });
     this.fileWorker.on('job-finished', (job:MinionJob)=>{
       if(this.stopped||this.paused)return;
-      if(job.name===DOCUMENT_OCR_TASK){void this.flushEntityCapture();return;}
+      if(job.name===DOCUMENT_OCR_TASK)return;
       void this.queue.getJob(job.id).then(async current=>{
         try{if(current){this.fileProjection.record(current);await this.fileQueue.cleanupCompleted(current);}}
         finally{this.scheduleSessionRefresh(Number(job.data.sessionId));}
@@ -185,7 +187,6 @@ export class ProductTaskRuntime {
       ownsLockedTransaction: id => this.executions.get(id)?.ownsLockedTransaction() === true,
     });
     this.worker.on('unhealthy', info => console.error('[tasks]', info));
-    this.worker.on('job-finished',()=>void this.flushEntityCapture());
     this.worker.register(TASK_NAME, job => withDatabasePriority((job.data.task as ProductTask).type === 'import' ? 2 : 3, () => this.execute(job)));
   }
 
@@ -195,7 +196,6 @@ export class ProductTaskRuntime {
     await this.engine.executeRaw(`UPDATE minion_jobs SET status='paused',lock_token=NULL,lock_until=NULL,updated_at=now(),
       error_text='旧版自动实体识别已停用，已保存结果保留；可明确范围后手动继续。'
       WHERE queue=$1 AND data->'task'->>'type'='dream' AND data->'task'->'input'->>'phase'='capture_entities'
-      AND data->'task'->'input'->>'incrementalIngest' IS DISTINCT FROM 'true'
       AND data->>'trigger' IS DISTINCT FROM 'manual' AND status IN ('waiting','active','waiting-children','delayed')
       AND (status<>'active' OR $2::boolean OR lock_until IS NULL OR lock_until<=now())`, [PRODUCT_TASK_QUEUE,this.engine.kind==='pglite']);
     await this.engine.executeRaw(`UPDATE minion_jobs SET status='waiting',lock_token=NULL,lock_until=NULL,error_text=NULL,updated_at=now()
@@ -238,17 +238,8 @@ export class ProductTaskRuntime {
       console.error('[tasks] worker stopped:', error instanceof Error ? error.message : error);
     });
     if(this.resourceTimer)clearInterval(this.resourceTimer);
-    this.resourceTimer=setInterval(()=>{this.checkMemory();void this.flushEntityCapture();void this.resumeInterruptedSearchOptimize();},this.resources.rssCheckIntervalMs);
+    this.resourceTimer=setInterval(()=>{this.checkMemory();void this.resumeInterruptedSearchOptimize();},this.resources.rssCheckIntervalMs);
     this.resourceTimer.unref();
-    await this.flushEntityCapture();
-  }
-
-  private async flushEntityCapture():Promise<void>{
-    if(this.stopped||this.paused||this.failure||this.submittingEntityCapture||this.executions.size)return;
-    this.submittingEntityCapture=true;
-    try{await withDatabasePriority(3,async()=>enqueueImportedEntityCapture(this.engine,undefined,parseTaskTimeout(await this.engine.getConfig(DREAM_TASK_TIMEOUT_KEY))??DEFAULT_PRODUCT_TASK_TIMEOUT_MS));}
-    catch(error){console.error('[tasks] pending knowledge ingestion:',error);}
-    finally{this.submittingEntityCapture=false;}
   }
 
   private async submit(task: ProductTask, kind: string, idempotencyKey?: string, trigger: 'manual' | 'scheduled' = 'manual', queue = this.queue): Promise<ConsoleRun> {
@@ -264,7 +255,7 @@ export class ProductTaskRuntime {
     });
     const run = toRun(job);
     if(task.type === 'dream' && usesSyncFileQueue(task.input))this.fileProjection.seed(job.id,[]);
-    this.cached = [run, ...this.cached.filter(row => row.id !== run.id)].slice(0, 100);
+    this.cached = [run, ...this.cached.filter(row => row.id !== run.id)].slice(0, 120);
     return run;
   }
 
@@ -555,9 +546,40 @@ export class ProductTaskRuntime {
       .map(job => toRun(job, job.status === 'cancelled' && this.executions.has(job.id)));
     return this.cached;
   }
+
+  async documentOcrOverview(): Promise<DocumentOcrOverview> {
+    const [row]=await this.engine.executeRaw<{total:number;queued:number;running:number;completed:number;failed:number;cancelled:number;latest_at:Date|string|null;latest_completed_at:Date|string|null}>(`SELECT count(*)::int total,
+      count(*) FILTER (WHERE status IN ('waiting','delayed'))::int queued,
+      count(*) FILTER (WHERE status IN ('active','waiting-children'))::int running,
+      count(*) FILTER (WHERE status='completed')::int completed,
+      count(*) FILTER (WHERE status IN ('failed','dead','paused'))::int failed,
+      count(*) FILTER (WHERE status='cancelled')::int cancelled,
+      max(created_at) latest_at,max(finished_at) FILTER (WHERE status='completed') latest_completed_at FROM minion_jobs WHERE queue=$1 AND name=$2`,[DOCUMENT_OCR_QUEUE,DOCUMENT_OCR_TASK]);
+    return {total:Number(row.total),queued:Number(row.queued),running:Number(row.running),completed:Number(row.completed),failed:Number(row.failed),cancelled:Number(row.cancelled),latestAt:row.latest_at?new Date(row.latest_at).toISOString():null,latestCompletedAt:row.latest_completed_at?new Date(row.latest_completed_at).toISOString():null};
+  }
+
+  cachedDocumentOcrOverview(): DocumentOcrOverview | null { return this.ocrOverviewCache; }
+  cachedDocumentOcrError(): string | null { return this.ocrOverviewError; }
+
+  refreshDocumentOcrOverview(): void {
+    if(this.stopped||this.recoveringOwner||this.ocrOverviewRefreshing||Date.now()-this.ocrOverviewAt<5000)return;
+    this.ocrOverviewRefreshing=withDatabasePriority(3,()=>this.documentOcrOverview())
+      .then(overview=>{this.ocrOverviewCache=overview;this.ocrOverviewError=null;this.ocrOverviewAt=Date.now();})
+      .catch(error=>{this.ocrOverviewError=error instanceof Error?error.message:String(error);this.ocrOverviewAt=Date.now();console.error('[tasks] OCR overview:',this.ocrOverviewError);})
+      .finally(()=>{this.ocrOverviewRefreshing=null;});
+  }
+
+  async documentOcrRuns(options:{before?:number|null;limit?:number}={}):Promise<{rows:ConsoleRun[];next:number|null}>{
+    const before=options.before??null,limit=options.limit??50;
+    if(before!==null&&(!Number.isSafeInteger(before)||before<=0)||!Number.isSafeInteger(limit)||limit<1||limit>100)throw new Error('无效的识图任务分页');
+    const rows=await this.engine.executeRaw<Record<string,unknown>>(`SELECT * FROM minion_jobs WHERE queue=$1 AND name=$2 AND ($3::bigint IS NULL OR id<$3) ORDER BY id DESC LIMIT $4`,[DOCUMENT_OCR_QUEUE,DOCUMENT_OCR_TASK,before,limit+1]);
+    const jobs=rows.map(rowToMinionJob),selected=jobs.slice(0,limit);
+    return {rows:selected.map(job=>this.executions.get(job.id)?.run()??toRun(job)),next:jobs.length>limit?selected.at(-1)!.id:null};
+  }
+
   private async historyJobs(){
-    const [ordinary,ocr]=await Promise.all([this.queue.getJobs({queue:PRODUCT_TASK_QUEUE,name:TASK_NAME,limit:100}),this.queue.getJobs({queue:DOCUMENT_OCR_QUEUE,name:DOCUMENT_OCR_TASK,limit:100})]);
-    return this.refreshOcrProgress([...ordinary,...ocr].sort((a,b)=>b.created_at.getTime()-a.created_at.getTime()).slice(0,100));
+    const [ordinary,ocr]=await Promise.all([this.queue.getJobs({queue:PRODUCT_TASK_QUEUE,name:TASK_NAME,limit:100}),this.queue.getJobs({queue:DOCUMENT_OCR_QUEUE,name:DOCUMENT_OCR_TASK,limit:20})]);
+    return this.refreshOcrProgress([...ordinary,...ocr].sort((a,b)=>b.created_at.getTime()-a.created_at.getTime()));
   }
   private async refreshOcrProgress(jobs:MinionJob[]){
     const ids=[...new Set(jobs.flatMap(job=>Array.isArray(job.result?.ocrTaskIds)?job.result.ocrTaskIds as number[]:[]))];
@@ -582,7 +604,7 @@ export class ProductTaskRuntime {
     }
     for (const run of live) if (run.product && taskUsesFileQueue(run.kind)) run.product.activeFiles = this.fileProjection.active(Number(run.id.slice(5)));
     return [...live, ...this.cached.filter(row => !live.some(run => run.id === row.id))]
-      .sort((a, b) => b.startedAt.localeCompare(a.startedAt)).slice(0, 100);
+      .sort((a, b) => b.startedAt.localeCompare(a.startedAt)).slice(0, 120);
   }
 
   async getRun(id: string): Promise<ConsoleRun | null> {
@@ -594,7 +616,7 @@ export class ProductTaskRuntime {
       const live = execution.run();
       if (!this.refreshingRuns) {
         this.refreshingRuns = withDatabasePriority(3, () => this.queue.getJob(Number(id.slice(5))))
-          .then(job => { if (job) this.cached = [toRun(job), ...this.cached.filter(run => run.id !== id)].slice(0,100); })
+          .then(job => { if (job) this.cached = [toRun(job), ...this.cached.filter(run => run.id !== id)].slice(0,120); })
           .catch(error => console.error('[tasks] status read failed:', error instanceof Error ? error.message : error))
           .finally(() => { this.refreshingRuns = null; });
       }
@@ -614,7 +636,7 @@ export class ProductTaskRuntime {
     const [resolved]=await this.refreshOcrProgress([job]);
     const run = toRun(resolved, job.status === 'cancelled' && this.executions.has(job.id));
     if(!['running','queued'].includes(run.status))this.sessionViews.delete(job.id);
-    this.cached = [run, ...this.cached.filter(row => row.id !== run.id)].slice(0, 100);
+    this.cached = [run, ...this.cached.filter(row => row.id !== run.id)].slice(0, 120);
     return run;
   }
 
@@ -737,7 +759,7 @@ export class ProductTaskRuntime {
         return MINION_DEFERRED;
       }
     }
-    if (structuredTask.type === 'dream' && structuredTask.input.phase === 'capture_entities' && !structuredTask.input.incrementalIngest && record.data.trigger !== 'manual') {
+    if (structuredTask.type === 'dream' && structuredTask.input.phase === 'capture_entities' && record.data.trigger !== 'manual') {
       await this.engine.executeRaw(`UPDATE minion_jobs SET status='paused',lock_token=NULL,lock_until=NULL,updated_at=now(),
         error_text='旧版自动实体识别已停用，已保存结果保留；可明确范围后手动继续。'
         WHERE id=$1 AND status='active' AND lock_token=$2`,[context.id,record.lock_token]);
@@ -934,7 +956,7 @@ export class ProductTaskRuntime {
             if(structuredTask.type!=='dream')throw Error('无效的整理识图等待状态');
             record.data.waitingForOcr=message.args[0]===true;
             if(!record.data.waitingForOcr&&adapter.view.background?.reason.includes('后台识图'))delete adapter.view.background;
-            await this.engine.executeRaw("UPDATE minion_jobs SET data=jsonb_set(data,'{waitingForOcr}',$3::jsonb) WHERE id=$1 AND status='active' AND lock_token=$2",[context.id,record.lock_token,record.data.waitingForOcr]);
+            await this.engine.executeRaw("UPDATE minion_jobs SET data=jsonb_set(data,'{waitingForOcr}',to_jsonb($3::boolean)) WHERE id=$1 AND status='active' AND lock_token=$2",[context.id,record.lock_token,record.data.waitingForOcr]);
             return null;
           }
           if(message.method==='task.maintenanceVectorizationState'){
@@ -1314,6 +1336,7 @@ export class ProductTaskRuntime {
     await this.fileLoop;
     await Promise.all([...this.idleFileThreads.splice(0),...this.idleMaintenanceThreads.splice(0)].map(thread => thread.terminate()));
     await this.refreshingRuns;
+    await this.ocrOverviewRefreshing;
     await Promise.allSettled([...this.executions.values()].map(execution => execution.done));
     if (interrupted.length) {
       await this.engine.executeRaw(
@@ -1364,7 +1387,7 @@ export class ProductTaskRuntime {
       await this.engine.executeRaw(`UPDATE minion_jobs SET progress = $2::jsonb WHERE id = $1 AND status IN ('waiting-children','waiting')`, [id, job.progress]);
     }
     this.sessionViews.set(id, run);
-    this.cached = [run, ...this.cached.filter(row => row.id !== run.id)].slice(0, 100);
+    this.cached = [run, ...this.cached.filter(row => row.id !== run.id)].slice(0, 120);
   }
 
   private scheduleSessionRefresh(id: number, file?: string) {
@@ -1433,7 +1456,7 @@ export class ProductTaskRuntime {
     const finished = persisted?.status==='completed'?toRun(persisted):{ ...original, status, error: reason ?? null, completedAt: new Date().toISOString(),
       product: original.product ? finishTaskProgress(original.product, status, original.result, reason ?? null) : undefined };
     this.sessionViews.set(id, finished);
-    this.cached = [finished, ...this.cached.filter(run => run.id !== original.id)].slice(0, 100);
+    this.cached = [finished, ...this.cached.filter(run => run.id !== original.id)].slice(0, 120);
   }
 
   private async recoverStoppedDatabase(): Promise<void> {

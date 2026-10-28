@@ -261,6 +261,7 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
   });
   app.get('/admin/api/task-center', requireAdmin, async (req: Request, res: Response) => {
     const runs = await readRuns();
+    if(!getPgliteBusy())productTasks.refreshDocumentOcrOverview();
     const hasActiveRun = runs.some(run => run.status === 'queued' || run.status === 'running');
     let queue: unknown = null;
     if (!getPgliteBusy() && !hasActiveRun) {
@@ -292,10 +293,20 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
       pglite_busy: getPgliteBusy(),
       pglite_owner: pgliteOwner,
       rows: req.query.summary === '1' ? runs.map(taskRunSummary) : runs,
+      document_ocr: productTasks.cachedDocumentOcrOverview(),
+      document_ocr_error: productTasks.cachedDocumentOcrError(),
       queue,
       embedding_rebuild: embeddingRebuild,
       server_time: new Date().toISOString(),
     });
+  });
+
+  app.get('/admin/api/document-ocr-runs', requireAdmin, async (req: Request, res: Response) => {
+    if(getPgliteBusy()){res.status(503).json({error:'database_busy'});return;}
+    const before=req.query.before===undefined?null:Number(req.query.before);
+    if(before!==null&&(!Number.isSafeInteger(before)||before<=0)){res.status(400).json({error:'invalid_cursor'});return;}
+    try{const page=await productTasks.documentOcrRuns({before,limit:50});res.json({rows:page.rows.map(taskRunSummary),next:page.next});}
+    catch(error){res.status(500).json({error:error instanceof Error?error.message:String(error)});}
   });
 
   app.post('/admin/api/pglite-owner/terminate', requireAdmin, express.json({ limit: '4kb' }), async (req: Request, res: Response) => {

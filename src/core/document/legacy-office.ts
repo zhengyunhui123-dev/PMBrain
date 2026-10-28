@@ -52,7 +52,7 @@ export async function importLegacyOffice(engine:BrainEngine,candidate:LegacyOffi
   const readChunks=(tx:BrainEngine)=>tx.executeRaw<LegacyChunk>('SELECT chunk_index,chunk_text,chunk_source FROM content_chunks WHERE page_id=$1 ORDER BY chunk_index',[candidate.id]);
   let chunks=await readChunks(engine);
   const lock=async(tx:BrainEngine)=>{
-    const rows=await tx.executeRaw('SELECT id FROM pages WHERE id=$1 AND source_id=$2 AND md5(compiled_truth)=$3 AND frontmatter=$4::jsonb AND chunker_version>=0 AND deleted_at IS NULL FOR UPDATE',[page!.id,sourceId,bodyHash(page!.compiled_truth),JSON.stringify(page!.frontmatter)]);
+    const rows=await tx.executeRaw('SELECT id FROM pages WHERE id=$1 AND source_id=$2 AND md5(compiled_truth)=$3 AND frontmatter=$4::text::jsonb AND chunker_version>=0 AND deleted_at IS NULL FOR UPDATE',[page!.id,sourceId,bodyHash(page!.compiled_truth),JSON.stringify(page!.frontmatter)]);
     if(!rows.length)throw new Error('旧资料在核验期间已修改，请重新导入');
     const current=await readDocumentChunkManifest(tx,candidate.id);
     if(current?.chunks!==state?.chunks||current?.chunk_hash!==state?.chunk_hash)throw new Error('旧资料分块在核验期间已修改，请重新导入');
@@ -60,7 +60,7 @@ export async function importLegacyOffice(engine:BrainEngine,candidate:LegacyOffi
   const seal=async(tx:BrainEngine,nextFm:Record<string,any>,body:string,verified=true)=>{
     const manifest=await readDocumentChunkManifest(tx,candidate.id);
     nextFm={...nextFm,document_chunk_count:manifest?.chunks??0,document_chunk_hash:manifest?.chunk_hash,document_legacy_reuse:{version:1,sourceHash:rawHash,bodyHash:bodyHash(body),verified}};
-    await tx.executeRaw('UPDATE pages SET frontmatter=$2::jsonb WHERE id=$1',[candidate.id,JSON.stringify(nextFm)]);
+    await tx.executeRaw('UPDATE pages SET frontmatter=$2::text::jsonb WHERE id=$1',[candidate.id,JSON.stringify(nextFm)]);
     return {manifest,frontmatter:nextFm};
   };
   const merge=async(added:ChunkInput[],invalid:number[],nextFm:Record<string,any>,body:string,validate=opts.validate)=>{

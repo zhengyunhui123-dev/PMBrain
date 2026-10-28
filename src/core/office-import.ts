@@ -27,8 +27,8 @@ async function unchangedOfficeFile(
   let slug = slugifyPath(relativePath);
   const metadata = (path: string) => engine.executeRaw<{
     id:number; frontmatter: Record<string, any>; chunker_version: number;body_hash:string;
-  }>(`SELECT p.id,p.frontmatter,p.chunker_version,CASE WHEN p.frontmatter->>'document_chunk_hash' IS NULL OR p.frontmatter ? 'document_legacy_reuse' OR COALESCE(p.frontmatter->>'document_ocr_failed','0')<>'0' OR COALESCE(p.frontmatter->>'document_ocr_skipped','0')<>'0' THEN md5(p.compiled_truth) END AS body_hash
-       FROM pages p WHERE p.source_id=$1 AND p.slug=$2 AND p.deleted_at IS NULL`, [sourceId, path]);
+  }>(`SELECT p.id,p.frontmatter,p.chunker_version,CASE WHEN p.frontmatter->>'document_chunk_hash' IS NULL OR p.frontmatter ? 'document_legacy_reuse' OR COALESCE(p.frontmatter->>'document_ocr_failed','0')<>'0' OR COALESCE(p.frontmatter->>'document_ocr_skipped','0')<>'0' OR ($3::boolean AND COALESCE(p.frontmatter->>'document_ocr_succeeded','0')<>'0') THEN md5(p.compiled_truth) END AS body_hash
+       FROM pages p WHERE p.source_id=$1 AND p.slug=$2 AND p.deleted_at IS NULL`, [sourceId, path, opts.deferDocumentOcr===true]);
   let [page] = await metadata(slug);
   if (!page && engine.findDuplicatePage) {
     const duplicate = await engine.findDuplicatePage(sourceId, { hash: rawHash, frontmatterId: `office:${rawHash}` });
@@ -38,10 +38,10 @@ async function unchangedOfficeFile(
   if(!opts.checkOnly&&(page.frontmatter.document_chunk_count===undefined||!page.frontmatter.document_chunk_hash||page.frontmatter.document_legacy_reuse||(ocrRequested&&Number(page.frontmatter.document_ocr_failed??0)+Number(page.frontmatter.document_ocr_skipped??0)>0)))return {legacy:{...page,slug}};
   if(page.frontmatter.document_chunk_count===undefined||!page.frontmatter.document_chunk_hash)return null;
   const integrity=await readDocumentChunkManifest(engine,page.id);
-  if(!integrity || page.frontmatter.document_chunk_count!==integrity.chunks || page.frontmatter.document_chunk_hash!==integrity.chunk_hash)return null;
+  if(!integrity || page.frontmatter.document_chunk_count!==integrity.chunks || page.frontmatter.document_chunk_hash!==integrity.chunk_hash)return !opts.checkOnly&&opts.deferDocumentOcr&&Number(page.frontmatter.document_ocr_succeeded??0)>0?{legacy:{...page,slug}}:null;
   const fm = page.frontmatter;
   if(fm.document_legacy_reuse&&(fm.document_legacy_reuse.bodyHash!==page.body_hash||fm.document_legacy_reuse.verified!==true))return null;
-  if (fm.document_structured !== (opts.structured !== false) && !fm.document_parser_fallback&&!fm.document_legacy_reuse) return null;
+  if (fm.document_structured !== (opts.structured !== false) && !fm.document_parser_fallback&&!fm.document_legacy_reuse) return !opts.checkOnly&&opts.deferDocumentOcr&&Number(fm.document_ocr_succeeded??0)>0?{legacy:{...page,slug}}:null;
   const receipt = fm.ocr_receipt;
   if (ocrRequested && !opts.deferDocumentOcr && (Number(fm.document_images) > 0 || Number(fm.document_pages_needing_ocr) > 0)) {
     if (!receipt || receipt.version !== OCR_RECEIPT_VERSION || receipt.promptVersion !== OCR_PROMPT_VERSION
@@ -172,7 +172,13 @@ export async function importOfficeFile(
   if (!opts.forceRechunk) {
     const unchanged = await unchangedOfficeFile(engine, relativePath, rawHash, opts, ocrRequested);
     if(unchanged&&'legacy' in unchanged){
-      const reused=await importLegacyOffice(engine,unchanged.legacy,filePath,rawHash,{...opts,documentOcr:ocrRequested&&!deferOcr,runtime,validate});
+      const fm=unchanged.legacy.frontmatter,receipt=fm.ocr_receipt;
+      const pending=Number(fm.document_ocr_failed??0)+Number(fm.document_ocr_skipped??0);
+      const preserveStructure=deferOcr&&Number(fm.document_ocr_succeeded??0)>0&&receipt?.version===OCR_RECEIPT_VERSION&&receipt?.promptVersion===OCR_PROMPT_VERSION&&receipt?.sourceHash===rawHash
+        &&(pending===0&&receipt.status==='complete'&&Number(receipt.failed??0)===0&&Number(receipt.attempted??0)>=Number(receipt.candidates??0)
+          || pending>0&&Array.isArray(receipt.failedItems)&&receipt.failedItems.length>=pending);
+      if(deferOcr&&Number(fm.document_ocr_succeeded??0)>0&&!preserveStructure)return {slug:unchanged.legacy.slug,status:'partial',chunks:0,error:'旧资料缺少可核验的识图回执，已有图片文字保留'};
+      const reused=await importLegacyOffice(engine,unchanged.legacy,filePath,rawHash,{...opts,...(preserveStructure?{structured:fm.document_structured===true}:{}),documentOcr:ocrRequested&&!deferOcr,runtime,validate});
       if(reused){
         if(!deferOcr&&!opts.noEmbed&&reused.embeddingPending){
           const {runEmbedCore}=await import('../commands/embed.ts');

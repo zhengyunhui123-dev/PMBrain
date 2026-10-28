@@ -343,8 +343,7 @@ describe('软件后台任务共用 owner 数据库', () => {
     expect(run.result).toMatchObject({ imported: 1, errors: 0 });
     expect(run.result).not.toMatchObject({ vectorsPending: true });
     expect((await runtime.listRuns()).some(row => row.kind === 'embed_stale' && ['queued', 'running'].includes(row.status))).toBe(false);
-    expect(run.product).toMatchObject({ name: '导入资料', percent: 100, stage: '原文已入库，实体模型未配置' });
-    expect(run.result).toMatchObject({knowledgeStatus:'model_unavailable'});
+    expect(run.product).toMatchObject({ name: '导入资料', percent: 100, stage: '导入完成' });
     expect(run.product?.material?.page).toMatchObject({ slug: 'background', type: 'note' });
     expect(readFileSync(path, 'utf8')).toBe(content);
     expect(await engine.getPage('background', { sourceId: 'default' })).not.toBeNull();

@@ -41,6 +41,56 @@ async function vectorConfiguration(){
 async function finish(id:number){const until=Date.now()+60000;let last:any;while(Date.now()<until){last=await runtime.getRun('task-'+id);if(last&&!['running','queued'].includes(last.status))return last;await Bun.sleep(60);}throw Error('OCR task timeout '+JSON.stringify({run:last,rows:await engine.executeRaw('SELECT id,name,queue,status,attempts_started,progress,error_text FROM minion_jobs')}));}
 const options={sourceId:'default',noEmbed:true,documentOcr:true,deferDocumentOcr:true};
 
+test('普通导入和后台识图不自动启动实体整理，明确整理仍可处理资料',async()=>{
+  cpu=0.95;const folder=join(root,'import-no-capture');mkdirSync(folder);
+  await engine.executeRaw("INSERT INTO sources(id,name,local_path,config) VALUES('import-no-capture','导入隔离',$1,'{}'::jsonb)",[folder]);
+  await engine.setConfig('dream.entity_capture.enabled','true');
+  await engine.setConfig('pricing.overrides',JSON.stringify({'custom-openai:isolated-office-ocr':{input:1,output:1}}));
+  const path=join(folder,'material.md');writeFileSync(path,'# 原文\n\n这是一份用于验证导入后不会自动整理实体的完整资料。');
+  const before=captureCalls;
+  try{
+    const imported=await runtime.submitImport({path,sourceId:'import-no-capture',noEmbed:true,documentOcr:false});
+    expect((await finish(Number(imported.id.slice(5)))).status).toBe('completed');
+    await Bun.sleep(1500);
+    expect(await engine.executeRaw("SELECT id FROM minion_jobs WHERE data->'task'->'input'->>'sourceId'='import-no-capture' AND data->'task'->'input'->>'phase'='capture_entities'")).toHaveLength(0);
+    expect(captureCalls).toBe(before);
+    expect(await engine.getConfig('dream.entity_capture.pending.import-no-capture')).toContain('material');
+    const original=await word('no-capture-image'),imagePath=join(folder,'with-image.docx');writeFileSync(imagePath,readFileSync(original));unlinkSync(original);
+    const imageImport=await runtime.submitImport({path:imagePath,sourceId:'import-no-capture',noEmbed:true,documentOcr:true});
+    const saved=await finish(Number(imageImport.id.slice(5)));expect(saved.status).toBe('completed');
+    const imageJob=(saved.result as {ocrTaskIds:number[]}).ocrTaskIds[0];cpu=0.1;expect((await finish(imageJob)).status).toBe('completed');
+    await Bun.sleep(1500);
+    expect(await engine.executeRaw("SELECT id FROM minion_jobs WHERE data->'task'->'input'->>'sourceId'='import-no-capture' AND data->'task'->'input'->>'phase'='capture_entities'")).toHaveLength(0);
+    expect(captureCalls).toBe(before);
+    const explicit=await runtime.submitDream({phase:'capture_entities',sourceId:'import-no-capture',slugs:['material']});
+    expect((await finish(Number(explicit.id.slice(5)))).status).toBe('completed');
+    expect(captureCalls).toBeGreaterThan(before);
+  }finally{await engine.setConfig('dream.entity_capture.enabled','false');}
+},120000);
+
+test('旧资料已有完整图片文字时，后台识图模式保留正文和分块并完成重复导入',async()=>{
+  cpu=0.95;const path=await word('legacy-deferred');
+  const first=await importOfficeFile(engine,path,'legacy-deferred.docx',{sourceId:'default',noEmbed:true,documentOcr:true});
+  expect(first.status).toBe('imported');
+  const page=(await engine.getPage(first.slug))!;const before=calls;
+  await engine.executeRaw("UPDATE pages SET frontmatter=frontmatter||'{\"document_structured\":false}'::jsonb WHERE id=$1",[page.id]);
+  const chunks=await engine.executeRaw('SELECT id,chunk_text,embedding::text FROM content_chunks WHERE page_id=$1 ORDER BY id',[page.id]);
+  const metadata=(await engine.getPage(first.slug))!.frontmatter;
+  await importOfficeFile(engine,path,'legacy-deferred.docx',{...options,checkOnly:true});
+  expect((await engine.getPage(first.slug))!.frontmatter).toEqual(metadata);
+  expect(await engine.executeRaw('SELECT id,chunk_text,embedding::text FROM content_chunks WHERE page_id=$1 ORDER BY id',[page.id])).toEqual(chunks);
+  const resumed=await importOfficeFile(engine,path,'legacy-deferred.docx',options);
+  expect(['imported','skipped']).toContain(resumed.status);expect(calls).toBe(before);
+  expect((await engine.getPage(first.slug))!.compiled_truth).toBe(page.compiled_truth);
+  expect((await engine.executeRaw<{type:string}>('SELECT jsonb_typeof(frontmatter) type FROM pages WHERE id=$1',[page.id]))[0].type).toBe('object');
+  expect(await engine.executeRaw('SELECT id,chunk_text,embedding::text FROM content_chunks WHERE page_id=$1 ORDER BY id',[page.id])).toEqual(chunks);
+  await engine.executeRaw("UPDATE pages SET frontmatter=frontmatter-'ocr_receipt'-'document_chunk_hash' WHERE id=$1",[page.id]);
+  const unknown=await importOfficeFile(engine,path,'legacy-deferred.docx',options);
+  expect(unknown.status).toBe('partial');expect(unknown.error).toContain('缺少可核验的识图回执');
+  expect((await engine.getPage(first.slug))!.compiled_truth).toBe(page.compiled_truth);
+  expect(await engine.executeRaw('SELECT id,chunk_text,embedding::text FROM content_chunks WHERE page_id=$1 ORDER BY id',[page.id])).toEqual(chunks);
+},120000);
+
 test('先保存可提取正文、零识图请求，重复导入只保留一个后台任务',async()=>{
   const path=await word('first'),before=calls,result=await importOfficeFile(engine,path,'first.docx',options as any);expect(result.status).toBe('imported');expect(calls).toBe(before);expect((result as any).ocrPending).toBe(3);expect((result as any).ocrTaskId).toBeGreaterThan(0);
   const page=await engine.getPage(result.slug),chunks=await engine.executeRaw('SELECT id,chunk_text FROM content_chunks WHERE page_id=$1 ORDER BY id',[page!.id]);expect(page!.compiled_truth).toContain('Native text stays available');
@@ -129,3 +179,17 @@ test('停止维护同时停止它的识图子任务，重启保持停止，继�
   await runtime.cancel(task.id);expect((await runtime.getRun('task-'+childId))!.status).toBe('cancelled');await runtime.close();await start();cpu=0.1;await Bun.sleep(300);expect((await runtime.getRun(task.id))!.status).toBe('cancelled');expect((await runtime.getRun('task-'+childId))!.status).toBe('cancelled');expect(calls).toBe(before);
   await runtime.retry(task.id);const done=await finish(Number(task.id.slice(5)));expect(done.status,JSON.stringify(done.result)).toBe('completed');expect(calls-before).toBe(3);expect((await runtime.getRun('task-'+childId))!.status).toBe('completed');
 },180000);
+
+test('识图汇总统计超过一百个文件，分页仍能找到早期失败项',async()=>{
+  const before=await runtime.documentOcrOverview();
+  await engine.executeRaw(`INSERT INTO minion_jobs(name,queue,status,data)
+    SELECT 'pmbrain-document-ocr','pmbrain-sync-files',CASE WHEN n<=2 THEN 'failed' ELSE 'completed' END,
+      jsonb_build_object('kind','document_ocr','trigger','scheduled','task',jsonb_build_object('type','import','input',jsonb_build_object('path','group-'||n||'.docx','sourceId','default','ocrOnly',jsonb_build_object('relativePath','group-'||n||'.docx'))))
+    FROM generate_series(1,125) n`);
+  const summary=await runtime.documentOcrOverview();
+  expect(summary.total-before.total).toBe(125);expect(summary.failed-before.failed).toBe(2);expect(summary.completed-before.completed).toBe(123);
+  expect((await runtime.listRuns()).some(run=>run.kind==='import_path')).toBe(true);
+  let cursor:number|null=null;const found=new Map<string,string>();
+  do{const page=await runtime.documentOcrRuns({before:cursor,limit:50});for(const run of page.rows){const name=run.product?.material?.name;if(name?.startsWith('group-'))found.set(name,run.status);}cursor=page.next;}while(cursor!==null&&found.size<125);
+  expect(found.size).toBe(125);expect(found.get('group-1.docx')).toBe('failed');expect(found.get('group-2.docx')).toBe('failed');
+},60000);

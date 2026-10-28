@@ -99,7 +99,8 @@ test('忙时导入先成功，空闲才向量化；慢模型请求不占用数�
     const imported = await until(() => runtime.getRun(first.id), row => row?.status === 'completed', '导入未先成功');
     expect(imported!.result).toMatchObject({ searchOptimizeAccepted: true });
     const queued = await until(() => runtime.listRuns(), rows => rows.some(row => row.searchOptimize && row.product?.background?.mode === 'waiting'), '没有等待空闲状态');
-    expect(queued.find(row => row.searchOptimize)!.status).toBe('queued');
+    const vectorTask = queued.find(row => row.searchOptimize)!;
+    expect(vectorTask.status).toBe('queued');
     expect(calls).toHaveLength(0);
     expect((await engine.getChunks('first')).every(chunk => !chunk.embedded_at)).toBe(true);
     let release!: () => void;
@@ -113,6 +114,7 @@ test('忙时导入先成功，空闲才向量化；慢模型请求不占用数�
       const next = await runtime.submitImport({ path: nextPath });
       const completed = await until(() => runtime.getRun(next.id), row => row?.status === 'completed', '向量模型堵住导入');
       expect(completed!.status).toBe('completed');
+      expect((await runtime.listRuns()).filter(row => row.searchOptimize && ['queued', 'running'].includes(row.status)).map(row => row.id)).toEqual([vectorTask.id]);
       expect((await engine.getPage('second'))?.compiled_truth).toContain('慢向量模型');
     } finally { state.delay = undefined; release(); await runtime.adjustResourcePressure(false); }
     await until(() => runtime.listRuns(), rows => rows.some(row => row.searchOptimize && row.status === 'completed'), '没有自动完成向量化');

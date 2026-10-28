@@ -6,10 +6,11 @@ import { TaskTechnicalLogs } from '../product/TaskTechnicalLogs';
 import { describeRunRecovery } from '../lib/run-recovery';
 import { useProductTasks } from '../product/TaskActivity';
 import { TaskProgressCard, taskStatus, taskStopping } from '../product/TaskProgress';
-import { taskName, taskUsesFileQueue } from '../../../shared/task-progress';
+import { taskName, taskUsesFileQueue, type DocumentOcrOverview } from '../../../shared/task-progress';
 import { taskCanRetry, taskRoundCompleted, taskRoundListSummary, taskPhaseSummary, taskPercent } from '../product/task-presentation';
 import { taskModelSetupIssue } from '../product/model-readiness';
 import { desktopApi } from '../lib/product-fetch';
+import { DocumentOcrDrawer, DocumentOcrRow, documentOcrFallback, documentOcrMatchesFilter, documentOcrStatus } from '../product/DocumentOcrTasks';
 
 type TaskFilter = 'all' | 'running' | 'queued' | 'paused' | 'completed' | 'partial' | 'failed' | 'cancelled';
 const DreamRunContent=React.lazy(()=>import('./Dream').then(module=>({default:module.DreamRunContent})));
@@ -27,6 +28,8 @@ interface TaskCenterSnapshot {
   pglite_busy: boolean;
   pglite_owner?: PgliteOwnerStatus | null;
   embedding_rebuild?: EmbeddingRebuildTask | null;
+  document_ocr?: DocumentOcrOverview | null;
+  document_ocr_error?: string | null;
   rows: ConsoleRun[];
   queue: {
     queue_health?: { waiting: number; active: number; stalled: number };
@@ -139,7 +142,7 @@ function PgliteRecoveryCard({
 
 function TaskDetailDrawer({ run, onClose, onCancel, onRetry, busy }: { run: ConsoleRun; onClose: () => void; onCancel: () => void; onRetry: () => void; busy: boolean }) {
   const dream=run.kind.startsWith('dream_');
-  const needsDetail = dream || run.kind === 'import_path';
+  const needsDetail = dream || run.kind === 'import_path' || run.kind === 'document_ocr';
   const [detail,setDetail]=useState<ConsoleRun|null>(null);
   const [detailError,setDetailError]=useState('');
   useEffect(()=>{
@@ -172,6 +175,7 @@ export function TaskCenterPage() {
   const [error, setError] = useState('');
   const [filter, setFilter] = useState<TaskFilter>('all');
   const [selectedRun, setSelectedRun] = useState<ConsoleRun | null>(null);
+  const [showOcr, setShowOcr] = useState(() => new URLSearchParams(window.location.hash.split('?')[1]).get('ocr') === '1');
   const [cancelling, setCancelling] = useState('');
   const [retrying, setRetrying] = useState('');
   const [terminatingOwner, setTerminatingOwner] = useState<number | null>(null);
@@ -201,19 +205,28 @@ export function TaskCenterPage() {
     return [...snapshot.rows.map(run => preferLiveRun(run, liveById.get(run.id))), ...liveTasks.rows.filter(run => !seen.has(run.id))];
   }, [liveTasks.rows, snapshot]);
 
+  useEffect(()=>{
+    const onHash=()=>{if(new URLSearchParams(window.location.hash.split('?')[1]).get('ocr')==='1'){setShowOcr(true);setSelectedRun(null);}};
+    window.addEventListener('hashchange',onHash);return()=>window.removeEventListener('hashchange',onHash);
+  },[]);
+
   useEffect(() => {
     const target = new URLSearchParams(window.location.hash.split('?')[1]).get('run') ?? selectedRun?.id;
     if (!target) return;
     const latest = rows.find(run => run.id === target);
     if (latest) setSelectedRun(latest);
   }, [rows, selectedRun?.id]);
-  const activeRows = rows.filter(isActive);
-  const waitingRows = rows.filter(run => run.status === 'queued');
-  const failedRows = rows.filter(run => run.status === 'failed' || taskStatus(run) === '部分完成');
-  const completedToday = rows.filter(run => run.status === 'completed' && taskStatus(run) !== '部分完成' && isToday(run.completedAt)).length;
-  const historyRows = useMemo(() => rows
+  const ordinaryRows=useMemo(()=>rows.filter(run=>run.kind!=='document_ocr'),[rows]);
+  const ocrSummary=snapshot?.document_ocr??documentOcrFallback(rows);
+  const ocrVisible=documentOcrMatchesFilter(ocrSummary,filter);
+  const activeRows = ordinaryRows.filter(isActive);
+  const waitingRows = ordinaryRows.filter(run => run.status === 'queued');
+  const failedRows = ordinaryRows.filter(run => run.status === 'failed' || taskStatus(run) === '部分完成');
+  const completedToday = ordinaryRows.filter(run => run.status === 'completed' && taskStatus(run) !== '部分完成' && isToday(run.completedAt)).length
+    +(ocrSummary.total>0&&documentOcrStatus(ocrSummary)==='completed'&&isToday(ocrSummary.latestCompletedAt)?1:0);
+  const historyRows = useMemo(() => ordinaryRows
     .filter(run => filter === 'all' || (filter === 'partial' ? taskStatus(run) === '部分完成' : run.status === filter && (!['failed', 'completed'].includes(filter) || taskStatus(run) !== '部分完成')))
-    .slice(0, 100), [filter, rows]);
+    .slice(0, 100), [filter, ordinaryRows]);
 
   const cancel = async (run: ConsoleRun) => {
     const optimize = isSearchOptimize(run);
@@ -304,8 +317,9 @@ export function TaskCenterPage() {
       )}
 
       {error && <div className="pm-error task-inline-error">{error}</div>}
+      {snapshot?.document_ocr_error && <div className="pm-error task-inline-error">图片识别汇总读取失败：{snapshot.document_ocr_error}</div>}
 
-      {activeRows.length === 0 && snapshot?.pglite_owner && snapshot.pglite_owner.state !== 'clear' && snapshot.pglite_owner.state !== 'current' && (
+      {activeRows.length === 0 && ocrSummary.running+ocrSummary.queued===0 && snapshot?.pglite_owner && snapshot.pglite_owner.state !== 'clear' && snapshot.pglite_owner.state !== 'current' && (
         <PgliteRecoveryCard
           owner={snapshot.pglite_owner}
           onTerminate={() => void terminateOwner()}
@@ -314,9 +328,9 @@ export function TaskCenterPage() {
       )}
 
       <div className="task-status-grid">
-        <div className="task-status-card task-status-card-running"><span>运行中</span><strong>{activeRows.filter(run => run.status === 'running').length}</strong><small>后台正在执行</small></div>
-        <div className="task-status-card task-status-card-waiting"><span>等待中</span><strong>{waitingRows.length}</strong><small>等待资源空闲</small></div>
-        <div className="task-status-card task-status-card-failed"><span>待处理</span><strong>{failedRows.length}</strong><small>部分完成或失败，需查看原因</small></div>
+        <div className="task-status-card task-status-card-running"><span>运行中</span><strong>{activeRows.filter(run => run.status === 'running').length+(ocrSummary.running>0?1:0)}</strong><small>后台正在执行</small></div>
+        <div className="task-status-card task-status-card-waiting"><span>等待中</span><strong>{waitingRows.length+(ocrSummary.queued>0?1:0)}</strong><small>等待资源空闲</small></div>
+        <div className="task-status-card task-status-card-failed"><span>待处理</span><strong>{failedRows.length+(ocrSummary.failed>0?1:0)}</strong><small>部分完成或失败，需查看原因</small></div>
         <div className="task-status-card task-status-card-completed"><span>今日完成</span><strong>{completedToday}</strong><small>已保存的任务结果</small></div>
       </div>
 
@@ -350,7 +364,7 @@ export function TaskCenterPage() {
         <div className="task-section-head"><h2>后台任务</h2><div className="task-filter-bar" role="tablist" aria-label="任务筛选">
           {([['all', '全部'], ['running', '执行中'], ['queued', '排队中'], ['paused', '已暂停'], ['completed', '已完成'], ['partial', '部分完成'], ['failed', '失败'], ['cancelled', '已停止']] as Array<[TaskFilter, string]>).map(([value, label]) => <button role="tab" aria-selected={filter === value} key={value} type="button" className={filter === value ? 'active' : ''} onClick={() => setFilter(value)}>{label}</button>)}
         </div></div>
-        <div className="task-table-wrap"><table className="task-table"><thead><tr><th>任务</th><th>状态</th><th>处理进度</th><th>当前阶段</th><th>耗时</th><th>剩余子任务</th><th>操作</th></tr></thead><tbody>{historyRows.map(run => <tr key={run.id}>
+        <div className="task-table-wrap"><table className="task-table"><thead><tr><th>任务</th><th>状态</th><th>处理进度</th><th>当前阶段</th><th>耗时</th><th>剩余子任务</th><th>操作</th></tr></thead><tbody>{ocrVisible&&<DocumentOcrRow summary={ocrSummary} counting={!snapshot?.document_ocr} onOpen={()=>{setShowOcr(true);setSelectedRun(null);window.history.replaceState(null,'','#tasks?ocr=1');}} />}{historyRows.map(run => <tr key={run.id}>
           <td><button type="button" onClick={() => { setSelectedRun(run); window.history.replaceState(null, '', `#tasks?run=${encodeURIComponent(run.id)}`); }}>{run.product?.name ?? taskName(run.kind)}</button><small>{run.product?.file ?? formatDate(run.startedAt, '-')}</small></td>
           <td><span className={statusClass(taskStatus(run)==='部分完成'?'partial':run.status)}>{statusLabel(run)}</span></td>
           <td>{taskPhaseSummary(run).count}{!taskRoundCompleted(run)&&taskPercent(run) != null && <div className="product-task-bar" aria-label={`当前进度 ${taskPercent(run)}%`}><i style={{ width: `${taskPercent(run)}%` }} /></div>}</td>
@@ -358,11 +372,12 @@ export function TaskCenterPage() {
           <td title={taskPhaseSummary(run).durationLabel}>{taskPhaseSummary(run).duration}</td>
           <td>{taskPhaseSummary(run).remaining}</td>
           <td><div className="task-table-actions"><button type="button" className="pm-ghost" onClick={() => { setSelectedRun(run); window.history.replaceState(null, '', `#tasks?run=${encodeURIComponent(run.id)}`); }}>查看详情</button>{taskModelSetupIssue(run) && desktopApi() && <button type="button" className="pm-ghost" onClick={() => { window.location.hash = 'settings-model-roles'; }}>去配置模型</button>}{isActive(run) && <button type="button" className="pm-ghost" disabled={cancelling === run.id} onClick={() => void cancel(run)}>{isSearchOptimize(run) ? '暂停' : '停止'}</button>}{taskCanRetry(run) && <button type="button" className="pm-ghost" disabled={retrying === run.id} onClick={() => void retry(run)}>{isSearchOptimize(run) ? '继续' : '重试'}</button>}</div></td>
-        </tr>)}</tbody></table>{historyRows.length === 0 && <div className="task-empty">暂无任务记录</div>}</div>
+        </tr>)}</tbody></table>{historyRows.length === 0 && !ocrVisible && <div className="task-empty">暂无任务记录</div>}</div>
         <p className="task-retention-note">关闭页面不影响后台任务。最近的结果已保存，重启后仍可查看。</p>
       </section>
 
-      {selectedRun && <TaskDetailDrawer run={selectedRun} onClose={() => { setSelectedRun(null); window.history.replaceState(null, '', '#tasks'); }} onCancel={() => void cancel(selectedRun)} onRetry={() => void retry(selectedRun)} busy={cancelling === selectedRun.id || retrying === selectedRun.id} />}
+      {showOcr&&!selectedRun&&<DocumentOcrDrawer summary={ocrSummary} onClose={()=>{setShowOcr(false);window.history.replaceState(null,'','#tasks');}} onOpen={run=>setSelectedRun(run)} onCancel={cancel} onRetry={retry} busyId={cancelling||retrying} />}
+      {selectedRun && <TaskDetailDrawer run={selectedRun} onClose={() => { setSelectedRun(null); window.history.replaceState(null, '', showOcr?'#tasks?ocr=1':'#tasks'); }} onCancel={() => void cancel(selectedRun)} onRetry={() => void retry(selectedRun)} busy={cancelling === selectedRun.id || retrying === selectedRun.id} />}
     </div>
   );
 }

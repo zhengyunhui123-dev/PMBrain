@@ -71,9 +71,12 @@ test('native Dream stays unchanged while explicitly scoped quick maintenance inc
 test('old automatic capture is paused on restart and saved time settings reach manual and scheduled tasks',async()=>{
   const queue=new MinionQueue(engine);
   const old=await queue.add('pmbrain-product-task',{kind:'dream_capture_entities',trigger:'scheduled',task:{type:'dream',input:{phase:'capture_entities',sourceId:'auto-capture',slugs:['notes/old']}}},{queue:'pmbrain-product'});
+  const imported=await queue.add('pmbrain-product-task',{kind:'dream_capture_entities',trigger:'scheduled',task:{type:'dream',input:{phase:'capture_entities',incrementalIngest:true,sourceId:'auto-capture',slugs:['notes/imported']}}},{queue:'pmbrain-product'});
   await engine.setConfig('dream.entity_capture.pending.auto-capture',JSON.stringify({nonce:'legacy',slugs:['notes/old']}));
   runtime=new ProductTaskRuntime(engine);await runtime.start();await Bun.sleep(250);
   expect((await queue.getJob(old.id))?.status).toBe('paused');expect(calls).toBe(0);
+  expect((await queue.getJob(imported.id))?.status).toBe('paused');
+  expect((await queue.getJob(imported.id))?.data.task).toMatchObject({input:{slugs:['notes/imported']}});
   expect((await runtime.getRun(`task-${old.id}`))?.error).toContain('旧版自动实体识别已停用');
   expect(await engine.getConfig('dream.entity_capture.pending.auto-capture')).toContain('notes/old');
   await engine.setConfig(DREAM_TASK_TIMEOUT_KEY,'420000');
@@ -88,7 +91,7 @@ test('old automatic capture is paused on restart and saved time settings reach m
   await runtime.close();runtime=new ProductTaskRuntime(engine);await runtime.start();
   const reloaded=await runtime.submitDream({preset:'quick',sourceId:'auto-capture',dryRun:true});
   expect((await queue.getJob(Number(reloaded.id.slice(5))))?.timeout_ms).toBe(420000);
-  expect((await queue.getJob(old.id))?.status).toBe('paused');expect(calls).toBe(0);
+  expect((await queue.getJob(old.id))?.status).toBe('paused');expect((await queue.getJob(imported.id))?.status).toBe('paused');expect(calls).toBe(0);
   await runtime.close();await engine.setConfig(DREAM_TASK_TIMEOUT_KEY,'');
   expect(DEFAULT_PRODUCT_TASK_TIMEOUT_MS).toBe(21600000);
   await engine.executeRaw("DELETE FROM minion_jobs WHERE queue='pmbrain-product'");
@@ -115,30 +118,21 @@ test('legacy quick task resumes with its original ID, native receipts and archiv
   await runtime.close();await engine.executeRaw("DELETE FROM minion_jobs WHERE queue='pmbrain-product'");
 },30000);
 
-test('ordinary core import persists bounded ingestion and runtime restart completes it once',async()=>{
+test('ordinary core import retains bounded ingestion for maintenance without starting an automatic task',async()=>{
   const file=join(root,'input.md');
   writeFileSync(file,'---\ntitle: 导入资料\ntype: note\n---\n刘慈欣创作了三体，这是导入的中文资料。');
   expect((await importFile(engine,file,'notes/input.md',{sourceId:'auto-capture',noEmbed:true})).status).toBe('imported');
   expect(await engine.executeRaw("SELECT id FROM minion_jobs WHERE queue='pmbrain-product' AND data->'task'->'input'->>'sourceId'='auto-capture'")).toHaveLength(0);
   expect(await engine.getConfig('dream.entity_capture.pending.auto-capture')).toContain('notes/input');
   runtime=new ProductTaskRuntime(engine); await runtime.start();
-  let job:{id:number;status:string;error_text:string|null}|undefined;
-  const deadline=Date.now()+45_000;
-  while(Date.now()<deadline){
-    [job]=await engine.executeRaw<typeof job & {}>("SELECT id,status,error_text FROM minion_jobs WHERE queue='pmbrain-product' AND data->'task'->'input'->>'sourceId'='auto-capture' ORDER BY id DESC LIMIT 1");
-    if(job&&['completed','dead','failed','paused'].includes(job.status))break;
-    await Bun.sleep(50);
-  }
-  expect(job?.status,job?.error_text??JSON.stringify(await runtime.listRuns())).toBe('completed');
-  expect((await engine.getPage('people/liu',{sourceId:'auto-capture'}))?.title).toBe('刘慈欣');
-  const links=await engine.executeRaw<{from_slug:string;to_slug:string}>('SELECT f.slug AS from_slug,t.slug AS to_slug FROM links l JOIN pages f ON f.id=l.from_page_id JOIN pages t ON t.id=l.to_page_id WHERE f.source_id=$1',['auto-capture']);
-  expect(links).toContainEqual({from_slug:'notes/input',to_slug:'people/liu'});
-  const count=calls;
+  await Bun.sleep(300);
+  expect((await runtime.listRuns()).some(run=>run.kind==='dream_capture_entities'&&run.trigger==='scheduled')).toBe(false);
+  expect(calls).toBe(0);
   await runtime.close(); runtime=new ProductTaskRuntime(engine); await runtime.start();
   await Bun.sleep(300);
-  expect(calls).toBe(count);
-  expect((await runtime.listRuns()).some(run=>run.kind==='dream_capture_entities'&&run.trigger==='scheduled'&&run.status==='completed')).toBe(true);
-  expect(await engine.getConfig('dream.entity_capture.pending.auto-capture')).toBeNull();
+  expect(calls).toBe(0);
+  expect((await runtime.listRuns()).some(run=>run.kind==='dream_capture_entities'&&run.trigger==='scheduled')).toBe(false);
+  expect(await engine.getConfig('dream.entity_capture.pending.auto-capture')).toContain('notes/input');
 },60_000);
 
 test('saved execution timeout aborts an in-flight model call; retry keeps original timeout and saved knowledge',async()=>{

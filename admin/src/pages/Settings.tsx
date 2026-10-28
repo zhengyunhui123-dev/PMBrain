@@ -186,7 +186,7 @@ function DreamSettings() {
     <div className="dream-settings-toggles">
       {toggleRow('knowledgeEnabled','dream-knowledge-enabled','深度提炼知识与概念','默认开启。在 AI 深度整理中提炼有原文依据的知识点、综合概念并处理原始对话。未变化资料复用成果，观点生成保持关闭。')}
       {toggleRow('knowledgeUseOrdinaryModel','dream-knowledge-ordinary','知识提炼使用普通模型','沿用已配置的普通模型。关闭后使用知识库模型配置中的 Dream 阶段模型。')}
-      {toggleRow('entityCaptureEnabled','dream-entity-capture','自动整理实体与关联','导入或同步新增、变更资料后，更新人物、组织、项目及来源关联。关闭后仍保存原文和已有成果。')}
+      {toggleRow('entityCaptureEnabled','dream-entity-capture','整理时识别实体与关联','快速维护和 AI 深度整理时，处理新增或变更资料中的人物、组织、项目及来源关联。普通导入结束后不会单独启动整理；关闭后仍保存原文和已有成果。')}
       {toggleRow('enrichThinEnabled','dream-enrich-thin','补充薄弱页面','给人物、公司和项目补上已有资料里能核对的内容。第一次 AI 深度整理会记下开启；在这里关闭后，深度整理和命令行都不再补充。')}
       {toggleRow('fenceRepairEnabled','dream-fence-repair','整理事实栏和页面标记','合并同一段里重复的事实表，补上没写完的表格边界，并去掉指错的页面标记。默认开启，快速维护和深度整理都会做，不改原始文件。')}
       {toggleRow('edgeContradictionsEnabled','dream-edge-contradictions','检查关系矛盾','发现同一主体互相冲突的关系后只记下待确认项，不自动改页面或已有关系。')}
