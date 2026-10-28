@@ -29,17 +29,24 @@ async function settledVectors(){
   while(Date.now()<deadline){if(!(await runtime.listRuns()).some(run=>run.kind==='embed_stale'&&['queued','running'].includes(run.status)))return;await Bun.sleep(40);}
   throw new Error(JSON.stringify(await runtime.listRuns()));
 }
-async function settledKnowledge(){
+async function settledKnowledge(sourceIds?:string[]){
   const deadline=Date.now()+45000;
   while(Date.now()<deadline){
     const pending=await engine.executeRaw<{key:string}>(`SELECT key FROM config WHERE key LIKE 'dream.entity_capture.pending.%'`);
+    const relevant=sourceIds?pending.filter(row=>sourceIds.some(id=>row.key.endsWith(`.${id}`))):pending;
     const optimize=await loadSearchOptimize(engine);
     const runs=await runtime.listRuns();
-    const busy=runs.some(run=>(run.kind==='embed_stale'||run.kind==='dream_capture_entities')&&['queued','running','paused'].includes(run.status));
-    if(!busy&&pending.length===0&&optimize.pending===0)return;
+    const busy=runs.some(run=>run.kind==='embed_stale'&&['queued','running','paused'].includes(run.status)||(run.kind==='dream_capture_entities'||run.kind==='dream_quick')&&['queued','running'].includes(run.status));
+    if(!busy&&relevant.length===0&&optimize.pending===0)return;
     await Bun.sleep(40);
   }
   throw new Error(JSON.stringify({runs:await runtime.listRuns(),pending:await engine.executeRaw(`SELECT key FROM config WHERE key LIKE 'dream.entity_capture.pending.%'`),optimize:await engine.getConfig('pmbrain.search_optimize')}));
+}
+async function maintain(sourceId:string){
+  const done=await finished((await runtime.submitDream({preset:'quick',sourceId})).id);
+  expect(done.status,JSON.stringify(done.result)).toBe('completed');
+  await settledKnowledge([sourceId]);
+  return done;
 }
 
 beforeAll(async()=>{
@@ -116,23 +123,28 @@ test('direct core import survives runtime restart and generated output does not 
   expect(calls).toBe(previousCalls);
 },60000);
 
-test('ordinary import embeds the new entity and appending to the same file updates its evidence once',async()=>{
+test('ordinary import defers entity capture until maintenance, then appending updates its evidence once',async()=>{
   const file=join(root,'append.md');writeFileSync(file,'# 追加资料\n\n刘慈欣创作了三体。');
+  const before=calls;
   const first=await finished((await runtime.submitImport({path:file,sourceId:'knowledge-other'})).id);
   expect(first.status,JSON.stringify(first.result)).toBe('completed');
   expect(first.result).toMatchObject({vectorsPending:true});
-  await settledKnowledge();
+  expect(calls).toBe(before);
+  expect(await engine.getConfig('dream.entity_capture.pending.knowledge-other')).toContain('append');
+  await maintain('knowledge-other');
+  expect(calls).toBe(before+1);
   const chunks=await engine.getChunks('people/liu',{sourceId:'knowledge-other'});expect(chunks.length).toBeGreaterThan(0);expect(chunks.every(chunk=>!!chunk.embedded_at)).toBe(true);
   const count=calls;writeFileSync(file,'# 追加资料\n\n刘慈欣创作了三体。\n\n刘慈欣参与了科幻讨论。');
   expect((await finished((await runtime.submitImport({path:file,sourceId:'knowledge-other'})).id)).status).toBe('completed');
-  await settledKnowledge();
+  expect(calls).toBe(count);
+  await maintain('knowledge-other');
   expect(calls).toBe(count+1);
   const entity=await engine.getPage('people/liu',{sourceId:'knowledge-other'});expect(entity?.compiled_truth).toContain('创作了三体');expect(entity?.compiled_truth).toContain('参与了科幻讨论');
   const vectors=embeddingCalls,after=calls;
   expect((await finished((await runtime.submitImport({path:file,sourceId:'knowledge-other'})).id)).status).toBe('completed');
-  await settledKnowledge();
+  await maintain('knowledge-other');
   expect(calls).toBe(after);expect(embeddingCalls).toBe(vectors);
-},60000);
+},120000);
 
 afterAll(async()=>{
   await runtime?.close();await engine?.disconnect();server?.stop(true);
@@ -140,50 +152,55 @@ afterAll(async()=>{
   if(root&&resolve(root).startsWith(resolve(tmpdir())+sep)&&root.includes('pmbrain-auto-knowledge-'))rmSync(root,{recursive:true,force:true});
 },60000);
 
-test('import automatically creates an evidenced entity and source graph within the same task',async()=>{
+test('import keeps source material and quick maintenance creates the evidenced entity graph',async()=>{
   const file=join(root,'first.md');writeFileSync(file,'# 科幻资料\n\n刘慈欣创作了三体。');
+  const before=calls;
   const run=await runtime.submitImport({path:file,sourceId:'knowledge-auto',noEmbed:true});
   const done=await finished(run.id);expect(done.status,JSON.stringify(done.result)).toBe('completed');
   expect((done.result as {phases?:Array<{phase:string}>}).phases?.some(phase=>phase.phase==='capture_entities')??false).toBe(false);
-  await settledKnowledge();
+  expect(calls).toBe(before);
+  expect(await engine.getPage('first',{sourceId:'knowledge-auto'})).not.toBeNull();
+  expect(await engine.getConfig('dream.entity_capture.pending.knowledge-auto')).toContain('first');
+  expect((await engine.executeRaw("SELECT id FROM minion_jobs WHERE queue='pmbrain-product' AND data->>'kind'='dream_capture_entities' AND data->'task'->'input'->'slugs' ? 'first'")).length).toBe(0);
+  const maintained=await maintain('knowledge-auto');
+  expect(calls).toBeGreaterThan(before);
+  expect((maintained.result as {phases?:Array<{phase:string}>}).phases?.some(phase=>phase.phase==='capture_entities')).toBe(true);
   expect((await engine.getPage('people/liu',{sourceId:'knowledge-auto'}))?.compiled_truth).toContain('创作了三体');
   const edges=await engine.executeRaw<{from_slug:string;to_slug:string}>('SELECT f.slug from_slug,t.slug to_slug FROM links l JOIN pages f ON f.id=l.from_page_id JOIN pages t ON t.id=l.to_page_id WHERE f.source_id=$1',['knowledge-auto']);
   expect(edges).toContainEqual({from_slug:'first',to_slug:'people/liu'});
   expect(edges).toContainEqual({from_slug:'people/liu',to_slug:'first'});
-  expect((await engine.executeRaw("SELECT id FROM minion_jobs WHERE queue='pmbrain-product' AND data->>'kind'='dream_capture_entities' AND data->'task'->'input'->'slugs' ? 'first'")).length).toBeGreaterThan(0);
-},60000);
+  expect(await engine.getConfig('dream.entity_capture.pending.knowledge-auto')).toBeNull();
+},90000);
 
 test('unchanged import and maintenance reuse receipts; new evidence updates the same entity without losing facts',async()=>{
   const count=calls;
   const again=await runtime.submitImport({path:join(root,'first.md'),sourceId:'knowledge-auto',noEmbed:true});expect((await finished(again.id)).status).toBe('completed');expect(calls).toBe(count);
   const file=join(root,'second.md');writeFileSync(file,'# 新增资料\n\n刘慈欣参与了科幻讨论。');
   expect((await finished((await runtime.submitImport({path:file,sourceId:'knowledge-auto',noEmbed:true})).id)).status).toBe('completed');
-  await settledKnowledge();
+  expect(calls).toBe(count);
+  expect(await engine.getConfig('dream.entity_capture.pending.knowledge-auto')).toContain('second');
+  await maintain('knowledge-auto');
   const entity=await engine.getPage('people/liu',{sourceId:'knowledge-auto'});
   expect(entity?.compiled_truth).toContain('创作了三体');expect(entity?.compiled_truth).toContain('参与了科幻讨论');
   const after=calls;
-  expect((await finished((await runtime.submitDream({preset:'quick',sourceId:'knowledge-auto'})).id)).status).toBe('completed');expect(calls).toBe(after);
-},60000);
+  await maintain('knowledge-auto');
+  expect(calls).toBe(after);
+},90000);
 
-test('invalid ingestion leaves raw material and live database available; retry uses the original task',async()=>{
+test('invalid ingestion leaves raw material and live database available; maintenance retry writes the entity',async()=>{
   invalid=true;
   const file=join(root,'retry.md');writeFileSync(file,'# 重试资料\n\n刘慈欣参与了科幻讨论。');
   const run=await runtime.submitImport({path:file,sourceId:'knowledge-other',noEmbed:true}),stored=await finished(run.id);
   expect(stored.status).toBe('completed');expect(await engine.getPage('retry',{sourceId:'knowledge-other'})).not.toBeNull();expect((await engine.executeRaw('SELECT 1 AS alive'))[0].alive).toBe(1);
-  let captureId='';
-  const deadline=Date.now()+45000;
-  while(Date.now()<deadline){
-    const rows=await engine.executeRaw<{id:number;status:string}>(`SELECT id,status FROM minion_jobs WHERE queue='pmbrain-product' AND data->>'kind'='dream_capture_entities' AND data->'task'->'input'->'slugs' ? 'retry'`);
-    const failed=rows.find(row=>row.status==='failed'||row.status==='dead');
-    if(failed){captureId=`task-${failed.id}`;break;}
-    await Bun.sleep(40);
-  }
-  if(!captureId)throw new Error(JSON.stringify(await engine.executeRaw(`SELECT id,status,error_text FROM minion_jobs WHERE data->>'kind'='dream_capture_entities'`)));
-  invalid=false;expect((await runtime.retry(captureId))?.id).toBe(captureId);expect((await finished(captureId)).status).toBe('completed');
-  await settledKnowledge();
+  expect((await engine.executeRaw("SELECT id FROM minion_jobs WHERE queue='pmbrain-product' AND data->>'kind'='dream_capture_entities' AND data->'task'->'input'->'slugs' ? 'retry'")).length).toBe(0);
+  const attempt=await finished((await runtime.submitDream({preset:'quick',sourceId:'knowledge-other'})).id);
+  expect(attempt.status,JSON.stringify(attempt.result)).toBe('failed');
+  expect(await engine.getPage('retry',{sourceId:'knowledge-other'})).not.toBeNull();
+  invalid=false;expect((await runtime.retry(attempt.id))?.id).toBe(attempt.id);expect((await finished(attempt.id)).status).toBe('completed');
+  await settledKnowledge(['knowledge-other']);
   expect((await engine.getPage('people/liu',{sourceId:'knowledge-other'}))?.compiled_truth).toContain('参与了科幻讨论');
   expect((await engine.getPage('people/liu',{sourceId:'knowledge-auto'}))?.compiled_truth).toContain('创作了三体');
-},60000);
+},90000);
 
 test('retrying a partially failed directory also ingests the earlier successful files in the original task',async()=>{
   const directory=join(root,'partial-directory');mkdirSync(directory);
@@ -195,10 +212,12 @@ test('retrying a partially failed directory also ingests the earlier successful 
   writeFileSync(bad,'# 修复资料\n\n刘慈欣参与了科幻讨论。这是独立目录恢复记录，编号 B-155-RESUME。');
   const count=calls;expect((await runtime.retry(run.id))?.id).toBe(run.id);
   const done=await finished(run.id);expect(done.status,JSON.stringify(done.result)).toBe('completed');
-  await settledKnowledge();
-  expect(calls).toBeGreaterThanOrEqual(count+1);
-  expect(await engine.getConfig('dream.entity_capture.pending.knowledge-other')).toBeNull();
+  expect(calls).toBe(count);
   expect((await engine.getPage('z-good',{sourceId:'knowledge-other'}))?.compiled_truth).toContain('A-155-RESUME');
   expect((await engine.getPage('a-bad',{sourceId:'knowledge-other'}))?.compiled_truth).toContain('B-155-RESUME');
+  expect(await engine.getConfig('dream.entity_capture.pending.knowledge-other')).toContain('a-bad');
+  await maintain('knowledge-other');
+  expect(calls).toBeGreaterThan(count);
+  expect(await engine.getConfig('dream.entity_capture.pending.knowledge-other')).toBeNull();
   expect((await engine.getPage('people/liu',{sourceId:'knowledge-other'}))?.compiled_truth).toContain('[Source: z-good]');
-},90000);
+},120000);
