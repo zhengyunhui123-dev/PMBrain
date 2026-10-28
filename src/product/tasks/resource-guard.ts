@@ -67,7 +67,7 @@ export class TaskResourceGuard {
   }
   private async measureSnapshots(){
     let total=0;
-    const pending=[gbrainPath('task-artifacts','sync-files')];
+    const pending=[gbrainPath('task-artifacts','sync-files'),gbrainPath('task-artifacts','document-ocr')];
     while(pending.length){
       const path=pending.pop()!;
       const info=await stat(path).catch(error=>{if(error.code==='ENOENT')return null;throw error;});

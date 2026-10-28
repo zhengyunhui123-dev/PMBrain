@@ -20,14 +20,16 @@ export async function appendOoxmlImageOcr(
   document: StructuredDocument,
   opts: DocumentParseOptions,
 ): Promise<StructuredDocument> {
-  if (!opts.ocrPage) return document;
+  if (!opts.ocrPage&&!opts.deferOcr) return document;
   const prefix = document.format === 'docx' ? 'word/media/' : document.format === 'pptx' ? 'ppt/media/' : 'xl/media/';
   const zip = await DocumentZip.open(filePath,opts.runtime);
   try{
   const media = zip.names()
     .filter(name => !name.endsWith('/') && name.startsWith(prefix) && MIME_BY_EXTENSION[extname(name).toLowerCase()])
-    .sort();
+    .filter(name=>!opts.ocrItems||opts.ocrItems.includes(name)).sort();
+  if(opts.ocrItems?.some(name=>!media.includes(name)))throw new Error('旧资料识图回执中的图片不存在，已有内容保留');
   if (media.length === 0) return document;
+  if(opts.deferOcr){document.metadata.imageCount=Math.max(document.metadata.imageCount,media.length);document.metadata.ocrSkipped=media.length;document.metadata.ocrWarnings=media.map(name=>`${name}: 后台识图待完成`);return document;}
 
   let attempted = 0;
   let succeeded = 0;
@@ -38,10 +40,10 @@ export async function appendOoxmlImageOcr(
   let reused=0;
   let textBytes=document.sections.reduce((sum,section)=>sum+Buffer.byteLength(renderDocumentSection(section))+2,0);
   zip.runtime.assertText(textBytes);
-  process.stderr.write(`${JSON.stringify({ event: 'start', phase: 'import.process.ocr', done: 0, total: media.length, unit: '张图片', stage: '图片识别' })}\n`);
+  if(!opts.ocrItems)process.stderr.write(`${JSON.stringify({ event: 'start', phase: 'import.process.ocr', done: 0, total: media.length, unit: '张图片', stage: '图片识别' })}\n`);
   for (const [index, name] of media.entries()) {
     await zip.runtime.checkpoint(true);
-    const result = await opts.ocrPage(index + 1, await zip.buffer(name,32*1024**2), MIME_BY_EXTENSION[extname(name).toLowerCase()]);
+    const result = await opts.ocrPage!(index + 1, await zip.buffer(name,32*1024**2), MIME_BY_EXTENSION[extname(name).toLowerCase()]);
     model ??= result.model ?? undefined;
     if(result.recognizedAt && (!document.metadata.ocrProcessedAt || result.recognizedAt>document.metadata.ocrProcessedAt))document.metadata.ocrProcessedAt=result.recognizedAt;
     if(result.reused)reused++;
@@ -64,7 +66,7 @@ export async function appendOoxmlImageOcr(
       skipped++;
       if (result.message) warnings.push(`${name}: ${result.message}`);
     }
-    process.stderr.write(`${JSON.stringify({ event: 'tick', phase: 'import.process.ocr', done: index + 1, total: media.length, unit: '张图片', stage: '图片识别' })}\n`);
+    if(!opts.ocrItems)process.stderr.write(`${JSON.stringify({ event: 'tick', phase: 'import.process.ocr', done: index + 1, total: media.length, unit: '张图片', stage: '图片识别' })}\n`);
   }
   document.metadata.imageCount = Math.max(document.metadata.imageCount, media.length);
   document.metadata.ocrUsed = succeeded > 0;

@@ -216,6 +216,8 @@ export interface ImportResult {
   chunks: number;
   error?: string;
   embeddingPending?: boolean;
+  ocrPending?:number;
+  ocrTaskId?:number;
   /**
    * Parsed page content. Present for status='imported' AND status='skipped'
    * (skip happens when content is identical to existing page; auto-link still
@@ -1631,6 +1633,7 @@ export interface ImportTransactionSpec {
   chunks?: ChunkInput[];
   /** Optional file-row insert (image ingest). Page link injected automatically. */
   file?: FileSpec;
+  before?: (tx: BrainEngine) => Promise<void>;
   /** Inside-transaction hook for type-specific work (tags, links). */
   after?: (tx: BrainEngine) => Promise<void>;
 }
@@ -1640,6 +1643,7 @@ export async function withImportTransaction(
   spec: ImportTransactionSpec,
 ): Promise<void> {
   await engine.transaction(async (tx) => {
+    await spec.before?.(tx);
     const pageOpts = spec.sourceId ? { sourceId: spec.sourceId } : undefined;
     if (spec.hadExisting) await tx.createVersion(spec.slug, pageOpts);
     await tx.putPage(spec.slug, spec.page, pageOpts);
@@ -1823,6 +1827,13 @@ export async function extractImageOcrText(
 }
 
 export interface ImportImageOptions {
+  deferDocumentOcr?:boolean;
+  ocrOriginalPath?:string|null;
+  deferredOcrVectors?:boolean;
+  deferredOcrMaintenanceOwnerId?:number;
+  runtime?:DocumentRuntime;
+  validate?:(engine:BrainEngine)=>Promise<void>;
+  storagePath?:string;
   /** Override default OCR concurrency for tests. */
   ocrConcurrency?: number;
   /** Skip the embed call (for tests that want fast metadata-only inserts). */
@@ -1878,13 +1889,26 @@ export async function importImageFile(
   const hash = createHash('sha256').update(buf).digest('hex');
 
   const existing = await engine.getPage(imageSlug, { sourceId: opts.sourceId });
+  const preserveExisting=!!opts.validate&&existing?.content_hash===hash;
+  const chunkManifest=preserveExisting?await (await import('./document/chunk-manifest.ts')).readDocumentChunkManifest(engine,existing!.id):null;
   const gateway = await import('./ai/gateway.ts');
   const ocrRequested = opts.forceOcr ?? gateway.isOcrEnabled();
+  const deferOcr=opts.deferDocumentOcr===true&&ocrRequested;
+  const finishDeferred=async(result:ImportResult)=>{
+    if(!deferOcr)return result;
+    const {queueDocumentOcr}=await import('./pmbrain-adapters/deferred-document-ocr.ts');
+    return queueDocumentOcr(engine,filePath,relativePath,hash,result,{...opts,image:true,runtime:opts.runtime??new DocumentRuntime()});
+  };
   let ocrModel: string | null = null;
   if (ocrRequested) {
     try { ocrModel = gateway.getImageOcrModel(); } catch { ocrModel = null; }
   }
   const existingReceipt = existing?.frontmatter?.ocr_receipt as OcrReceipt | undefined;
+  if(deferOcr&&existing?.content_hash===hash&&!opts.forceOcrRefresh){
+    if(existingReceipt?.status==='complete')return {slug:imageSlug,status:'skipped',chunks:0};
+    await engine.executeRaw("UPDATE pages SET frontmatter=frontmatter||jsonb_build_object('raw_sha256',$2::text,'document_ocr_deferred',true,'document_ocr_skipped',1,'document_ocr_failed',0) WHERE id=$1",[existing.id,hash]);
+    return finishDeferred({slug:imageSlug,status:'skipped',chunks:0});
+  }
   if (existing?.content_hash === hash
       && !opts.forceOcrRefresh
       && (!ocrRequested || !shouldRefreshOcrReceipt(existingReceipt, hash, ocrModel))) {
@@ -1909,7 +1933,7 @@ export async function importImageFile(
 
   // OCR opt-in (cherry-1). Runs through the per-process limiter so 100
   // images first-import doesn't serialize into 200s of OCR latency.
-  const ocrResult = await _ocrLimiter(() => extractImageOcrResult(engine, decoded.buf, decoded.mime, { enabled: opts.forceOcr }));
+  const ocrResult = await _ocrLimiter(() => extractImageOcrResult(engine, decoded.buf, decoded.mime, { enabled: deferOcr?false:opts.forceOcr }));
   const ocrText = ocrResult.text;
   const receipt: OcrReceipt = {
     version: OCR_RECEIPT_VERSION,
@@ -1928,7 +1952,7 @@ export async function importImageFile(
 
   // Multimodal embed.
   let embedding: Float32Array | null = null;
-  if (!opts.noEmbed && gateway.getMultimodalModel()) {
+  if (!opts.noEmbed && !deferOcr && gateway.getMultimodalModel()) {
     try {
       const [vec] = await embedMultimodal([
         { kind: 'image_base64', data: decoded.buf.toString('base64'), mime: decoded.mime },
@@ -1946,12 +1970,16 @@ export async function importImageFile(
 
   const filename = basename(relativePath);
   const frontmatter: Record<string, unknown> = {
+    ...(preserveExisting?existing!.frontmatter:{}),
     type: 'image',
-    title: filename,
+    title: preserveExisting?existing!.frontmatter.title??existing!.title:filename,
     mime_type: decoded.mime,
     bytes: stat.size,
     ...exif,
     ocr_receipt: receipt,
+    raw_sha256:hash,
+    ...(preserveExisting&&ocrResult.status==='success'?{document_ocr_deferred:false,document_ocr_failed:0,document_ocr_skipped:0}:{}),
+    ...(deferOcr||opts.validate&&ocrResult.status!=='success'?{document_ocr_deferred:true,document_ocr_skipped:ocrResult.status==='skipped'?1:0,document_ocr_failed:ocrResult.status==='failed'?1:0}:{}),
   };
 
   // Single chunk per image. chunk_text holds OCR text or filename so
@@ -1968,7 +1996,7 @@ export async function importImageFile(
     modality: 'image',
     ...(embedding ? { embedding_image: embedding } : {}),
   });
-  if (ocrText && !opts.noEmbed && isAiAvailable('embedding')) {
+  if (ocrText && !opts.noEmbed && !deferOcr && isAiAvailable('embedding')) {
     const [textEmbedding] = await embedBatch([ocrText]);
     chunks[0].embedding = textEmbedding;
     chunks[0].model = getEmbeddingModel();
@@ -1977,12 +2005,13 @@ export async function importImageFile(
 
   const fileSpec: FileSpec = {
     filename,
-    storage_path: relativePath.replace(/[\\\/]/g, '/'),
+    storage_path: opts.storagePath ?? relativePath.replace(/[\\\/]/g, '/'),
     mime_type: decoded.mime,
     size_bytes: stat.size,
     content_hash: hash,
   };
 
+  await opts.validate?.(engine);
   await withImportTransaction(engine, {
     slug: imageSlug,
     sourceId: opts.sourceId,
@@ -1990,15 +2019,28 @@ export async function importImageFile(
     page: {
       type: 'image',
       page_kind: 'image',
-      title: filename,
-      compiled_truth: ocrText || '',
-      timeline: '',
+      title: preserveExisting?existing!.title:filename,
+      compiled_truth: preserveExisting?[existing!.compiled_truth,ocrText].filter(Boolean).join('\n\n'):ocrText || '',
+      timeline: preserveExisting?existing!.timeline:'',
       frontmatter,
       content_hash: hash,
     },
-    chunks,
+    chunks:preserveExisting?undefined:chunks,
     file: fileSpec,
+    before:async(tx)=>{
+      await opts.validate?.(tx);
+      if(preserveExisting){
+        const locked=await tx.executeRaw('SELECT id FROM pages WHERE id=$1 AND compiled_truth=$2 AND frontmatter=$3::jsonb AND timeline=$4 AND title=$5 AND content_hash=$6 AND deleted_at IS NULL FOR UPDATE',[existing!.id,existing!.compiled_truth,existing!.frontmatter,existing!.timeline,existing!.title,hash]);
+        const current=await (await import('./document/chunk-manifest.ts')).readDocumentChunkManifest(tx,existing!.id);
+        if(!locked.length||current.chunk_hash!==chunkManifest!.chunk_hash)throw new Error('图片正文或分块在识图期间已改变，请核对后继续');
+      }
+    },
     after: async (tx) => {
+      await opts.validate?.(tx);
+      if(preserveExisting&&ocrText){
+        const [last]=await tx.executeRaw<{index:number}>('SELECT COALESCE(max(chunk_index),-1)::int AS index FROM content_chunks WHERE page_id=$1',[existing!.id]);
+        await tx.upsertChunks(imageSlug,[{chunk_index:last.index+1,chunk_text:ocrText,chunk_source:'compiled_truth',modality:'text'}],{sourceId:opts.sourceId,replaceExisting:false});
+      }
       // Cherry-3: path-proximity auto-link to a sibling text page. The first
       // matching candidate gets an image_of edge. Best-effort — addLink
       // throws when the target doesn't exist; we silently skip for now and
@@ -2024,7 +2066,7 @@ export async function importImageFile(
     },
   });
 
-  return {
+  return finishDeferred({
     slug: imageSlug,
     status: 'imported',
     chunks: chunks.length,
@@ -2044,7 +2086,7 @@ export async function importImageFile(
       ocrSkipped: ocrResult.status === 'skipped' ? 1 : 0,
       ocrWarnings: ocrResult.message ? [ocrResult.message] : [],
     },
-  };
+  });
 }
 
 function filenameForReceipt(relativePath: string): string {

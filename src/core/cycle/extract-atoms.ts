@@ -240,6 +240,7 @@ export async function discoverExtractablePages(
       AND p.content_hash IS NOT NULL
       AND COALESCE(p.frontmatter->>'imported_from',   '') <> 'markdown-greenfield'
       AND COALESCE(p.frontmatter->>'dream_generated', '') <> 'true'
+      AND COALESCE(p.frontmatter->>'document_ocr_deferred','false') <> 'true'
       AND length(COALESCE(p.compiled_truth, '')) >= $3
       AND COALESCE(p.frontmatter->>'visibility','world') <> 'private'
       AND COALESCE(p.frontmatter->>'private','false') <> 'true'
@@ -328,6 +329,7 @@ export async function countExtractAtomsBacklog(
           AND p.content_hash IS NOT NULL
           AND COALESCE(p.frontmatter->>'imported_from', '') <> 'markdown-greenfield'
           AND COALESCE(p.frontmatter->>'dream_generated', '') <> 'true'
+          AND COALESCE(p.frontmatter->>'document_ocr_deferred','false') <> 'true'
           AND length(COALESCE(p.compiled_truth, '')) >= $3
           AND COALESCE(p.frontmatter->>'visibility','world') <> 'private'
           AND COALESCE(p.frontmatter->>'private','false') <> 'true'

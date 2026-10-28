@@ -135,13 +135,12 @@ test('重切分和缺块修补保留已有向量，只让缺失块等待补齐',
   await importOfficeFile(engine,f.path,'report.docx',f.options);const after=await read();expect(after.slice(0,-1)).toEqual(before.slice(0,-1));expect(after.at(-1)!.hash).toBeNull();
   expect((await importOfficeFile(engine,f.path,'report.docx',f.options)).embeddingPending).toBe(true);
 },60_000);
-test('旧资料缺少缓存时关闭识图不能覆盖已经保存的图片文字',async()=>{
+test('旧资料缺少缓存时关闭识图复用已有图片文字，不覆盖正文',async()=>{
   const f=await fixture('legacy-cache');await importOfficeFile(engine,f.path,'report.docx',f.options);
   const before=await engine.getPage('report.docx',{sourceId:f.sourceId});
   await engine.executeRaw("DELETE FROM config WHERE key LIKE 'document.ocr.v1.%'");
   await engine.executeRaw("UPDATE pages SET frontmatter=frontmatter-'document_chunk_count'-'document_chunk_hash' WHERE source_id=$1",[f.sourceId]);
-  let failure:unknown;
-  try{await importOfficeFile(engine,f.path,'report.docx',{...f.options,documentOcr:false});}catch(error){failure=error;}
-  expect(failure).toBeInstanceOf(Error);expect((failure as Error).message).toContain('已有图片文字');
+  const reused=await importOfficeFile(engine,f.path,'report.docx',{...f.options,documentOcr:false});
+  expect(reused.status).toBe('skipped');
   expect((await engine.getPage('report.docx',{sourceId:f.sourceId}))!.compiled_truth).toBe(before!.compiled_truth);
 },60_000);

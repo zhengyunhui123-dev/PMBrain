@@ -3,7 +3,7 @@ import {mkdtempSync,rmSync,writeFileSync,readFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {createCanvas} from '@napi-rs/canvas';
-import {parsePdfDocument} from '../src/core/document/parsers/pdf';
+import {parsePdfDocument,retryPdfOcrPages} from '../src/core/document/parsers/pdf';
 import {renderStructuredDocument} from '../src/core/document/markdown-renderer';
 import {DocumentRuntime} from '../src/core/document/resource-policy';
 
@@ -36,6 +36,10 @@ test('mixed image recognition failures keep native text and a failed receipt wit
 test('without OCR callback the native parser makes no image recognition attempt',async()=>{
   const document=await parsePdfDocument(path);expect(document.metadata.ocrUsed).toBe(false);expect(document.metadata.ocrAttempted).toBeUndefined();expect(renderStructuredDocument(document)).toContain('Native header');
 });
+test('后台识图先提取 PDF 原文并定位待识别页，不调用识图或重复已含文字的图片',async()=>{
+  let calls=0;const document=await parsePdfDocument(path,{deferOcr:true,structured:false,ocrPage:async()=>{calls++;return {status:'success',text:'unexpected',model:'fixture'};}});
+  expect(calls).toBe(0);expect(document.metadata.pagesNeedingOcr).toEqual([1,2]);expect(document.metadata.ocrSkipped).toBe(2);expect(document.metadata.ocrWarnings).toEqual(['第 1 页：后台识图待完成','第 2 页：后台识图待完成']);expect(renderStructuredDocument(document)).toContain('Native header');expect(renderStructuredDocument(document)).toContain('Searchable image text already present');
+});
 test('分页提取保留末页文字，并按实际原始页码返回定位',async()=>{
   const document=await parsePdfDocument(path);
   expect(renderStructuredDocument(document)).toContain('Native document with a small logo');expect(document.sections.some(section=>section.locator?.page===4&&(section.text??section.heading)?.includes('Native document'))).toBe(true);
@@ -47,6 +51,12 @@ test('分页批次切换后末页的混合图片仍识别，页码与原文一�
 });
 test('OCR 回调的中断和存储错误保留原错误，不伪装成解析降级成功',async()=>{
   await expect(parsePdfDocument(path,{ocrPage:async()=>{throw new Error('OCR storage interrupted');}})).rejects.toThrow('OCR storage interrupted');
+});
+
+test('失败页单独补齐，只渲染识别所选页面，非法旧页码明确失败',async()=>{
+  const calls:number[]=[];const document=await retryPdfOcrPages(path,[2],{ocrPage:async page=>{calls.push(page);return {status:'success',text:'only-failed-page-two',model:'fixture'};}});
+  expect(calls).toEqual([2]);expect(document.metadata.ocrSucceeded).toBe(1);expect(document.sections.every(section=>section.locator?.page===2)).toBe(true);
+  await expect(retryPdfOcrPages(path,[999],{})).rejects.toThrow('页码不存在');
 });
 
 test('PDF识图文字达到当前内存额度后停止，不再识别后续页面',async()=>{

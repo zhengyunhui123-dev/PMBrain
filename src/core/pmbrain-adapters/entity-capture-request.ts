@@ -7,6 +7,7 @@ export function excludedCapturePath(slug:string):boolean {
   return EXCLUDED_CAPTURE_PATH.test(slug.replace(/\\/g,'/'));
 }
 export async function requestImportedEntityCapture(engine: BrainEngine, sourceId: string, page: {slug:string;type:string;compiled_truth:string;frontmatter:Record<string,unknown>}): Promise<void> {
+  if(page.frontmatter.document_ocr_deferred===true)return;
   if (excludedCapturePath(page.slug) || ['person','company','organization','entity','concept','project'].includes(page.type) || /^(?:people|companies|concepts|projects|wiki\/agents)\//.test(page.slug) || page.frontmatter.dream_generated===true || page.frontmatter.pmbrain_ingest_provenance || page.compiled_truth.trim().length<ENTITY_CAPTURE_MIN_BODY_CHARS) return;
   const key=ENTITY_CAPTURE_PENDING_PREFIX+sourceId;
   await engine.transaction(async tx=>{

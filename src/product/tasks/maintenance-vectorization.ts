@@ -24,13 +24,21 @@ export async function runMaintenanceVectorization(engine:BrainEngine,sourceId:st
     return current.paused||schedule.mode==='waiting';
   };
   const finish=async(deferred=false):Promise<PhaseResult>=>{
-    details.remainingChunks=await engine.countStaleChunks(sourceId?{sourceId}:undefined);
+    const [waiting]=await engine.executeRaw<{count:number}>(`SELECT count(*)::int count FROM content_chunks cc JOIN pages p ON p.id=cc.page_id WHERE p.deleted_at IS NULL AND ($1::text IS NULL OR p.source_id=$1) AND p.frontmatter->>'document_ocr_deferred'='true' AND NOT(COALESCE(p.frontmatter,'{}'::jsonb)?'embed_skip') AND (cc.embedding IS NULL OR(cc.embedded_text_hash IS NOT NULL AND cc.embedded_text_hash<>md5(cc.chunk_text)))`,[sourceId??null]);
+    details.remainingChunks=Math.max(0,await engine.countStaleChunks(sourceId?{sourceId}:undefined)-waiting.count);
+    details.ocrWaitingChunks=waiting.count;
     if(deferred){details.vectorizationDeferred=true;details.waitReason=schedule?.reason;}
     return {phase:'embed',status:deferred||Number(details.remainingChunks)>0?'warn':'ok',duration_ms:Date.now()-started,summary:deferred?'向量化等待继续，已完成的部分已保存':`已保存 ${details.embedded} 个向量`,details};
   };
   for(;;){
     options.signal?.throwIfAborted();
-    const [next]=await engine.listStaleChunks({batchSize:1,...(sourceId?{sourceId}:{})});
+    let afterPageId=0,next:Awaited<ReturnType<BrainEngine['listStaleChunks']>>[number]|undefined;
+    for(;;){
+      [next]=await engine.listStaleChunks({batchSize:1,afterPageId,afterChunkIndex:2147483647,...(sourceId?{sourceId}:{})});
+      if(!next)break;
+      const [waiting]=await engine.executeRaw("SELECT 1 FROM pages WHERE id=$1 AND frontmatter->>'document_ocr_deferred'='true'",[next.page_id]);
+      if(!waiting)break;afterPageId=next.page_id;
+    }
     if(!next)return finish();
     if(options.pageLimit&&Number(details.pages_embedded_count)>=options.pageLimit)return finish();
     if(await paused()||Date.now()-started>=60000)return finish(true);

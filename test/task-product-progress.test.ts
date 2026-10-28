@@ -6,6 +6,12 @@ import type {ConsoleRun} from '../shared/contracts/common.ts';
 import type { MaintenanceCheckpoint } from '../src/product/tasks/types.ts';
 
 describe('任务的产品进度', () => {
+  test('资料保存与后台识图区分，重载时以剩余识图结果更新状态',()=>{
+    const adapter=new TaskProgressAdapter('import_path'),result={imported:1,skipped:0,errors:0,ocrPending:3};
+    const pending={id:'task-1',kind:'import_path',status:'completed',result,product:finishTaskProgress(adapter.view,'completed',result,null)} as ConsoleRun;
+    expect(taskStatus(pending)).toBe('已保存，识图待完成');expect(pending.product!.stage).toContain('后台补齐');
+    expect(taskStatus({...pending,result:{...result,ocrFailed:1}})).toBe('已保存，识图未完成');expect(taskStatus({...pending,result:{...result,ocrPending:0}})).toBe('导入成功');
+  });
   test('导入切换文件及逐图识别时保留整批文件计数，识图进度单独更新', () => {
     const adapter = new TaskProgressAdapter('import_path');
     adapter.plan(['collect', 'process', 'write']);
@@ -257,5 +263,10 @@ describe('任务的产品进度', () => {
       expect(result.steps.find(step=>step.phases.includes('embed'))?.detail).toContain('向量化等待继续');
       expect(result.steps.find(step=>step.phases.includes('embed'))?.detail).toContain('已保存 3 个向量，剩余 2 个分块');
     }
+  });
+  test('后台识图显示实际图片计数并在完成后保留计数',()=>{
+    const adapter=new TaskProgressAdapter('document_ocr');adapter.plan(['ocr']);adapter.write(JSON.stringify({event:'tick',phase:'import.process.ocr',done:2,total:3,unit:'张图片'})+'\n');
+    expect(adapter.view.processed).toBe(2);expect(adapter.view.total).toBe(3);expect(adapter.view.phaseProgress?.remaining).toBe(1);
+    adapter.event({phase:'import.process.ocr',event:'tick',done:3,total:3});adapter.event({phase:'ocr',event:'finish'});const done=finishTaskProgress(adapter.view,'completed',{status:'completed'},null);expect(done.processed).toBe(3);expect(done.total).toBe(3);
   });
 });

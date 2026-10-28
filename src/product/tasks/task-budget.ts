@@ -12,10 +12,11 @@ export async function handleTaskBudget(engine:BrainEngine,jobId:number,token:str
  return engine.transaction(async tx=>{
   const [own]=await tx.executeRaw<{data:any;status:string;lock_token:string;lock_until:Date}>('SELECT data,status,lock_token,lock_until FROM minion_jobs WHERE id=$1 FOR UPDATE',[jobId]);
   if(!own||own.status!=='active'||own.lock_token!==token||!own.lock_until||new Date(own.lock_until).getTime()<=Date.now())throw new Error('任务已停止或预算租约失效');
-  const rootId=own.data.task?.type==='sync-file'?Number(own.data.sessionId):jobId;
+  const rootId=own.data.task?.type==='sync-file'?Number(own.data.sessionId):own.data.task?.type==='import'&&own.data.task.input?.ocrOnly?.maintenanceOwnerId?Number(own.data.task.input.ocrOnly.maintenanceOwnerId):jobId;
   const [root]=rootId===jobId?[own]:await tx.executeRaw<typeof own>('SELECT data,status,lock_token,lock_until FROM minion_jobs WHERE id=$1 FOR UPDATE',[rootId]);
   if(root?.data.task?.type==='import')return {disabled:true,state:{capCny:0,usdToCny:DEFAULT_USD_TO_CNY,spentCny:0,reservedCny:0,calls:0}};
-  if(!root||root.data.task?.type!=='dream'||!['active','waiting','waiting-children'].includes(root.status))throw new Error('原整理任务已停止，未发起付费请求');
+  if(!root||root.data.task?.type!=='dream'||!['active','waiting','waiting-children','delayed'].includes(root.status))throw new Error('原整理任务已停止，未发起付费请求');
+  if(rootId!==jobId&&own.data.task?.type==='import'&&!root.data.task.input?.allSources&&(root.data.task.input?.sourceId??await tx.getConfig('sources.default')??'default')!==(own.data.task.input?.sourceId??'default'))throw Error('整理费用 Source 不匹配，未发起付费请求');
   const previous=root.data.taskBudget as TaskBudgetState|undefined;
   const capCny=request.operation==='init'&&rootId===jobId||!previous?Number(await tx.getConfig('dream.task_budget_cny')??DEFAULT_DREAM_BUDGET_CNY):previous.capCny;
   const usdToCny=previous?.usdToCny??Number(await tx.getConfig('pricing.usd_to_cny')??DEFAULT_USD_TO_CNY);

@@ -64,6 +64,8 @@ export interface StructuredDocument {
 }
 
 export interface DocumentParseOptions {
+  deferOcr?:boolean;
+  ocrItems?: string[];
   runtime?:import('./resource-policy.ts').DocumentRuntime;
   structured?: boolean;
   ocrPage?: (page: number, image: Buffer, mime: string) => Promise<OcrImageResult>;

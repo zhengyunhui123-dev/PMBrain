@@ -1,5 +1,6 @@
 import type { BrainEngine } from '../../core/engine.ts';
 import type { ProductTask, TaskWorkerMessage, MaintenanceCheckpoint } from './types.ts';
+import {DocumentOcrDeferred,validateDeferredDocument,cleanupDeferredDocument} from '../../core/pmbrain-adapters/deferred-document-ocr';
 import { loadConfig } from '../../core/config.ts';
 import { reloadLiveGateway } from '../../core/ai/reload-live-gateway.ts';
 import { DEFAULT_CLI_OPTIONS, setCliOptions } from '../../core/cli-options.ts';
@@ -49,13 +50,14 @@ let ownerJobId: number | null = null;
 let ownerToken:string|undefined;
 const send = (message: TaskWorkerMessage) => parentPort!.postMessage(message);
 let importFile: string | undefined;
+let backgroundDocumentOcr=false;
 let constrained=false;
 const originalFetch = globalThis.fetch;
 globalThis.fetch = ((...args: Parameters<typeof fetch>) => {
   const target = args[0] instanceof Request ? args[0].url : String(args[0]);
   if (importFile && /\/embeddings(?:\?|$)|:embedContent|:batchEmbedContents|\/api\/embed(?:\?|$)/.test(target)) send({ type: 'progress', event: { phase: 'import.vector', file: importFile } });
   const requestSignal=args[1]?.signal??(args[0] instanceof Request?args[0].signal:undefined);
-  return originalFetch(args[0],{...args[1],signal:AbortSignal.any([abort.signal,...(requestSignal?[requestSignal]:[])])});
+  return originalFetch(args[0],{...args[1],...(backgroundDocumentOcr?{keepalive:false}:{}),signal:AbortSignal.any([abort.signal,...(requestSignal?[requestSignal]:[])])});
 }) as typeof fetch;
 
 function rpcValue(value: unknown): unknown {
@@ -153,6 +155,7 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
     signal: abort.signal,
     workingTree: input.preset === 'quick' || (await engine.getConfig('sync.include_working_tree')) === 'true',
     importFile: async (path, relativePath, options) => {
+      options={...options,deferDocumentOcr:true,deferredOcrVectors:input.phase==='sync',deferredOcrMaintenanceOwnerId:input.phase==='sync'?undefined:ownerJobId??undefined};
       abort.signal.throwIfAborted();
       if(capacityReached)return {slug:'',status:'skipped',chunks:0,deferred:true};
       const sourceId = options.sourceId ?? 'default';
@@ -240,6 +243,13 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
     : resolveDreamPresetPhases(input.preset ?? 'full');
   send({ type: 'progress', phases: [...progressPrefix,...phases] });
   const phaseOptions=async(sourceId:string)=>{
+    if(usesSyncFileQueue(input)&&input.phase!=='sync'){
+    await engine.executeRaw(`UPDATE minion_jobs SET status='waiting',result=NULL,error_text=NULL,finished_at=NULL,data=jsonb_set(data-'ocrOwnerCancelled','{authorizedAttempt}',to_jsonb(attempts_started+1)),updated_at=now()
+      WHERE name='pmbrain-document-ocr' AND data->'task'->'input'->'ocrOnly'->>'maintenanceOwnerId'=$1 AND status='cancelled' AND data->>'ocrOwnerCancelled'='true'`,[String(ownerJobId)]);
+    const waiting=await engine.executeRaw("SELECT 1 FROM pages p JOIN minion_jobs j ON j.id=(p.frontmatter->>'document_ocr_task_id')::int WHERE p.source_id=$1 AND p.deleted_at IS NULL AND p.frontmatter->>'document_ocr_deferred'='true' AND (j.status IN ('waiting','active','delayed') OR j.data->'task'->'input'->'ocrOnly'->>'maintenanceOwnerId'=$2) LIMIT 1",[sourceId,String(ownerJobId)]);
+    await rpc('task.waitingOcr',[waiting.length>0]);
+    if(waiting.length)throw new DocumentOcrDeferred('资料已保存，等待后台识图后继续原整理任务');
+    }
     const options=await resumeOptions(sourceId);
     const selected=ALL_PHASES.filter(phase=>phases.includes(phase)||(!!options.captureEntitySlugs?.length&&phase==='capture_entities'));
     const prepareEntityCapture=capturesImported&&ingestEnabled&&!input.dryRun?async()=>{
@@ -360,6 +370,8 @@ async function runSearchOptimize(engine: BrainEngine): Promise<void> {
       return;
     }
     const next = items[0]!;
+    const [ocrPending]=await engine.executeRaw("SELECT 1 FROM pages WHERE slug=$1 AND source_id=$2 AND deleted_at IS NULL AND frontmatter->>'document_ocr_deferred'='true'",[next.slug,next.sourceId]);
+    if(ocrPending){send({type:'deferred',phase:'search_optimize'});return;}
     const revision = next.revision;
     const total = Number.isFinite(state.total) ? Number(state.total) : done + items.length;
     send({ type: 'progress', background: schedule, event: { phase: 'embed', done, total, unit: '份资料', stage: schedule?.reason, file: next.slug } });
@@ -445,12 +457,12 @@ async function executeTask(task: ProductTask, kind: BrainEngine['kind']) {
     send({type:'progress',event:{phase:'import.process',file:importFile}});
     await rpc('task.inputFile', [{ path: input.originalPath ?? input.path, size: snapshot.size, mtimeMs: snapshot.mtimeMs }]);
     try {
-      const imported = await importSyncFile(engine, input.path, input.relativePath, input.options,new DocumentRuntime({signal:abort.signal,sample:()=>rpc('task.documentResources',[]) as Promise<DocumentResourceSample>}));
+      const imported = await importSyncFile(engine, input.path, input.relativePath, {...input.options,ocrOriginalPath:input.originalPath??null},new DocumentRuntime({signal:abort.signal,sample:()=>rpc('task.documentResources',[]) as Promise<DocumentResourceSample>}));
       abort.signal.throwIfAborted();
       const page = imported.slug ? await engine.getPage(imported.slug, { sourceId: input.options.sourceId }) : null;
       const manifest=page?await readDocumentChunkManifest(engine,page.id):undefined;
       result = { slug: imported.slug, status: imported.error && imported.error !== 'unchanged' ? 'failed' : imported.status, chunks: imported.chunks,
-        error: imported.error, documentSummary: imported.documentSummary, largeDocument: imported.largeDocument,
+        error: imported.error, documentSummary: imported.documentSummary, largeDocument: imported.largeDocument,ocrPending:imported.ocrPending,ocrTaskId:imported.ocrTaskId,
         pageHash: page?.content_hash, chunkHash:manifest?.chunk_hash, file: input.relativePath };
     } catch (error) {
       abort.signal.throwIfAborted();
@@ -460,6 +472,31 @@ async function executeTask(task: ProductTask, kind: BrainEngine['kind']) {
     }
     send({ type: 'result', result });
     return;
+  } else if(task.type==='import'&&task.input.ocrOnly){
+    const input=task.input,expected=input.ocrOnly!,sourceId=input.sourceId??'default';
+    const runtime=new class extends DocumentRuntime{
+      private checked=0;
+      override async checkpoint(force=false){
+        if(force||Date.now()-this.checked>1000){
+          this.checked=Date.now();const schedule=await rpc('task.documentOcrSchedule',[]) as VectorizationSchedule;
+          if(schedule.mode==='waiting')throw new DocumentOcrDeferred(schedule.reason);
+          await validateDeferredDocument(engine,input.path,sourceId,expected,this);
+        }
+        await super.checkpoint(force);
+      }
+    }({signal:abort.signal,sample:()=>rpc('task.documentResources',[]) as Promise<DocumentResourceSample>});
+    const work=async()=>{
+    send({type:'progress',phases:['ocr'],event:{phase:'ocr',event:'start',stage:'后台补齐图片文字',file:expected.relativePath}});
+    await runtime.checkpoint(true);
+    const imported=expected.image?await (await import('../../core/import-file')).importImageFile(engine,input.path,expected.relativePath,{sourceId,noEmbed:true,forceOcr:true,runtime,storagePath:expected.ownedSnapshot?input.path:undefined,validate:target=>validateDeferredDocument(target,input.path,sourceId,expected,runtime)}):await (await import('../../core/office-import')).importOfficeFile(engine,input.path,expected.relativePath,{sourceId,noEmbed:true,documentOcr:true,runtime});
+    if(imported.status==='partial'||imported.status==='error'||imported.error||Number(imported.documentSummary?.ocrFailed)>0||Number(imported.documentSummary?.ocrSkipped)>0)throw new Error(imported.error??imported.documentSummary?.ocrWarnings.join('；')??'图片识别尚未完成，已保存的内容保留');
+    const output:Record<string,unknown>={status:'completed',imported:imported.status==='imported'?1:0,skipped:imported.status==='skipped'?1:0,errors:0,ocrPending:0};
+    if(!input.noEmbed){output.embedSlugs=[imported.slug];output.embedSourceId=sourceId;assignSearchOptimizeAcceptance(output,await rpc('task.searchOptimize',[sourceId,[imported.slug]]) as SearchOptimizeAcceptance);}
+    await cleanupDeferredDocument(input.path,expected);
+    send({type:'progress',event:{phase:'ocr',event:'finish',stage:'图片识别完成'}});
+    return output;
+    };
+    result=expected.maintenanceOwnerId?await runWithDreamBudget({},work,request=>rpc('task.budget',[request]) as Promise<TaskBudgetReply>):await work();
   } else if (task.type === 'memory') {
     send({type:'progress',phases:['memory']});send({type:'progress',event:{phase:'memory',event:'start'}});
     const { runWorkbenchMemoryTask } = await import('../workbench/memory');
@@ -501,6 +538,7 @@ async function executeTask(task: ProductTask, kind: BrainEngine['kind']) {
       includeOffice: input.includeOffice !== false,
       includeImages: input.includeImages !== false,
       documentOcr: input.documentOcr !== false,
+      deferDocumentOcr:true,deferredOcrVectors:vectorsRequested,transientDocumentSource:!!input.stagingDir,
       structuredDocuments: input.structuredDocuments,
     }, {
       sourceId: input.sourceId,
@@ -562,7 +600,20 @@ async function executeTask(task: ProductTask, kind: BrainEngine['kind']) {
       abort.signal.throwIfAborted();
       results.push(await performSync(engine, {
         sourceId: source.id, repoPath: source.local_path!,
-        concurrency: 1, signal: abort.signal,
+        concurrency: 1, signal: abort.signal, noEmbed:true,
+        fileRuntime:{
+          signal:abort.signal,
+          importFile:async(path,relativePath,options)=>{
+            const local=relative(source.local_path!,path);
+            const imported=await importSyncFile(engine,path,relativePath,{...options,deferDocumentOcr:true,deferredOcrVectors:true,ocrOriginalPath:local.startsWith('..')||isAbsolute(local)?null:path},new DocumentRuntime({signal:abort.signal,sample:()=>rpc('task.documentResources',[]) as Promise<DocumentResourceSample>}));
+            if(!imported.ocrPending&&imported.slug&&(['imported','partial'].includes(imported.status)||imported.status==='skipped'&&!imported.error)){
+              const [pending]=await engine.executeRaw('SELECT 1 FROM pages p JOIN content_chunks c ON c.page_id=p.id WHERE p.source_id=$1 AND p.slug=$2 AND p.deleted_at IS NULL AND c.embedding IS NULL LIMIT 1',[source.id,imported.slug]);
+              if(pending)await rpc('task.searchOptimize',[source.id,[imported.slug]]);
+            }
+            return imported;
+          },
+          finish:async()=>{},
+        },
         strategy: parseSourceConfig(source.config).strategy as SyncStrategy | undefined,
         includeOffice: parseSourceConfig(source.config).includeOffice === true,
         includeImages: gateway.isOcrEnabled(), documentOcr: gateway.isOcrEnabled(),
@@ -588,6 +639,11 @@ async function executeTask(task: ProductTask, kind: BrainEngine['kind']) {
     result = { ...embedded, catchUp: embed.catchUp === true, forceReembed: embed.forceReembed === true, ...(embedded.error ? { failures: [{ error: embedded.error }] } : {}) };
   }
   abort.signal.throwIfAborted();
+  if(task.type==='dream'||task.type==='sync'){
+    const scope=task.type==='dream'&&!task.input.allSources?task.input.sourceId??'default':null;
+    const pending=await engine.executeRaw<{id:number;remaining:number}>(`SELECT (frontmatter->>'document_ocr_task_id')::int id,COALESCE((frontmatter->>'document_ocr_failed')::int,0)+COALESCE((frontmatter->>'document_ocr_skipped')::int,0) remaining FROM pages WHERE deleted_at IS NULL AND ($1::text IS NULL OR source_id=$1) AND frontmatter->>'document_ocr_deferred'='true' AND frontmatter ? 'document_ocr_task_id'`,[scope]);
+    if(pending.length){result.ocrPending=pending.reduce((sum,row)=>sum+row.remaining,0);result.ocrTaskIds=[...new Set(pending.map(row=>row.id))];}
+  }
   const failure = task.type === 'dream' || task.type==='import' ? maintenanceFailure(result) : null;
   if (result.reason === 'cycle_already_running') send({ type: 'result', result });
   else if (failure || result.status === 'failed' || Number(result.errors ?? 0) > 0) {
@@ -623,7 +679,9 @@ parentPort!.on('message', message => {
     constrained=message.constrained===true;
     abort = new AbortController();
     importFile = undefined;
+    backgroundDocumentOcr=message.task.type==='import'&&!!message.task.input.ocrOnly;
     void execute(message.task, message.kind).catch(error => {
+      if(error instanceof DocumentOcrDeferred){send({type:'deferred',phase:message.task.type==='dream'?'maintenance_ocr':'document_ocr'});return;}
       if(error instanceof MaintenanceVectorizationDeferred){send({type:'deferred',phase:'maintenance_embed'});return;}
       if(error instanceof EntityCaptureWindowDeferred){send({type:'deferred',phase:'capture_entities'});return;}
       if (error instanceof SyncFilesDeferred) { send({ type: 'deferred' }); return; }

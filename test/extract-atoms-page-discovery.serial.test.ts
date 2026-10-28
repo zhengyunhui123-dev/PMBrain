@@ -41,6 +41,14 @@ beforeEach(async () => {
   await resetPgliteState(engine);
 });
 
+test('待后台识图的资料不进入长期知识提炼，补齐后恢复候选',async()=>{
+  const body='这是一份足够长的隔离资料，必须等图片文字补齐后再提炼长期知识。'.repeat(100);
+  await engine.putPage('notes/ocr-pending',{type:'note',title:'识图待完成',compiled_truth:body,frontmatter:{document_ocr_deferred:true}});
+  expect((await discoverExtractablePages(engine,'default')).some(page=>page.slug==='notes/ocr-pending')).toBe(false);
+  await engine.executeRaw("UPDATE pages SET frontmatter=jsonb_set(frontmatter,'{document_ocr_deferred}','false'::jsonb) WHERE slug='notes/ocr-pending' AND source_id='default'");
+  expect((await discoverExtractablePages(engine,'default')).some(page=>page.slug==='notes/ocr-pending')).toBe(true);
+});
+
 function stubChat(text: string): (o: ChatOpts) => Promise<ChatResult> {
   return async (_o: ChatOpts) => ({
     text,
@@ -236,6 +244,7 @@ describe('v0.41.2.1: discoverExtractablePages SQL contract', () => {
 
 describe('v0.41.2.1: runPhaseExtractAtoms — dual-source merge + idempotency', () => {
   test('dual-source merge: transcripts win on contentHash collision', async () => {
+    await seedPage({slug:'meeting/unique',type:'meeting',content_hash:'uniquehash5678'});
     const chat = stubChat(`[{"title":"x","atom_type":"insight","body":"b"}]`);
     const result = await runPhaseExtractAtoms(engine, {
       _transcripts: [
@@ -256,12 +265,13 @@ describe('v0.41.2.1: runPhaseExtractAtoms — dual-source merge + idempotency', 
   });
 
   test('atom frontmatter: page-origin uses source_slug, transcript-origin uses source_path', async () => {
+    await seedPage({slug:'meeting/p',type:'meeting',content_hash:'pchash1234567890ab'});
     // Use stubChatUnique so the two work-items write to distinct slugs;
     // a constant title would upsert into one slug and mask one origin.
     const chat = stubChatUnique();
     await runPhaseExtractAtoms(engine, {
       _transcripts: [{ filePath: '/T.txt', content: 'tc', contentHash: 'tchash1234567890ab' }],
-      _pages: [{ slug: 'meeting/P', content: 'pc', contentHash: 'pchash1234567890ab' }],
+      _pages: [{ slug: 'meeting/p', content: 'pc', contentHash: 'pchash1234567890ab' }],
       _chat: chat,
     });
     const rows = await engine.executeRaw<{ slug: string; frontmatter: Record<string, unknown> }>(
@@ -274,7 +284,7 @@ describe('v0.41.2.1: runPhaseExtractAtoms — dual-source merge + idempotency', 
     expect(transcriptAtom!.frontmatter.source_path).toBe('/T.txt');
     expect(transcriptAtom!.frontmatter.source_hash).toBe('tchash1234567890');
     expect(pageAtom).toBeDefined();
-    expect(pageAtom!.frontmatter.source_slug).toBe('meeting/P');
+    expect(pageAtom!.frontmatter.source_slug).toBe('meeting/p');
     expect(pageAtom!.frontmatter.source_hash).toBe('pchash1234567890');
   });
 
@@ -345,6 +355,8 @@ describe('v0.41.2.1: runPhaseExtractAtoms — dual-source merge + idempotency', 
   });
 
   test('PhaseResult.details has additive page fields populated', async () => {
+    await seedPage({slug:'meeting/a',type:'meeting',content_hash:'a1234567890abcde'});
+    await seedPage({slug:'meeting/b',type:'meeting',content_hash:'b1234567890abcde'});
     const chat = stubChat(`[{"title":"x","atom_type":"insight","body":"b"}]`);
     const result = await runPhaseExtractAtoms(engine, {
       _transcripts: [],

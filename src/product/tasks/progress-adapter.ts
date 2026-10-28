@@ -5,6 +5,7 @@ import { importOutcome } from '../../../shared/import-outcome.ts';
 
 const labels: Record<string, string> = {
   memory: '提炼对话记忆',
+  ocr:'补齐图片文字',
   collect: '读取资料清单', process: '读取与解析资料', vector: '生成向量', write: '写入知识库',
   check: '检查知识', sync: '同步资料', relations: '建立知识关联', embed: '更新搜索索引', finish: '完成检查',
   synthesize: '理解新增知识', extract_atoms: '提炼长期知识', patterns: '发现知识模式',
@@ -117,7 +118,7 @@ export class TaskProgressAdapter {
       }
       return;
     }
-    const phase = raw.split('.')[0]!;
+    const phase = this.kind==='document_ocr'&&raw==='process.ocr'?'ocr':raw.split('.')[0]!;
     const step = this.view.steps.find(item => item.phases.includes(phase));
     if (!step) return;
     if (event.file && phase === 'process' && event.file !== this.currentFile) this.view.phaseProgress = undefined;
@@ -302,7 +303,8 @@ export function finishTaskProgress(view: TaskProductProgress, status: string, re
     }
     const importedCount = Number(data.imported ?? 0);
     const lead = importedCount > 0 ? `导入成功，已保存 ${importedCount} 份资料` : '导入成功';
-    const tail = data.searchOptimizeError ? '知识向量化未能开始'
+    const tail = Number(data.ocrPending)>0 ? Number(data.ocrFailed)>0?`资料已保存，${data.ocrPending} 项识图未完成，请在任务中心查看或继续`:`资料已保存，${data.ocrPending} 项图片识别将在后台补齐`
+      : data.searchOptimizeError ? '知识向量化未能开始'
       : data.searchOptimizePaused ? '知识向量化已暂停，新资料已记入待向量化'
       : typeof data.searchOptimizeNotice === 'string' && data.searchOptimizeNotice ? data.searchOptimizeNotice
       : data.vectorsPending === true ? '知识向量化将在空闲时自动进行，可在任务中心暂停或继续。'
@@ -312,7 +314,7 @@ export function finishTaskProgress(view: TaskProductProgress, status: string, re
       : data.knowledgeStatus === 'model_unavailable' ? '原文已入库，实体模型未配置'
       : '';
     next.stage = remaining>0 || data.status === 'partial' || next.steps.some(step => step.status === 'failed') ? '部分完成，请查看未完成步骤'
-      : next.name === '导入资料' ? (tail ? `${lead}。${tail}` : knowledgeBase || '导入完成') : `${next.name}完成`;
+      : Number(data.ocrPending)>0?tail:next.name === '导入资料' ? (tail ? `${lead}。${tail}` : knowledgeBase || '导入完成') : `${next.name}完成`;
     for (const step of next.steps) {
       if (step.status === 'running') step.status = 'completed';
       else if (step.status === 'pending' && !Array.isArray(data.phases)&&!step.phases.includes('capture_entities')) step.status = 'skipped';

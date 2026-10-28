@@ -15,31 +15,35 @@ import {readDocumentChunkManifest} from './document/chunk-manifest.ts';
 import {DocumentRuntime,officeFileSizeLimit} from './document/resource-policy.ts';
 import {documentFileHash,snapshotDocument} from './document/file-snapshot.ts';
 import {MAX_STREAMED_OFFICE_BYTES} from '../../shared/document-limits.ts';
+import {importLegacyOffice,type LegacyOfficeCandidate} from './document/legacy-office.ts';
+import {queueDocumentOcr} from './pmbrain-adapters/deferred-document-ocr.ts';
 
 async function unchangedOfficeFile(
   engine: BrainEngine, relativePath: string, rawHash: string,
-  opts: { sourceId?: string; noEmbed?: boolean; structured?: boolean; checkOnly?: boolean },
+  opts: { sourceId?: string; noEmbed?: boolean; structured?: boolean; checkOnly?: boolean;deferDocumentOcr?:boolean },
   ocrRequested: boolean,
-): Promise<ImportResult | null> {
+): Promise<ImportResult | {legacy:LegacyOfficeCandidate} | null> {
   const sourceId = opts.sourceId ?? 'default';
   let slug = slugifyPath(relativePath);
   const metadata = (path: string) => engine.executeRaw<{
-    id:number; frontmatter: Record<string, any>; chunker_version: number;
-  }>(`SELECT p.id,p.frontmatter,p.chunker_version
+    id:number; frontmatter: Record<string, any>; chunker_version: number;body_hash:string;
+  }>(`SELECT p.id,p.frontmatter,p.chunker_version,CASE WHEN p.frontmatter->>'document_chunk_hash' IS NULL OR p.frontmatter ? 'document_legacy_reuse' OR COALESCE(p.frontmatter->>'document_ocr_failed','0')<>'0' OR COALESCE(p.frontmatter->>'document_ocr_skipped','0')<>'0' THEN md5(p.compiled_truth) END AS body_hash
        FROM pages p WHERE p.source_id=$1 AND p.slug=$2 AND p.deleted_at IS NULL`, [sourceId, path]);
   let [page] = await metadata(slug);
   if (!page && engine.findDuplicatePage) {
     const duplicate = await engine.findDuplicatePage(sourceId, { hash: rawHash, frontmatterId: `office:${rawHash}` });
     if (duplicate) { slug = duplicate.slug; [page] = await metadata(slug); }
   }
-  if (!page || page.frontmatter?.raw_sha256 !== rawHash || page.chunker_version < 0
-    || page.frontmatter.document_chunk_count===undefined || !page.frontmatter.document_chunk_hash) return null;
+  if (!page || page.frontmatter?.raw_sha256 !== rawHash || page.chunker_version < 0) return null;
+  if(!opts.checkOnly&&(page.frontmatter.document_chunk_count===undefined||!page.frontmatter.document_chunk_hash||page.frontmatter.document_legacy_reuse||(ocrRequested&&Number(page.frontmatter.document_ocr_failed??0)+Number(page.frontmatter.document_ocr_skipped??0)>0)))return {legacy:{...page,slug}};
+  if(page.frontmatter.document_chunk_count===undefined||!page.frontmatter.document_chunk_hash)return null;
   const integrity=await readDocumentChunkManifest(engine,page.id);
   if(!integrity || page.frontmatter.document_chunk_count!==integrity.chunks || page.frontmatter.document_chunk_hash!==integrity.chunk_hash)return null;
   const fm = page.frontmatter;
-  if (fm.document_structured !== (opts.structured !== false) && !fm.document_parser_fallback) return null;
+  if(fm.document_legacy_reuse&&(fm.document_legacy_reuse.bodyHash!==page.body_hash||fm.document_legacy_reuse.verified!==true))return null;
+  if (fm.document_structured !== (opts.structured !== false) && !fm.document_parser_fallback&&!fm.document_legacy_reuse) return null;
   const receipt = fm.ocr_receipt;
-  if (ocrRequested && (Number(fm.document_images) > 0 || Number(fm.document_pages_needing_ocr) > 0)) {
+  if (ocrRequested && !opts.deferDocumentOcr && (Number(fm.document_images) > 0 || Number(fm.document_pages_needing_ocr) > 0)) {
     if (!receipt || receipt.version !== OCR_RECEIPT_VERSION || receipt.promptVersion !== OCR_PROMPT_VERSION
       || receipt.sourceHash !== rawHash || receipt.status!=='complete' || receipt.failed>0 || Number(fm.document_ocr_skipped)>0
       || (receipt.candidates>0&&receipt.attempted===0)) return null;
@@ -133,6 +137,10 @@ export async function importOfficeFile(
     sourceId?: string;
     structured?: boolean;
     documentOcr?: boolean;
+    deferDocumentOcr?:boolean;
+    ocrOriginalPath?:string|null;
+    deferredOcrVectors?:boolean;
+    deferredOcrMaintenanceOwnerId?:number;
     runtime?:DocumentRuntime;
     activePack?: { page_types: ReadonlyArray<{ name: string; path_prefixes: ReadonlyArray<string> }> };
   } = {},
@@ -155,13 +163,28 @@ export async function importOfficeFile(
   const gateway = await import('./ai/gateway.ts');
   const ocrRequested=opts.documentOcr??gateway.isOcrEnabled();
   const ocrEnabled = !opts.checkOnly && ocrRequested;
+  const deferOcr=opts.deferDocumentOcr===true&&ocrRequested;
   const rawHash = await documentFileHash(filePath,runtime);
   const validate=async()=>{
     if(lstatSync(filePath).isSymbolicLink()||await documentFileHash(filePath,runtime)!==rawHash)throw new Error(`资料在导入期间已修改，请重新导入：${relativePath}`);
   };
+  const finish=async(result:ImportResult)=>!opts.checkOnly&&deferOcr?queueDocumentOcr(engine,filePath,relativePath,rawHash,result,{...opts,runtime}):result;
   if (!opts.forceRechunk) {
     const unchanged = await unchangedOfficeFile(engine, relativePath, rawHash, opts, ocrRequested);
-    if (unchanged) {await validate();return unchanged;}
+    if(unchanged&&'legacy' in unchanged){
+      const reused=await importLegacyOffice(engine,unchanged.legacy,filePath,rawHash,{...opts,documentOcr:ocrRequested&&!deferOcr,runtime,validate});
+      if(reused){
+        if(!deferOcr&&!opts.noEmbed&&reused.embeddingPending){
+          const {runEmbedCore}=await import('../commands/embed.ts');
+          const embedded=await runEmbedCore(engine,{slugs:[reused.slug],sourceId:opts.sourceId??'default',batchSize:runtime.plan.batchSize,writeBatchSize:4,signal:runtime.signal,quiet:true});
+          runtime.signal?.throwIfAborted();
+          if(embedded.failedPages||embedded.incomplete)return {...reused,status:'partial',error:[reused.error,embedded.error??'向量化尚未完成，已有正文保留'].filter(Boolean).join('；'),embeddingPending:true};
+          reused.embeddingPending=false;if(embedded.embedded&&reused.status==='skipped')reused.status='imported';
+        }
+        return finish(reused);
+      }
+    }
+    else if (unchanged) {await validate();return finish(unchanged);}
   }
   const directory=mkdtempSync(join(tmpdir(),'pmbrain-office-snapshot-'));
   const snapshotPath=join(directory,basename(filePath));
@@ -171,6 +194,7 @@ export async function importOfficeFile(
   const document = await parseOfficeDocument(snapshotPath, {
     structured: opts.structured !== false,
     runtime,
+    deferOcr,
     ocrPage: opts.checkOnly?undefined:createDocumentOcr(engine,opts.sourceId??'default',async(image,mime)=>{await validate();return extractImageOcrResult(engine,image,mime,{enabled:true});},ocrEnabled),
   });
   document.title = basename(relativePath, extname(relativePath));
@@ -198,7 +222,7 @@ export async function importOfficeFile(
       processedAt: document.metadata.ocrProcessedAt??new Date().toISOString(),
     };
   }
-  return await importStructuredDocument(engine, document, filePath, relativePath, {...opts,runtime,documentOcr:ocrRequested,snapshot:{hash:rawHash,size:snapshot.size,validate}});
+  return await finish(await importStructuredDocument(engine, document, filePath, relativePath, {...opts,runtime,documentOcr:ocrRequested,snapshot:{hash:rawHash,size:snapshot.size,validate}}));
   }finally{
     if(!resolve(directory).startsWith(resolve(tmpdir())+sep)||!basename(directory).startsWith('pmbrain-office-snapshot-'))throw new Error('文档临时目录校验失败');
     rmSync(directory,{recursive:true,force:true,maxRetries:3,retryDelay:50});

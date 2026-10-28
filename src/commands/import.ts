@@ -50,6 +50,8 @@ function defaultWorkers(): number {
 
 /** Bug 9 — surface per-file failures so callers (performFullSync) can gate state advances. */
 export interface RunImportResult {
+  ocrPending?:number;
+  ocrTaskIds?:number[];
   imported: number;
   skipped: number;
   errors: number;
@@ -87,6 +89,9 @@ export interface ImportOptions {
 }
 
 export interface StructuredImportInput {
+  deferDocumentOcr?:boolean;
+  deferredOcrVectors?:boolean;
+  transientDocumentSource?:boolean;
   path?: string;
   noEmbed?: boolean;
   fresh?: boolean;
@@ -323,6 +328,8 @@ export async function runStructuredImport(
   }
 
   let imported = 0;
+  let ocrPending=0;
+  const ocrTaskIds=new Set<number>();
   let skipped = 0;
   let errors = 0;
   let unchanged = 0;
@@ -392,7 +399,7 @@ export async function runStructuredImport(
         : sourceType === 'file' && strategy !== 'code' && isSessionExportPath(relativePath)
         ? await importSessionExport(eng, filePath, relativePath, { noEmbed, sourceId })
         : isImageFilePath(relativePath) && imageImportEnabled
-        ? await importImageFile(eng, filePath, relativePath, { noEmbed, sourceId, forceOcr: documentOcr })
+        ? await importImageFile(eng, filePath, relativePath, { noEmbed, sourceId, forceOcr: documentOcr,deferDocumentOcr:input.deferDocumentOcr,deferredOcrVectors:input.deferredOcrVectors,ocrOriginalPath:input.transientDocumentSource?null:undefined })
         : includeOffice && isOfficeFilePath(relativePath)
           ? await importOfficeFile(eng, filePath, relativePath, {
               runtime:opts.documentRuntime,
@@ -400,21 +407,24 @@ export async function runStructuredImport(
               sourceId,
               structured: structuredDocuments,
               documentOcr,
+              deferDocumentOcr:input.deferDocumentOcr,deferredOcrVectors:input.deferredOcrVectors,ocrOriginalPath:input.transientDocumentSource?null:undefined,
               activePack: importActivePack,
             })
         : await importFile(eng, filePath, relativePath, { noEmbed, sourceId, activePack: importActivePack });
       const _fileMs = Date.now() - _fileT0;
       if ('deferred' in result && result.deferred) { processed++; tickProgress(); return; }
       opts.runtime?.signal.throwIfAborted();
+      ocrPending+=result.ocrPending??0;
+      if(result.ocrTaskId)ocrTaskIds.add(result.ocrTaskId);
       if (_fileMs > 5000) {
         console.error(`[pmbrain phase] import.process_file slow ${_fileMs}ms ${relativePath}`);
       }
       if (result.status === 'imported') {
         imported++;
         chunksCreated += result.chunks;
-        importedSlugs.push(result.slug);
+        if(!result.ocrPending)importedSlugs.push(result.slug);
         savedSlug = result.slug;
-        vectorize = true;
+        vectorize = !result.ocrPending;
         const embedSkip = result.parsedPage?.frontmatter?.embed_skip;
         const embedSkipBytes = embedSkip && typeof embedSkip === 'object' && typeof (embedSkip as { bytes?: unknown }).bytes === 'number'
           ? (embedSkip as { bytes: number }).bytes
@@ -436,9 +446,9 @@ export async function runStructuredImport(
         errors++;
         partialFiles++;
         chunksCreated += result.chunks;
-        importedSlugs.push(result.slug);
+        if(!result.ocrPending)importedSlugs.push(result.slug);
         savedSlug = result.slug;
-        vectorize = true;
+        vectorize = !result.ocrPending;
         const reason = result.error ?? 'Large document embedding is partially complete';
         reportFile({
           status: 'partial',
@@ -464,7 +474,7 @@ export async function runStructuredImport(
         } else {
           unchanged++;
           reportFile({ status: 'unchanged', path: relativePath, reason: '内容未变化或知识库已有相同资料', document: result.documentSummary });
-          if (result.embeddingPending) { savedSlug = result.slug; vectorize = true; }
+          if (result.embeddingPending&&!result.ocrPending) { savedSlug = result.slug; vectorize = true; }
           // 'unchanged' or no-error skip: content_hash matched a prior
           // successful import, so this file IS done for checkpoint purposes.
           completed.add(relativePath);
@@ -693,7 +703,7 @@ export async function runStructuredImport(
     await engine.setConfig('sync.repo_path', importRoot);
   }
 
-  return { imported, skipped, errors, unchanged, partialFiles, processed, total: files.length, chunksCreated, failures, importedSlugs };
+  return { imported, skipped, errors, unchanged, partialFiles, processed, total: files.length, chunksCreated, failures, importedSlugs,...(ocrPending?{ocrPending,ocrTaskIds:[...ocrTaskIds]}:{}) };
 }
 
 /**

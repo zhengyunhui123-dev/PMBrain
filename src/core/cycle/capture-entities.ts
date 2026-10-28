@@ -249,6 +249,7 @@ export async function selectEntityCaptureCandidates(
         AND slug NOT LIKE 'projects/%'
         AND slug NOT LIKE 'wiki/agents/%'
         AND COALESCE(frontmatter->>'dream_generated', '') <> 'true'
+        AND COALESCE(frontmatter->>'document_ocr_deferred','false') <> 'true'
         AND char_length(trim(COALESCE(compiled_truth, ''))) >= $2
       ORDER BY ${options.limit ? 'pages.id' : 'pages.updated_at DESC, source_id, slug'} LIMIT $5`,
     [sourceId ?? null, MIN_BODY_CHARS,options.slugs??null,options.afterPageId??null,options.limit??null],

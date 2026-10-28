@@ -76,6 +76,7 @@ export async function importStructuredDocument(
     checkOnly?: boolean;
     forceRechunk?: boolean;
     documentOcr?: boolean;
+    deferDocumentOcr?:boolean;
     runtime?:DocumentRuntime;
     snapshot?: {hash:string;size:number;validate:()=>void|Promise<void>};
     sourceId?: string;
@@ -85,7 +86,7 @@ export async function importStructuredDocument(
   const document = normalizeStructuredDocument(inputDocument);
   const text = renderStructuredDocument(document);
   const summary = summarizeStructuredDocument(document);
-  if (!text.trim()) {
+  if (!text.trim()&&!(opts.deferDocumentOcr&&summary.ocrFailed+summary.ocrSkipped>0)) {
     const reason = summary.ocrWarnings.length ? summary.ocrWarnings.join('；')
       : summary.pagesNeedingOcr > 0 ? '文档需要图片识别，请在模型设置中配置支持图片输入的 OCR 模型。' : '文档中没有可读取的文字。';
     console.error(`[pmbrain document-import] ${JSON.stringify({ path: relativePath, ...summary })}`);
@@ -136,6 +137,7 @@ export async function importStructuredDocument(
     `document_ocr_succeeded: ${summary.ocrSucceeded}`,
     `document_ocr_failed: ${summary.ocrFailed}`,
     `document_ocr_skipped: ${summary.ocrSkipped}`,
+    ...(opts.deferDocumentOcr&&summary.ocrFailed+summary.ocrSkipped>0?['document_ocr_deferred: true']:[]),
     ...(document.metadata.ocrReceipt ? [`ocr_receipt: ${JSON.stringify(document.metadata.ocrReceipt)}`] : []),
     ...(summary.ocrProvider ? [`document_ocr_provider: ${yamlScalar(summary.ocrProvider)}`] : []),
     ...(summary.fallback ? [`document_parser_fallback: ${yamlScalar(summary.fallback)}`] : []),
@@ -167,6 +169,6 @@ export async function importStructuredDocument(
   const result = summary.structured && parentSections.length > 0
     ? await importTrustedStructuredContent(engine, slugifyPath(relativePath), content, importOptions)
     : await importFromContent(engine, slugifyPath(relativePath), content, importOptions);
-  const incomplete=opts.documentOcr!==false&&summary.ocrFailed+summary.ocrSkipped>0;
+  const incomplete=!opts.deferDocumentOcr&&opts.documentOcr!==false&&summary.ocrFailed+summary.ocrSkipped>0;
   return { ...result, ...(incomplete&&['imported','skipped'].includes(result.status)?{status:'partial' as const,error:`原文已保存，图片识别未完成：${summary.ocrWarnings.join('；')||`${summary.ocrFailed+summary.ocrSkipped} 项待重试`}`} :{}), documentSummary: summary };
 }

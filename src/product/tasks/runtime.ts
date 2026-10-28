@@ -44,6 +44,7 @@ import {handleTaskBudget,type TaskBudgetRequest,type TaskBudgetState} from './ta
 import { BackgroundVectorizationScheduler } from './background-vectorization';
 import { documentResourcePlan } from '../../core/document/resource-policy';
 import type { BackgroundResourceSample, VectorizationSchedule } from '../../../shared/background-vectorization';
+import {DOCUMENT_OCR_TASK,DOCUMENT_OCR_QUEUE} from '../../core/pmbrain-adapters/deferred-document-ocr';
 
 export const PRODUCT_TASK_QUEUE = 'pmbrain-product';
 const TASK_NAME = 'pmbrain-product-task';
@@ -67,7 +68,7 @@ function toRun(job: MinionJob, stopping = false): ConsoleRun {
   }
   if(job.data.taskBudget){const {reservations,pendingPricing,...budget}=job.data.taskBudget as TaskBudgetState;adapter.view.budget=budget;}
   if (task?.type === 'import') adapter.view.material = { ...adapter.view.material,
-    name: task.input.path.split(/[\\/]/).filter(Boolean).at(-1) ?? task.input.path,
+    name: (task.input.ocrOnly?.relativePath??task.input.path).split(/[\\/]/).filter(Boolean).at(-1) ?? task.input.path,
     sourceId: task.input.sourceId ?? 'default', directory: task.input.directory === true,
   };
   return {
@@ -147,6 +148,7 @@ export class ProductTaskRuntime {
     this.fileWorker = new MinionWorker(engine, { ...memoryOptions, queue: SYNC_FILE_QUEUE, concurrency: engine.kind==='pglite'?1:2, pollInterval: 100, healthCheckInterval: 0, lockDuration: 30_000, stalledInterval: 5000, ownsLockedTransaction: id => this.executions.get(id)?.ownsLockedTransaction() === true });
     this.fileWorker.on('job-finished', (job:MinionJob)=>{
       if(this.stopped||this.paused)return;
+      if(job.name===DOCUMENT_OCR_TASK){void this.flushEntityCapture();return;}
       void this.queue.getJob(job.id).then(async current=>{
         try{if(current){this.fileProjection.record(current);await this.fileQueue.cleanupCompleted(current);}}
         finally{this.scheduleSessionRefresh(Number(job.data.sessionId));}
@@ -176,6 +178,7 @@ export class ProductTaskRuntime {
         this.scheduleSessionRefresh(sessionId);
       }
     });
+    this.fileWorker.register(DOCUMENT_OCR_TASK,context=>withDatabasePriority(3,()=>this.execute(context)));
     this.worker = new MinionWorker(engine, {
       ...memoryOptions, queue: PRODUCT_TASK_QUEUE, concurrency: engine.kind==='pglite'?1:2, pollInterval: 100,
       healthCheckInterval: 0, lockDuration: 30_000, stalledInterval: 5000,
@@ -201,6 +204,8 @@ export class ProductTaskRuntime {
       FROM minion_jobs AS parent WHERE child.queue=$1 AND child.parent_job_id IS NULL
       AND child.data->>'sessionId'=parent.id::text AND parent.queue=$2`,[SYNC_FILE_QUEUE,PRODUCT_TASK_QUEUE]);
     await this.loadStopIntents();
+    await this.engine.executeRaw(`UPDATE minion_jobs SET status='waiting',lock_token=NULL,lock_until=NULL,error_text=NULL,updated_at=now()
+      WHERE queue=$1 AND name=$2 AND NOT (id=ANY($3::int[])) AND ((status='active' AND ($4::boolean OR lock_until<=now())) OR (status IN ('failed','dead','paused') AND (error_text LIKE '%service_shutdown%' OR error_text LIKE '%本地服务关闭%')))`,[DOCUMENT_OCR_QUEUE,DOCUMENT_OCR_TASK,[...this.stopIntents],this.engine.kind==='pglite']);
     const committed=await this.engine.executeRaw<{parent_job_id:number|null}>(`UPDATE minion_jobs AS child SET status='completed',lock_token=NULL,lock_until=NULL,finished_at=now(),updated_at=now()
       WHERE child.queue=$1 AND child.status='active' AND ($2::boolean OR child.lock_until<=now())
       AND child.result->>'status' IN ('imported','skipped') AND EXISTS(SELECT 1 FROM pages p
@@ -514,6 +519,8 @@ export class ProductTaskRuntime {
     const busy = await this.engine.executeRaw(`SELECT id FROM minion_jobs WHERE queue IN ($1,$2)
       AND status IN ('waiting','active','waiting-children')
       AND data->'task'->>'type' IN ('import','sync','sync-file','dream','assistant')
+      AND (data->'task'->'input'->'ocrOnly' IS NULL OR status='active')
+      AND data->>'waitingForOcr' IS DISTINCT FROM 'true'
       AND ($3::bigint IS NULL OR (id<>$3 AND (data->'task'->>'type'<>'dream' OR id<$3))) LIMIT 1`, [PRODUCT_TASK_QUEUE, SYNC_FILE_QUEUE,maintenanceId??null]);
     return this.background.decision(busy.length > 0, this.localPressure || this.externalPressure);
   }
@@ -537,16 +544,32 @@ export class ProductTaskRuntime {
     if (this.recoveringOwner) return this.cachedRuns();
     if (this.executions.size) {
       if (!this.refreshingRuns) {
-        this.refreshingRuns = withDatabasePriority(3, () => this.queue.getJobs({ queue: PRODUCT_TASK_QUEUE, name: TASK_NAME, limit: 100 }))
+        this.refreshingRuns = withDatabasePriority(3, () => this.historyJobs())
           .then(jobs => { this.cached = jobs.map(job => toRun(job)); })
           .catch(error => console.error('[tasks] history read failed:', error instanceof Error ? error.message : error))
           .finally(() => { this.refreshingRuns = null; });
       }
       return this.cachedRuns();
     }
-    this.cached = (await this.queue.getJobs({ queue: PRODUCT_TASK_QUEUE, name: TASK_NAME, limit: 100 }))
+    this.cached = (await this.historyJobs())
       .map(job => toRun(job, job.status === 'cancelled' && this.executions.has(job.id)));
     return this.cached;
+  }
+  private async historyJobs(){
+    const [ordinary,ocr]=await Promise.all([this.queue.getJobs({queue:PRODUCT_TASK_QUEUE,name:TASK_NAME,limit:100}),this.queue.getJobs({queue:DOCUMENT_OCR_QUEUE,name:DOCUMENT_OCR_TASK,limit:100})]);
+    return this.refreshOcrProgress([...ordinary,...ocr].sort((a,b)=>b.created_at.getTime()-a.created_at.getTime()).slice(0,100));
+  }
+  private async refreshOcrProgress(jobs:MinionJob[]){
+    const ids=[...new Set(jobs.flatMap(job=>Array.isArray(job.result?.ocrTaskIds)?job.result.ocrTaskIds as number[]:[]))];
+    if(!ids.length)return jobs;
+    const rows=await this.engine.executeRaw<{id:number;status:string;pending:number}>(`SELECT j.id,j.status,CASE WHEN j.status='completed' THEN 0 ELSE GREATEST(COALESCE((p.frontmatter->>'document_ocr_failed')::int,0)+COALESCE((p.frontmatter->>'document_ocr_skipped')::int,0),1) END pending
+      FROM minion_jobs j LEFT JOIN pages p ON p.slug=j.data->'task'->'input'->'ocrOnly'->>'slug' AND p.source_id=j.data->'task'->'input'->>'sourceId' AND p.frontmatter->>'raw_sha256'=j.data->'task'->'input'->'ocrOnly'->>'hash' AND p.deleted_at IS NULL WHERE j.id=ANY($1::int[])`,[ids]);
+    const states=new Map(rows.map(row=>[row.id,row]));
+    return jobs.map(job=>{
+      if(!Array.isArray(job.result?.ocrTaskIds))return job;
+      const selected=(job.result.ocrTaskIds as number[]).map(id=>states.get(id));
+      return {...job,result:{...job.result,ocrPending:selected.reduce((sum,row)=>sum+(row?.pending??1),0),ocrFailed:selected.filter(row=>!row||['failed','dead','paused','cancelled'].includes(row.status)).length}};
+    });
   }
 
   cachedRuns(): ConsoleRun[] {
@@ -587,8 +610,9 @@ export class ProductTaskRuntime {
     }
     if (this.recoveringOwner) return this.cachedRuns().find(run => run.id === id) ?? null;
     const job = await this.queue.getJob(Number(id.slice(5)));
-    if (job?.queue !== PRODUCT_TASK_QUEUE || job.name !== TASK_NAME) return null;
-    const run = toRun(job, job.status === 'cancelled' && this.executions.has(job.id));
+    if (!job||!(job.queue===PRODUCT_TASK_QUEUE&&job.name===TASK_NAME||job.queue===DOCUMENT_OCR_QUEUE&&job.name===DOCUMENT_OCR_TASK)) return null;
+    const [resolved]=await this.refreshOcrProgress([job]);
+    const run = toRun(resolved, job.status === 'cancelled' && this.executions.has(job.id));
     if(!['running','queued'].includes(run.status))this.sessionViews.delete(job.id);
     this.cached = [run, ...this.cached.filter(row => row.id !== run.id)].slice(0, 100);
     return run;
@@ -614,6 +638,8 @@ export class ProductTaskRuntime {
       ?? await withDeadline(this.getRun(id), 1000, '数据库未及时响应，无法确认该任务的状态');
     if (!view || !['running','queued'].includes(view.status)) return view;
     this.stopIntents.add(jobId);
+    const dependentOcr=await this.engine.executeRaw<{id:number}>(`SELECT id FROM minion_jobs WHERE name=$1 AND data->'task'->'input'->'ocrOnly'->>'maintenanceOwnerId'=$2 AND status IN ('waiting','active','delayed')`,[DOCUMENT_OCR_TASK,String(jobId)]);
+    for(const child of dependentOcr){this.executions.get(child.id)?.cancel(reason);await this.engine.executeRaw("UPDATE minion_jobs SET data=jsonb_set(data,'{ocrOwnerCancelled}','true'::jsonb) WHERE id=$1",[child.id]);await this.queue.cancelJob(child.id);}
     this.executions.get(jobId)?.cancel(reason);
     for (const [child, owner] of this.fileSessions) if (owner === jobId) this.executions.get(child)?.cancel(reason);
     this.sessionViews.set(jobId, { ...view, status: 'running', error: '正在停止任务…' });
@@ -684,7 +710,7 @@ export class ProductTaskRuntime {
       await this.clearStopIntent(resumedId);
       await this.engine.executeRaw(`UPDATE minion_jobs SET status='waiting',result=NULL,error_text=NULL,lock_token=NULL,lock_until=NULL,delay_until=NULL,finished_at=NULL,
         data=(data-'resourceStopReason') || ($2::jsonb - 'relations' - 'gitFiles' - 'gitResults' - 'taskBudget'),progress=$3::jsonb,updated_at=now()
-        WHERE id=$1 AND queue=$4 AND status IN ('paused','cancelled','failed','dead','completed')`, [resumedId, record!.data, progress, PRODUCT_TASK_QUEUE]);
+        WHERE id=$1 AND queue=$4 AND status IN ('paused','cancelled','failed','dead','completed')`, [resumedId, record!.data, progress,record!.queue]);
       return this.getRun(id);
     }
     throw new Error('文件任务请通过快速维护继续');
@@ -699,6 +725,8 @@ export class ProductTaskRuntime {
     const record = await this.queue.getJob(context.id);
     if (!record?.lock_token) throw new Error('任务执行租约无效');
     const structuredTask = record.data.task as ProductTask;
+    const backgroundOcr=structuredTask.type==='import'&&!!structuredTask.input.ocrOnly;
+    if(backgroundOcr){const schedule=await this.vectorizationDecision(context.id);if(schedule.mode==='waiting')return this.deferMaintenance(record,`资料已保存，图片识别${schedule.reason}`,Math.max(1000,schedule.delayMs));}
     if (structuredTask.type === 'embed' && structuredTask.input.searchOptimize) {
       const state = await this.searchOptimizeView();
       if (state.items.length && (state.paused || state.schedule.mode === 'waiting')) {
@@ -753,7 +781,7 @@ export class ProductTaskRuntime {
       const counts = await this.fileQueue.counts(context.id);
       if (counts.total > 0) record.progress = { ...(record.progress as Progress ?? {}), product: { ...toRun(record).product!, syncFiles: counts } };
     }
-    if (record.attempts_started > 1 && record.data.authorizedAttempt !== record.attempts_started && !searchOptimize && structuredTask.type !== 'sync-file' && structuredTask.type !== 'memory' && !(structuredTask.type === 'dream' && usesSyncFileQueue(structuredTask.input))) throw new Error('任务执行曾中断，结果不确定，请查看已完成内容后手动继续');
+    if (record.attempts_started > 1 && record.data.authorizedAttempt !== record.attempts_started && !searchOptimize && !backgroundOcr && structuredTask.type !== 'sync-file' && structuredTask.type !== 'memory' && !(structuredTask.type === 'dream' && usesSyncFileQueue(structuredTask.input))) throw new Error('任务执行曾中断，结果不确定，请查看已完成内容后手动继续');
     let progress = (record.progress ?? {}) as Progress;
     const adapter = new TaskProgressAdapter(String(record.data.kind), toRun(record).product);
     let progressDirty=true,lastPersistedAt=0;
@@ -879,7 +907,7 @@ export class ProductTaskRuntime {
         }
       }
     })();
-    this.executions.set(context.id, { background: structuredTask.type === 'embed' && structuredTask.input.searchOptimize === true, pause: () => { record.data.searchOptimizePause = 'manual'; }, cancel, done: finished.catch(() => {}), ownsLockedTransaction: () => host.ownsLockedTransaction(), adjust:constrained=>send({type:'resource-pressure',constrained}), run: () => {
+    this.executions.set(context.id, { background: backgroundOcr || structuredTask.type === 'embed' && structuredTask.input.searchOptimize === true, pause: () => { record.data.searchOptimizePause = 'manual'; }, cancel, done: finished.catch(() => {}), ownsLockedTransaction: () => host.ownsLockedTransaction(), adjust:constrained=>send({type:'resource-pressure',constrained}), run: () => {
       progress.product = adapter.view;
       const run=toRun({ ...record, progress }, cancelRequested);
       if (run.product && structuredTask.type==='dream' && usesSyncFileQueue(structuredTask.input)) run.product.activeFiles=this.fileProjection.active(context.id);
@@ -901,6 +929,14 @@ export class ProductTaskRuntime {
           if(cancelRequested) throw new Error('任务已取消');
           if (message.method === 'task.searchOptimize') return this.acceptSearchOptimize(String(message.args[0] ?? 'default'), Array.isArray(message.args[1]) ? message.args[1].filter((slug): slug is string => typeof slug === 'string') : []);
           if(message.method==='task.documentResources')return this.background.resourceSample();
+          if(message.method==='task.documentOcrSchedule')return this.vectorizationDecision(context.id);
+          if(message.method==='task.waitingOcr'){
+            if(structuredTask.type!=='dream')throw Error('无效的整理识图等待状态');
+            record.data.waitingForOcr=message.args[0]===true;
+            if(!record.data.waitingForOcr&&adapter.view.background?.reason.includes('后台识图'))delete adapter.view.background;
+            await this.engine.executeRaw("UPDATE minion_jobs SET data=jsonb_set(data,'{waitingForOcr}',$3::jsonb) WHERE id=$1 AND status='active' AND lock_token=$2",[context.id,record.lock_token,record.data.waitingForOcr]);
+            return null;
+          }
           if(message.method==='task.maintenanceVectorizationState'){
             if(structuredTask.type!=='dream')throw new Error('当前任务不能执行维护向量化');
             const state=await loadSearchOptimize(this.engine);
@@ -1055,6 +1091,8 @@ export class ProductTaskRuntime {
       }
       if (structuredTask.type === 'dream' && outcome !== MINION_DEFERRED && (outcome as { reason?: string })?.reason === 'cycle_already_running') return this.deferMaintenance(record);
       if (outcome === MINION_DEFERRED && !this.stopIntents.has(context.id)) {
+        if(deferredPhase==='maintenance_ocr')return this.deferMaintenance(record,'资料已保存，等待后台识图后继续整理和向量化',1000);
+        if(deferredPhase==='document_ocr')return this.deferMaintenance(record,'资料已保存，后台识图等待电脑空闲',1000);
         if(deferredPhase==='maintenance_embed'){
           const state=await loadSearchOptimize(this.engine),schedule=await this.vectorizationDecision(context.id);
           for(const step of adapter.view.steps)if(step.phases.includes('embed'))step.status='pending';
@@ -1155,6 +1193,7 @@ export class ProductTaskRuntime {
     delete progress.result;
     const view = progress.product ?? new TaskProgressAdapter(String(record.data.kind)).view;
     view.stage = stage; view.percent = null; view.errorReason = null;
+    if(record.data.waitingForOcr||record.data.kind==='document_ocr')view.background={mode:'waiting',reason:stage};
     progress.product = view;
     await this.engine.executeRaw(`UPDATE minion_jobs SET status='delayed',delay_until=now()+($4::double precision * interval '1 millisecond'),
       lock_token=NULL,lock_until=NULL,error_text=NULL,result=NULL,progress=$3::jsonb,
@@ -1203,7 +1242,8 @@ export class ProductTaskRuntime {
     const constrained=this.localPressure||this.externalPressure;
     const backgroundActive = [...this.executions.values()].some(execution => execution.background);
     this.worker.setConcurrency(constrained && !backgroundActive ? 1 : 2);
-    this.fileWorker.setConcurrency(constrained||this.engine.kind==='pglite'?1:documentResourcePlan(this.background.resourceSample()).concurrency);
+    const ocrActive=[...this.executions.values()].some(execution=>execution.run().kind==='document_ocr');
+    this.fileWorker.setConcurrency(ocrActive?2:constrained||this.engine.kind==='pglite'?1:documentResourcePlan(this.background.resourceSample()).concurrency);
     for(const execution of this.executions.values())execution.adjust(constrained);
     if(constrained)void this.reclaimIdleThreads().catch(error=>console.error('[tasks] resource reclaim:',error));
   }

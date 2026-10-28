@@ -141,3 +141,17 @@ test('向量处理中电脑变忙时保存当前批次，重启及暂停后只�
   const [total]=await engine.executeRaw<{n:number}>('SELECT count(*)::int AS n FROM content_chunks c JOIN pages p ON p.id=c.page_id WHERE p.source_id=$1',['window']);
   expect((done.result as any).phases.find((phase:any)=>phase.phase==='embed').details.embedded).toBe(total.n);
 },180000);
+
+test('独立同步先保存资料再排队，暂停与电脑繁忙时零向量请求且不处理停用来源',async()=>{
+  await embeddingEnabled(true);await pauseSearchOptimize(engine,true);cpu=0.95;
+  writeFileSync(join(directory,'sync-pending.md'),'# Sync pending\n\n同步先保存这一份资料，向量化由后台等待电脑空闲后处理。');
+  await engine.executeRaw("INSERT INTO sources(id,name,config) VALUES('sync-disabled','停用同步来源','{\"syncEnabled\":false}'::jsonb)");
+  await engine.putPage('outside-sync',{type:'note',title:'停用来源',compiled_truth:'未授权本次同步的来源内容必须保留未向量状态。',frontmatter:{}},{sourceId:'sync-disabled'});
+  await engine.upsertChunks('outside-sync',[{chunk_index:0,chunk_text:'未授权本次同步的来源内容必须保留未向量状态。',chunk_source:'compiled_truth'}],{sourceId:'sync-disabled'});
+  const before=calls,task=await runtime.submitSync(),done=await finish(task.id);
+  expect(done.status,JSON.stringify(done.result)).toBe('completed');expect((await engine.getPage('sync-pending'))!.compiled_truth).toContain('同步先保存');expect(calls).toBe(before);
+  const queued=await loadSearchOptimize(engine);expect(queued.items.some(item=>item.sourceId==='default'&&item.slug==='sync-pending')).toBe(true);expect(queued.items.some(item=>item.sourceId==='sync-disabled')).toBe(false);
+  expect(await engine.countStaleChunks({sourceId:'sync-disabled'})).toBe(1);
+  const second=await finish((await runtime.submitSync()).id);expect(second.status,JSON.stringify(second.result)).toBe('completed');expect(calls).toBe(before);expect((await loadSearchOptimize(engine)).items.filter(item=>item.sourceId==='default'&&item.slug==='sync-pending')).toHaveLength(1);
+  const [background]=await engine.executeRaw<{id:number}>("SELECT id FROM minion_jobs WHERE idempotency_key='search-optimize:active'");expect(background).toBeDefined();cpu=0.1;await runtime.continueSearchOptimize('task-'+background.id);await waitUntil(async()=>await engine.countStaleChunks({sourceId:'default'})===0,'同步资料未在后台补向量');expect(calls).toBeGreaterThan(before);expect(await engine.countStaleChunks({sourceId:'sync-disabled'})).toBe(1);
+},180000);

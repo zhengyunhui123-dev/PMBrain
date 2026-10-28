@@ -82,7 +82,8 @@ export class SyncFileQueue {
           if(stored.status==='skipped'){await this.validate(file);await this.remember(file,stored);}
           return stored;
         }
-        await this.engine.executeRaw(`UPDATE minion_jobs SET idempotency_key = NULL, data = jsonb_set(data, '{superseded}', 'true'::jsonb) WHERE id = $1`, [job.id]);
+        await this.engine.executeRaw(`UPDATE minion_jobs SET idempotency_key = NULL, data = jsonb_set(data, '{superseded}', 'true'::jsonb),
+          status=CASE WHEN status IN ('paused','delayed','waiting') THEN 'cancelled' ELSE status END WHERE id = $1`, [job.id]);
         job=undefined;
       } else {
         if (['dead', 'failed'].includes(job.status)) throw new Error(job.error_text ?? '文件任务执行失败');
@@ -101,7 +102,7 @@ export class SyncFileQueue {
         return {slug:manifest.slug,status:'skipped',chunks:0,unchanged:true};
       }
     }
-    if(!manifest?.chunkHash)file.options={...file.options,forceRechunk:true};
+    if(!manifest?.chunkHash&&!isOfficeFilePath(file.relativePath))file.options={...file.options,forceRechunk:true};
     if (file.options.noEmbed && !(file.options.session && isSessionExportPath(file.relativePath)) && !isCodeFilePath(file.relativePath)
       && !isImageFilePath(file.relativePath) && !(file.options.documentOcr && isOfficeFilePath(file.relativePath))) {
       const inspected = isOfficeFilePath(file.relativePath)
@@ -170,7 +171,7 @@ export class SyncFileQueue {
       await tx.executeRaw(`UPDATE minion_jobs SET parent_job_id = $1, status = CASE WHEN status IN ('delayed','paused') THEN 'waiting' ELSE status END,
         delay_until = NULL, updated_at = now() WHERE queue = $2 AND (data->>'sessionId')::bigint = $1 AND data->>'superseded' IS DISTINCT FROM 'true'`, [sessionId, SYNC_FILE_QUEUE]);
       await tx.executeRaw(`UPDATE minion_jobs SET status = CASE WHEN EXISTS (
-        SELECT 1 FROM minion_jobs WHERE parent_job_id = $1 AND status NOT IN ('completed','dead','failed','cancelled')
+        SELECT 1 FROM minion_jobs WHERE parent_job_id = $1 AND data->>'superseded' IS DISTINCT FROM 'true' AND status NOT IN ('completed','dead','failed','cancelled')
         ) THEN 'waiting-children' ELSE 'waiting' END, lock_token = NULL, lock_until = NULL, updated_at = now() WHERE id = $1`, [sessionId]);
     });
   }

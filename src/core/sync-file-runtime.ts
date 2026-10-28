@@ -9,6 +9,10 @@ export type SyncFileOptions = {
   includeOffice?: boolean;
   includeImages?: boolean;
   documentOcr?: boolean;
+  deferDocumentOcr?:boolean;
+  ocrOriginalPath?:string|null;
+  deferredOcrVectors?:boolean;
+  deferredOcrMaintenanceOwnerId?:number;
   structured?: boolean;
   session?: boolean;
   activePack?: { page_types: ReadonlyArray<{ name: string; path_prefixes: ReadonlyArray<string> }> };
