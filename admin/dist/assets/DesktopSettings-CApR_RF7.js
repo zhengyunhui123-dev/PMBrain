@@ -1,5 +1,5 @@
 const __vite__mapDeps=(i,m=__vite__mapDeps,d=(m.f||(m.f=["assets/src-Dc37i99a.js","assets/src-Bi7L9_9h.css"])))=>i.map(i=>d[i]);
-import{e as y,_ as k}from"./index-BBHB8wzI.js";import{r as e,j as n}from"./react-CTwocyy_.js";import"./ui-3OIJZ_h6.js";const f=`
+import{e as y,_ as k}from"./index-BGS5Imo0.js";import{r as e,j as n}from"./react-CTwocyy_.js";import"./ui-3OIJZ_h6.js";const f=`
     <main class="app-shell">
       <aside class="rail">
         <div class="brand">
