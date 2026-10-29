@@ -212,6 +212,23 @@ test('旧版显式排队兼容函数保留Source归属且不抢占同步父任�
   expect(await engine.getConfig('dream.entity_capture.pending.default')).toBeNull();
 });
 
+test('快速维护从文件同步到识别：相同备份只请求一次，不同备份仍请求',async()=>{
+  const repo=join(root,'duplicate-backups');mkdirSync(join(repo,'backups'),{recursive:true});mkdirSync(join(repo,'备份'),{recursive:true});
+  const body='---\ntitle: 重复资料\ntype: note\n---\n这是一份用于核对备份重复识别的工作资料。';
+  writeFileSync(join(repo,'original.md'),body);
+  writeFileSync(join(repo,'backups','copy.md'),body);
+  writeFileSync(join(repo,'备份','new.md'),body+'这份备份增加了新的工作内容。');
+  await engine.executeRaw("UPDATE sources SET local_path=$1 WHERE id='default'",[repo]);
+  const run=await runtime.submitDream({preset:'quick',sourceId:'default'});
+  const done=await finished(run.id,180000);
+  expect(done.status,JSON.stringify(done.result)).toBe('completed');
+  expect(calls).toBe(2);
+  const jobs=await engine.executeRaw<{quick:string}>("SELECT data->'ingest_context'->>'quickEntitiesOnly' quick FROM minion_jobs WHERE data ? 'ingest_context'");
+  expect(jobs).toHaveLength(2);expect(jobs.every(job=>job.quick==='true')).toBe(true);
+  const repeat=await runtime.submitDream({preset:'quick',sourceId:'default'});
+  expect((await finished(repeat.id,180000)).status).toBe('completed');expect(calls).toBe(2);
+},360000);
+
 test('历史跳过记录读成未执行失败，不能绿色完成，也不改写历史记录', async () => {
   await runtime.close();
   const queue = new MinionQueue(engine);

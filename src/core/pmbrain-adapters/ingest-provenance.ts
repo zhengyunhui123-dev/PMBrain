@@ -31,13 +31,19 @@ function splitState(body:string):{facts:string;states:string[]}{
   return {facts:facts.join('\n'),states};
 }
 
-function preserveExisting(existing:{compiled_truth:string;timeline:string}|null,body:string,timeline:string):{body:string;timeline:string}{
+function citationFact(line:string):string|null{
+  if(!/\[Source:\s*[^\]\r\n]+\]/i.test(line))return null;
+  return line.replace(/\[Source:\s*[^\]\r\n]+\]/gi,'').trim()||null;
+}
+
+function preserveExisting(existing:{compiled_truth:string;timeline:string}|null,body:string,timeline:string,deduplicateFacts=false):{body:string;timeline:string}{
   if(!existing)return {body,timeline};
   const old=splitState(existing.compiled_truth),current=splitState(body);
   const knownLines=new Set(old.facts.split('\n').map(line=>line.trim()).filter(Boolean));
+  const knownFacts=new Set(deduplicateFacts?old.facts.split('\n').map(citationFact).filter((fact):fact is string=>!!fact):[]);
   const additions=current.facts.split(/\n\s*\n/).map(block=>block.trim())
     .filter(block=>block&&!/^#{1,6}[^\n]*$/.test(block)&&!old.facts.includes(block))
-    .map(block=>block.split('\n').filter(line=>!knownLines.has(line.trim())).join('\n').trim()).filter(Boolean);
+    .map(block=>block.split('\n').filter(line=>!knownLines.has(line.trim())&&(!citationFact(line)||!knownFacts.has(citationFact(line)!))).join('\n').trim()).filter(Boolean);
   const facts=[old.facts.trim(),...new Set(additions)].filter(Boolean).join('\n\n');
   const state=current.states.at(-1)??old.states.at(-1);
   const priorTimeline=existing.timeline.trim(),knownTimeline=new Set(priorTimeline.split('\n').map(line=>line.trim()));
@@ -58,16 +64,17 @@ export async function annotateIngestContent(engine:BrainEngine,context:EntityIng
   if(!origin)throw new Error('ingest source missing before write');
   const parsed=parseMarkdown(content,slug);
   const metadata=matter(content).data;
-  const preserved=preserveExisting(existing,parsed.compiled_truth,parsed.timeline);
+  const preserved=preserveExisting(existing,parsed.compiled_truth,parsed.timeline,!!context.quickEntitiesOnly);
   const previous=records(existing?.frontmatter??{});
   const lines=`${preserved.body}\n${preserved.timeline}`.split('\n');
   const next=previous.filter(record=>lines.some(line=>hash(line)===record.line));
   const incoming=new Set(`${parsed.compiled_truth}\n${parsed.timeline}`.split('\n').map(hash));
+  const incomingFacts=new Set(context.quickEntitiesOnly?`${parsed.compiled_truth}\n${parsed.timeline}`.split('\n').filter(line=>line.includes(context.slug)).map(citationFact).filter((fact):fact is string=>!!fact):[]);
   for(const line of lines){
-    if(!line.includes(context.slug))continue;
+    if(!line.includes(context.slug)&&!(citationFact(line)&&incomingFacts.has(citationFact(line)!)))continue;
     const lineHash=hash(line);
     const owned=next.find(record=>record.line===lineHash&&record.sourceId===context.sourceId&&record.slug===context.slug&&record.pageId===origin.id);
-    if(owned){if(incoming.has(lineHash)&&owned.bodyHash!==hash(context.body)){owned.bodyHash=hash(context.body);owned.chunkHash=hash(context.chunkBody);}continue;}
+    if(owned){if((incoming.has(lineHash)||incomingFacts.has(citationFact(line)??''))&&owned.bodyHash!==hash(context.body)){owned.bodyHash=hash(context.body);owned.chunkHash=hash(context.chunkBody);}continue;}
     next.push({line:lineHash,sourceId:context.sourceId,slug:context.slug,pageId:origin.id,bodyHash:hash(context.body),chunkHash:hash(context.chunkBody)});
   }
   const frontmatter:Record<string,unknown>={...existing?.frontmatter,...parsed.frontmatter,[key]:next};

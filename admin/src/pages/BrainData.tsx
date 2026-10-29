@@ -39,6 +39,7 @@ import { useProductTasks } from '../product/TaskActivity';
 import { pendingMaterialRows } from '../product/material-list-progress';
 import { taskLink } from '../product/TaskProgress';
 import { LoaderCircle } from 'lucide-react';
+import './brain-data.css';
 
 function factTtlHint(validUntil: string | null | undefined): string | null {
   if (!validUntil) return null;
@@ -88,6 +89,32 @@ export function BrainDataPage({ product = false }: { product?: boolean } = {}) {
   });
   const [gotoPage, setGotoPage] = useState('1');
   const listRequestId = useRef(0);
+  const dialogRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!product || (!selected && !selectedFact)) return;
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    dialogRef.current?.querySelector<HTMLButtonElement>('.drawer-close')?.focus();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setSelected(null);
+        setSelectedFact(null);
+      }
+      if (event.key !== 'Tab') return;
+      const controls = Array.from(dialogRef.current?.querySelectorAll<HTMLElement>('button:not(:disabled),a[href],input:not(:disabled),select:not(:disabled),textarea:not(:disabled),summary,[tabindex="0"]') ?? []).filter(element => element.getClientRects().length);
+      const first = controls[0];
+      const last = controls[controls.length - 1];
+      if ((event.shiftKey && document.activeElement === first) || (!event.shiftKey && document.activeElement === last)) {
+        event.preventDefault();
+        (event.shiftKey ? last : first)?.focus();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      if (previous?.isConnected) previous.focus();
+    };
+  }, [product, selected, selectedFact]);
 
   const isFactsView = filters.view === 'facts';
   const loadRows = useCallback(async () => {
@@ -238,13 +265,13 @@ export function BrainDataPage({ product = false }: { product?: boolean } = {}) {
   const renderPagination = () => (
     <div className="pagination">
       <span className="pagination-total">共 {meta.total} 条{importingRows.length > 0 && ` · ${importingRows.length} 项导入处理中或待处理`}</span>
-      <select value={filters.pageSize} onChange={e => setFilters(f => ({ ...f, pageSize: Number(e.target.value), page: 1 }))}>
+      <select aria-label="每页条数" value={filters.pageSize} onChange={e => setFilters(f => ({ ...f, pageSize: Number(e.target.value), page: 1 }))}>
         <option value={10}>10条/页</option>
         <option value={20}>20条/页</option>
         <option value={40}>40条/页</option>
       </select>
       <div className="pagination-pages">
-        <button className="page-arrow" disabled={meta.page <= 1} onClick={() => goToPage(meta.page - 1)}>{'<'}</button>
+        <button className="page-arrow" aria-label="上一页" disabled={meta.page <= 1} onClick={() => goToPage(meta.page - 1)}>{'<'}</button>
         {pageButtons.map((page, index) => (
           page === 'ellipsis'
             ? <span className="page-ellipsis" key={`ellipsis-${index}`}>...</span>
@@ -252,17 +279,19 @@ export function BrainDataPage({ product = false }: { product?: boolean } = {}) {
               <button
                 key={page}
                 className={`page-number ${page === meta.page ? 'active' : ''}`}
+                aria-label={`第 ${page} 页`}
+                aria-current={page === meta.page ? 'page' : undefined}
                 onClick={() => goToPage(page)}
               >
                 {page}
               </button>
             )
         ))}
-        <button className="page-arrow" disabled={meta.page >= meta.pages} onClick={() => goToPage(meta.page + 1)}>{'>'}</button>
+        <button className="page-arrow" aria-label="下一页" disabled={meta.page >= meta.pages} onClick={() => goToPage(meta.page + 1)}>{'>'}</button>
       </div>
       <form className="pagination-jump" onSubmit={e => { e.preventDefault(); goToPage(Number(gotoPage) || 1); }}>
         <span>前往</span>
-        <input value={gotoPage} onChange={e => setGotoPage(e.target.value.replace(/\D/g, '').slice(0, 4))} />
+        <input aria-label="跳转页码" value={gotoPage} onChange={e => setGotoPage(e.target.value.replace(/\D/g, '').slice(0, 4))} />
         <span>页</span>
       </form>
     </div>
@@ -304,14 +333,14 @@ export function BrainDataPage({ product = false }: { product?: boolean } = {}) {
   };
 
   return (
-    <div className="pm-page brain-data-page">
+    <div className={`pm-page brain-data-page${product ? ' library-redesign' : ''}`}>
       <div className="pm-section-head">
         <div>
           <div className="pm-eyebrow">DATABASE · MARKDOWN · KNOWLEDGE</div>
           <h1>{product ? '知识库' : '知识数据'}</h1>
           <p className="pm-page-intro">
-            {product ? '查看和管理你的资料、知识与事实。' : '这里展示数据库里的知识页、热记忆事实和观点记录。知识页是 Markdown；事实是 Agent 记住的独立陈述，不是页面。'}
-            {overview && ` 当前 ${overview.stats.page_count} 个知识页 · ${overview.stats.active_fact_count ?? 0} 条有效事实 · ${overview.stats.link_count} 条关系。`}
+            {product ? '查看原始资料、整理后的知识，以及对话留下的事实。' : '这里展示数据库里的知识页、热记忆事实和观点记录。知识页是 Markdown；事实是 Agent 记住的独立陈述，不是页面。'}
+            {!product && overview && ` 当前 ${overview.stats.page_count} 个知识页 · ${overview.stats.active_fact_count ?? 0} 条有效事实 · ${overview.stats.link_count} 条关系。`}
           </p>
         </div>
         {product && <button type="button" className="pm-primary" onClick={() => window.dispatchEvent(new Event('pmbrain:open-import'))}><Plus size={16} /> 添加资料</button>}
@@ -329,6 +358,9 @@ export function BrainDataPage({ product = false }: { product?: boolean } = {}) {
           ].map(([value, label]) => (
             <button
               key={value}
+              type="button"
+              role="tab"
+              aria-selected={filters.view === value}
               className={filters.view === value ? 'active' : ''}
               onClick={() => {
                 setSelected(null);
@@ -343,16 +375,16 @@ export function BrainDataPage({ product = false }: { product?: boolean } = {}) {
           ))}
         </div>
         {filters.view === 'trash' && <p className="trash-retention-note">移出的内容保留 3 天，之后自动清空。打开详情可以撤销删除。</p>}
-        {filters.view === 'materials' && <p className="trash-retention-note">导入、同步和直接记录的资料。实体识别、快速维护或深度整理生成的知识归入「结构化知识」；无法确认加工来源的旧内容暂留在这里。</p>}
-        {filters.view === 'structured' && <p className="trash-retention-note">实体识别、快速维护或深度整理生成的人物、组织机构、项目、概念和整理笔记，按已保存的加工来源分类。</p>}
-        {filters.view === 'facts' && <p className="trash-retention-note">事实来自 facts 热记忆表，不是 Markdown 页面。由 remember / extract_facts / Dream 写入，可被 recall 读回。</p>}
+        {filters.view === 'materials' && <p className="trash-retention-note">{product ? '导入、同步和直接记录的资料，保留原来的出处。' : '导入、同步和直接记录的资料。实体识别、快速维护或深度整理生成的知识归入「结构化知识」；无法确认加工来源的旧内容暂留在这里。'}</p>}
+        {filters.view === 'structured' && <p className="trash-retention-note">{product ? '从资料中整理出的人物、组织机构、项目、概念和笔记。' : '实体识别、快速维护或深度整理生成的人物、组织机构、项目、概念和整理笔记，按已保存的加工来源分类。'}</p>}
+        {filters.view === 'facts' && <p className="trash-retention-note">{product ? '对话和整理过程中记下的独立事实，可查看具体内容与出处。' : '事实来自 facts 热记忆表，不是 Markdown 页面。由 remember / extract_facts / Dream 写入，可被 recall 读回。'}</p>}
         <div className="filter-bar">
-          <input value={filters.q} onChange={e => setFilters(f => ({ ...f, q: e.target.value, page: 1 }))} placeholder={isFactsView ? '搜索事实、实体或来源' : '搜索 slug 或标题'} />
-          <select value={filters.source} onChange={e => setFilters(f => ({ ...f, source: e.target.value, page: 1 }))}>
+          {product ? <label className="library-search"><Search size={16} aria-hidden="true" /><input aria-label="搜索知识" value={filters.q} onChange={e => setFilters(f => ({ ...f, q: e.target.value, page: 1 }))} placeholder={isFactsView ? '搜索事实、实体或来源' : '搜索标题或关键词'} /></label> : <input aria-label="搜索知识" value={filters.q} onChange={e => setFilters(f => ({ ...f, q: e.target.value, page: 1 }))} placeholder={isFactsView ? '搜索事实、实体或来源' : '搜索 slug 或标题'} />}
+          <select aria-label="数据源筛选" value={filters.source} onChange={e => setFilters(f => ({ ...f, source: e.target.value, page: 1 }))}>
             <option value="all">{product ? '全部数据源' : '全部 source'}</option>
             {overview?.sources.map(s => <option key={s.id} value={s.id}>{product ? sourceLabel(s) : s.id}</option>)}
           </select>
-          <select value={filters.type} onChange={e => setFilters(f => ({ ...f, type: e.target.value, page: 1 }))}>
+          <select aria-label="类型筛选" value={filters.type} onChange={e => setFilters(f => ({ ...f, type: e.target.value, page: 1 }))}>
             <option value="all">{isFactsView ? '全部事实类型' : '全部类型'}</option>
             {types.map(t => (
               <option key={t} value={t} title={isFactsView ? t : pageTypeTitle(t)}>
@@ -360,21 +392,22 @@ export function BrainDataPage({ product = false }: { product?: boolean } = {}) {
               </option>
             ))}
           </select>
-          <select value={filters.embedded} onChange={e => setFilters(f => ({ ...f, embedded: e.target.value, page: 1 }))}>
+          <select aria-label="向量化筛选" value={filters.embedded} onChange={e => setFilters(f => ({ ...f, embedded: e.target.value, page: 1 }))}>
             <option value="all">向量化不限</option>
             <option value="yes">已向量化</option>
             <option value="no">未完成向量化</option>
           </select>
         </div>
-        <table className="brain-page-table">
+        <div className="library-table-wrap"><table className="brain-page-table">
           <thead>
             <tr>
-              <th>{isFactsView ? '事实' : '标题'}</th>
+              <th>{isFactsView ? '事实' : product ? '名称' : '标题'}</th>
               <th>{product ? '数据源' : 'Source'}</th>
               <th>类型</th>
-              <th>{isFactsView ? '实体' : product ? '知识分块' : 'Chunks'}</th>
-              <th>{product ? '向量化' : 'Embedding'}</th>
-              <th>{filters.view === 'trash' ? '移除时间' : '更新'}</th>
+              {!product && <th>{isFactsView ? '实体' : 'Chunks'}</th>}
+              {!product && <th>Embedding</th>}
+              <th>{filters.view === 'trash' ? '移除时间' : product ? '更新时间' : '更新'}</th>
+              {product && <th>索引状态</th>}
             </tr>
           </thead>
           <tbody>
@@ -382,23 +415,24 @@ export function BrainDataPage({ product = false }: { product?: boolean } = {}) {
               const waiting = !row.error && (!row.run || ['running', 'queued', 'completed'].includes(row.run.status));
               const stage = row.error || (row.run?.status === 'cancelled' ? '导入已停止' : row.run?.status === 'completed' ? '正在读取结果' : row.run?.product?.stage ?? '等待导入');
               return <tr key={`import:${row.id}`} className="material-import-row" aria-label={`导入 ${row.name}`}>
-                <td><b>{row.name}</b><div className={row.error ? 'pm-error-text' : 'pm-muted'}>{stage}{row.run?.id.startsWith('task-') && <button type="button" className="material-task-link" onClick={() => taskLink(row.run!)}>查看任务</button>}</div></td>
+                <td><span className="library-data-line">{product && <span className="library-icon"><FileText size={17} /></span>}<span><b>{row.name}</b><span className={row.error ? 'pm-error-text' : 'pm-muted'}>{stage}{row.run?.id.startsWith('task-') && <button type="button" className="material-task-link" onClick={() => taskLink(row.run!)}>查看任务</button>}</span></span></span></td>
                 <td>{overview?.sources.some(source => source.id === row.sourceId) ? sourceLabel(overview.sources.find(source => source.id === row.sourceId)) : row.sourceId}</td>
                 <td>{row.type ? <span className="pm-pill">{row.type === 'directory' ? '目录' : pageTypeLabel(row.type)}</span> : '—'}</td>
-                <td>{waiting ? <span className="material-cell-progress" role="status" aria-label="知识分块处理中"><LoaderCircle size={16} /></span> : row.existing?.chunk_count ?? '—'}</td>
-                <td>{waiting ? <span className="material-cell-progress" role="status" aria-label="向量化处理中"><LoaderCircle size={16} /></span> : row.existing ? `${row.existing.embedded_chunks}/${row.existing.chunk_count}` : '—'}</td>
+                {!product && <td>{waiting ? <span className="material-cell-progress" role="status" aria-label="知识分块处理中"><LoaderCircle size={16} /></span> : row.existing?.chunk_count ?? '—'}</td>}
+                {!product && <td>{waiting ? <span className="material-cell-progress" role="status" aria-label="向量化处理中"><LoaderCircle size={16} /></span> : row.existing ? `${row.existing.embedded_chunks}/${row.existing.chunk_count}` : '—'}</td>}
                 <td>—</td>
+                {product && <td><span className={`library-index-status ${row.error ? 'error' : 'waiting'}`}>{waiting && <LoaderCircle size={13} className="library-spinner" />}{waiting ? '处理中' : row.error ? '未完成' : '已停止'}</span>{row.existing && <small className="library-index-count">{row.existing.embedded_chunks}/{row.existing.chunk_count} 分块</small>}</td>}
               </tr>;
             })}
             {isFactsView
               ? (factRows.length === 0
                 ? (
                   <tr>
-                    <td colSpan={6}>
+                    <td colSpan={product ? 5 : 6}>
                       <div className="pm-empty compact-empty">
                         {pageError
                           ? '事实列表读取失败，见上方错误。'
-                          : '还没有可显示的热记忆事实。Agent 调用 remember，或对会话页执行 extract_facts 后会出现在这里。'}
+                          : product ? '还没有可显示的热记忆事实。对话和知识整理中记下的事实会出现在这里。' : '还没有可显示的热记忆事实。Agent 调用 remember，或对会话页执行 extract_facts 后会出现在这里。'}
                       </div>
                     </td>
                   </tr>
@@ -418,15 +452,17 @@ export function BrainDataPage({ product = false }: { product?: boolean } = {}) {
                   }}
                 >
                   <td>
-                    <b>{row.fact}</b>
-                    <div className="pm-muted mono">#{row.id} · {row.source}</div>
-                    {factTtlHint(row.valid_until) ? <div className="pm-muted">{factTtlHint(row.valid_until)}</div> : null}
+                    <span className="library-data-line">{product && <span className="library-icon"><Tags size={17} /></span>}<span><b>{row.fact}</b>
+                    <span className="pm-muted mono">#{row.id} · {product && row.entity_slug ? `${row.entity_slug} · ` : ''}{row.source}</span>
+                    {factTtlHint(row.valid_until) ? <span className="pm-muted">{factTtlHint(row.valid_until)}</span> : null}
+                    </span></span>
                   </td>
-                  <td>{row.source_id}</td>
+                  <td>{product && overview?.sources.some(source => source.id === row.source_id) ? sourceLabel(overview.sources.find(source => source.id === row.source_id)) : row.source_id}</td>
                   <td><span className="pm-pill">{factKindLabel(row.kind)}</span></td>
-                  <td>{row.entity_slug || '—'}</td>
-                  <td>{row.embedded ? '1/1' : '0/1'}</td>
+                  {!product && <td>{row.entity_slug || '—'}</td>}
+                  {!product && <td>{row.embedded ? '1/1' : '0/1'}</td>}
                   <td>{formatDate(row.created_at)}</td>
+                  {product && <td><span className={`library-index-status ${row.embedded ? 'ready' : 'waiting'}`}>{row.embedded ? '已就绪' : '待补齐'}</span><small className="library-index-count">{row.embedded ? '1/1' : '0/1'} 向量</small></td>}
                 </tr>
               )))
               : visibleRows.map(row => (
@@ -443,23 +479,25 @@ export function BrainDataPage({ product = false }: { product?: boolean } = {}) {
                   }
                 }}
               >
-                <td><b>{row.title || row.slug}</b><div className="pm-muted mono">{row.slug}</div></td>
+                <td><span className="library-data-line">{product && <span className="library-icon">{filters.view === 'structured' ? <Link2 size={17} /> : <FileText size={17} />}</span>}<span><b>{row.title || row.slug}</b><span className="pm-muted mono">{row.slug}</span></span></span></td>
                 <td>{overview?.sources.some(source => source.id === row.source_id) ? sourceLabel(overview.sources.find(source => source.id === row.source_id)) : row.source_id}</td>
                 <td><span className="pm-pill" title={pageTypeTitle(row.type)}>{pageTypeLabel(row.type)}</span></td>
-                <td>{row.chunk_count}</td>
-                <td>{row.embedded_chunks}/{row.chunk_count}</td>
+                {!product && <td>{row.chunk_count}</td>}
+                {!product && <td>{row.embedded_chunks}/{row.chunk_count}</td>}
                 <td>{formatDate(filters.view === 'trash' ? row.deleted_at : row.updated_at)}</td>
+                {product && <td><span className={`library-index-status ${row.chunk_count > 0 && row.embedded_chunks >= row.chunk_count ? 'ready' : 'waiting'}`}>{row.chunk_count > 0 && row.embedded_chunks >= row.chunk_count ? '已就绪' : '待补齐'}</span><small className="library-index-count">{row.embedded_chunks}/{row.chunk_count} 分块</small></td>}
               </tr>
             ))}
+            {product && !isFactsView && !visibleRows.length && !importingRows.length && <tr><td colSpan={5}><div className="pm-empty compact-empty library-empty"><FileText size={28} aria-hidden="true" /><strong>{pageError ? '知识列表读取失败' : filters.view === 'trash' ? '回收站是空的' : '没有符合条件的内容'}</strong><span>{pageError ? '请查看上方错误信息。' : filters.view === 'trash' ? '移出的内容会在这里保留 3 天。' : '换个关键词，或调整上方筛选条件。'}</span></div></td></tr>}
           </tbody>
-        </table>
+        </table></div>
         {renderPagination()}
       </div>
       {selectedFact && (
         <>
           <div className="drawer-overlay" onClick={() => setSelectedFact(null)} />
-          <div className="drawer light-drawer knowledge-drawer">
-            <button className="drawer-close" onClick={() => setSelectedFact(null)}>×</button>
+          <div ref={dialogRef} className="drawer light-drawer knowledge-drawer" role="dialog" aria-modal="true" aria-label="事实详情">
+            <button className="drawer-close" aria-label="关闭事实详情" onClick={() => setSelectedFact(null)}>×</button>
             <div className="knowledge-drawer-head">
               <div>
                 <div className="pm-eyebrow">{selectedFact.source_id} / 事实 #{selectedFact.id}</div>
@@ -497,8 +535,8 @@ export function BrainDataPage({ product = false }: { product?: boolean } = {}) {
       {selected && (
         <>
           <div className="drawer-overlay" onClick={() => setSelected(null)} />
-          <div className="drawer light-drawer knowledge-drawer">
-            <button className="drawer-close" onClick={() => setSelected(null)}>×</button>
+          <div ref={dialogRef} className="drawer light-drawer knowledge-drawer" role="dialog" aria-modal="true" aria-label={selected.title || selected.slug}>
+            <button className="drawer-close" aria-label="关闭知识详情" onClick={() => setSelected(null)}>×</button>
             <div className="knowledge-drawer-head">
               <div>
                 <div className="pm-eyebrow">{selected.source_id} / {selected.slug}</div>
@@ -515,9 +553,9 @@ export function BrainDataPage({ product = false }: { product?: boolean } = {}) {
               <div><span>更新</span><b>{formatDate(selected.updated_at)}</b></div>
             </div>
             <div className="drawer-tabs" role="tablist">
-              <button className={detailTab === 'content' ? 'active' : ''} onClick={() => setDetailTab('content')}>Markdown 内容</button>
-              <button className={detailTab === 'knowledge' ? 'active' : ''} onClick={() => setDetailTab('knowledge')}>观点与信息</button>
-              <button className={detailTab === 'chunks' ? 'active' : ''} onClick={() => setDetailTab('chunks')}>切片状态</button>
+              <button role="tab" aria-selected={detailTab === 'content'} className={detailTab === 'content' ? 'active' : ''} onClick={() => setDetailTab('content')}>Markdown 内容</button>
+              <button role="tab" aria-selected={detailTab === 'knowledge'} className={detailTab === 'knowledge' ? 'active' : ''} onClick={() => setDetailTab('knowledge')}>观点与信息</button>
+              <button role="tab" aria-selected={detailTab === 'chunks'} className={detailTab === 'chunks' ? 'active' : ''} onClick={() => setDetailTab('chunks')}>切片状态</button>
             </div>
             {chunksLoading && <div className="pm-empty compact-empty">正在读取 chunk 内容...</div>}
             {chunksError && <div className="pm-error-text">{chunksError}</div>}

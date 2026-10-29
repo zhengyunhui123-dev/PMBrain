@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ArrowUpRight, CheckCircle2, CircleDashed, CircleStop, FileText, LoaderCircle, PenLine, Sparkles, X, XCircle } from 'lucide-react';
+import { ArrowRight, ArrowUpRight, CircleStop, Clock3, FileText, LoaderCircle, PenLine, Settings, Sparkles, X } from 'lucide-react';
 import { api } from '../api';
 import { formatDate, type ConsoleRun } from '../lib/shared';
 import { taskName, taskUsesFileQueue } from '../../../shared/task-progress';
@@ -14,10 +14,8 @@ const activeTask = (run: ConsoleRun) => run.status === 'running' || run.status =
 const selectedTaskId = () => new URLSearchParams(window.location.hash.split('?')[1]).get('run') ?? '';
 const description = (run: ConsoleRun) => run.kind.includes('quick') ? '同步资料，建立关联并更新搜索索引' : run.kind.includes('full') || run.kind.includes('cycle') ? '理解知识，提炼内容并建立联系' : '整理知识库中的内容';
 
-function MaintenanceTaskDetail({ run, onClose, onChange }: { run: ConsoleRun; onClose: () => void; onChange: (run: ConsoleRun) => void }) {
+function MaintenanceTaskDetail({ run, onClose, onAction, onStop, busy, error }: { run: ConsoleRun; onClose: () => void; onAction: (run: ConsoleRun, retry: boolean) => void; onStop: (run: ConsoleRun) => void; busy: boolean; error: string }) {
   const dialog = useRef<HTMLDialogElement>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
   const [files, setFiles] = useState<SyncFileDetails | null>(null);
   const [loadingFiles, setLoadingFiles] = useState(false);
   const [fileError, setFileError] = useState('');
@@ -37,21 +35,6 @@ function MaintenanceTaskDetail({ run, onClose, onChange }: { run: ConsoleRun; on
     if(!filesOpen||!activeTask(run)||loadingFiles||(files?.rows.length??0)>50)return;
     const timer=setTimeout(()=>void readFiles(),2000);return()=>clearTimeout(timer);
   },[filesOpen,run.id,run.status,files,loadingFiles]);
-  const act = async (retry: boolean) => {
-    if (busy) return;
-    if (retry && !window.confirm(taskUsesFileQueue(run.kind) ? '将保留已完成资料，继续未完成的同步和知识增强。中断的模型请求可能已产生费用，继续吗？' : '将重新执行整理任务，中断的模型请求可能已产生费用，继续吗？')) return;
-    setBusy(true); setError('');
-    try {
-      if (retry) {
-        const accepted = await api.retryRun(run.id);
-        onChange(await api.run(accepted.runId));
-      } else {
-        await api.cancelRun(run.id);
-        onChange(await api.run(run.id));
-      }
-    } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
-    finally { setBusy(false); }
-  };
   return <dialog ref={dialog} className="maintenance-task-dialog" aria-label={`${name}详情`} onCancel={onClose} onClose={onClose} onClick={event=>dialogBackdropClick(event,onClose)}>
     <header><div><h2>{name}</h2><p>{description(run)}</p></div><button type="button" aria-label="关闭整理详情" onClick={onClose}><X size={20} /></button></header>
     <div className="maintenance-detail-body">
@@ -67,7 +50,19 @@ function MaintenanceTaskDetail({ run, onClose, onChange }: { run: ConsoleRun; on
       {!run.product && <p className="maintenance-muted">此历史任务没有保存步骤进度，可在任务中心查看结果。</p>}
       {error && <p className="product-error" role="alert">{error}</p>}
     </div>
-    <footer>{activeTask(run) && <button type="button" disabled={busy || taskStopping(run)} onClick={() => void act(false)}><CircleStop size={16} />{busy || taskStopping(run) ? '正在停止…' : '停止任务'}</button>}{taskCanRetry(run) && <button type="button" disabled={busy} onClick={() => void act(true)}>{busy ? '正在提交…' : taskUsesFileQueue(run.kind)||run.status==='completed' ? '继续未完成任务' : '重新执行'}</button>}<button type="button" className="maintenance-primary" onClick={() => taskLink(run)}><ArrowUpRight size={16} />查看任务</button></footer>
+    <footer><button type="button" onClick={onClose}>关闭</button>{activeTask(run) && <button type="button" className="maintenance-stop" disabled={busy || taskStopping(run)} onClick={() => onStop(run)}><CircleStop size={16} />{busy || taskStopping(run) ? '正在停止…' : '停止任务'}</button>}{taskCanRetry(run) && <button type="button" disabled={busy} onClick={() => onAction(run, true)}>{busy ? '正在提交…' : taskUsesFileQueue(run.kind)||run.status==='completed' ? '继续未完成任务' : '重新执行'}</button>}<button type="button" className="maintenance-primary" onClick={() => taskLink(run)}><ArrowUpRight size={16} />查看任务</button></footer>
+  </dialog>;
+}
+
+function MaintenanceStopDialog({ run, busy, error, onClose, onConfirm }: { run: ConsoleRun; busy: boolean; error: string; onClose: () => void; onConfirm: () => void }) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  const name = run.product?.name ?? taskName(run.kind);
+  const percent = taskPercent(run);
+  useEffect(() => { dialog.current?.showModal(); }, []);
+  return <dialog ref={dialog} className="maintenance-task-dialog maintenance-stop-dialog" aria-label={`停止「${name}」？`} onCancel={event => { event.preventDefault(); if (!busy) onClose(); }} onClose={onClose} onClick={event => { if (!busy) dialogBackdropClick(event, onClose); }}>
+    <header><h2>停止「{name}」？</h2><button type="button" aria-label="关闭停止确认" disabled={busy} onClick={onClose}><X size={20} /></button></header>
+    <div className="maintenance-detail-body"><p className="maintenance-stop-explanation">停止任务不会删除已经完成的成果，下次可以从未完成部分继续。</p><div className="maintenance-stop-summary"><strong>{name}</strong><span>{percent != null ? `${percent}% · ` : ''}{run.product?.stage ?? description(run)}</span></div>{error && <p className="product-error" role="alert">{error}</p>}</div>
+    <footer><button type="button" disabled={busy} onClick={onClose}>继续运行</button><button type="button" className="maintenance-stop" disabled={busy} onClick={onConfirm}>{busy ? '正在停止…' : '确认停止'}</button></footer>
   </dialog>;
 }
 
@@ -77,6 +72,9 @@ export function MaintenanceTasksPage() {
   const [selectedId, setSelectedId] = useState(selectedTaskId);
   const [filter, setFilter] = useState('all');
   const [starting, setStarting] = useState<'quick' | 'full' | ''>('');
+  const [busyId, setBusyId] = useState('');
+  const acting = useRef(false);
+  const [stopRun, setStopRun] = useState<ConsoleRun | null>(null);
   const submitting = useRef(false);
   const [error, setError] = useState('');
   const [schedule, setSchedule] = useState<{ enabled: boolean; time: string; timeZone: string } | null>(null);
@@ -113,34 +111,47 @@ export function MaintenanceTasksPage() {
     } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
     finally { submitting.current = false; setStarting(''); }
   };
-  const update = (run: ConsoleRun) => {
-    setLocalRuns(current => [...current.filter(row => row.id !== run.id), run]);
-    if (run.id !== selectedId) select(run);
+  const act = async (run: ConsoleRun, retry: boolean) => {
+    if (acting.current) return;
+    if (retry && !window.confirm(taskUsesFileQueue(run.kind) ? '将保留已完成资料，继续未完成的同步和知识增强。中断的模型请求可能已产生费用，继续吗？' : '将重新执行整理任务，中断的模型请求可能已产生费用，继续吗？')) return;
+    acting.current = true; setBusyId(run.id); setError('');
+    try {
+      let id = run.id;
+      if (retry) id = (await api.retryRun(run.id)).runId;
+      else await api.cancelRun(run.id);
+      const updated = await api.run(id);
+      setLocalRuns(current => [...current.filter(row => row.id !== updated.id), updated]);
+      if (selectedId === run.id && id !== run.id) select(updated);
+      if (!retry) setStopRun(null);
+    } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
+    finally { acting.current = false; setBusyId(''); }
   };
+  const requestStop = (run: ConsoleRun) => { setError(''); setStopRun(run); };
   const visible = runs.filter(run => filter === 'all' || (filter === 'active' ? activeTask(run) : filter === 'unfinished' ? ['failed', 'cancelled'].includes(run.status) || taskCanRetry(run) || (taskRoundCompleted(run) && taskHasRemaining(run)) : run.status === filter));
   return <div className="pm-page maintenance-tasks-page">
     <header className="maintenance-page-head"><div><h1>知识整理</h1><p>查看整理任务、进度和结果。</p></div><div className="maintenance-launch-actions"><button type="button" disabled={Boolean(starting)} onClick={() => void start('quick')}>{starting === 'quick' ? <LoaderCircle size={16} /> : <PenLine size={16} />}快速维护</button><button type="button" className="maintenance-primary" disabled={Boolean(starting)} onClick={() => void start('full')}>{starting === 'full' ? <LoaderCircle size={16} /> : <Sparkles size={16} />}AI 深度整理</button></div></header>
-    <div className="maintenance-automation"><span className={`maintenance-dot ${schedule?.enabled ? 'enabled' : ''}`} /><span>{schedule ? schedule.enabled ? `自动整理已开启 · 每天 ${schedule.time}（${schedule.timeZone}）` : '自动整理未开启' : scheduleError || '正在读取自动整理设置…'}</span><button type="button" onClick={() => { window.location.hash = 'settings-dream'; }}>整理设置</button></div>
+    <div className="maintenance-automation"><span className={`maintenance-automation-icon ${schedule?.enabled ? 'enabled' : ''}`}><Clock3 size={18} /></span><span>{schedule ? <><strong>自动整理{schedule.enabled ? '已开启' : '已关闭'}</strong><small>{schedule.enabled ? `每天 ${schedule.time} · ${schedule.timeZone}` : '可在整理设置中安排自动运行'}</small></> : <strong>{scheduleError || '正在读取自动整理设置…'}</strong>}</span><button type="button" onClick={() => { window.location.hash = 'settings-dream'; }}><Settings size={15} />整理设置</button></div>
     {(error || tasks.error) && <p className="product-error" role="alert">{error || tasks.error}</p>}
+    <div className="maintenance-list-toolbar"><h2>整理记录 <span>{visible.length} 条</span></h2><div><select aria-label="整理任务状态" value={filter} onChange={event => setFilter(event.target.value)}><option value="all">全部状态</option><option value="active">处理中</option><option value="completed">已完成</option><option value="unfinished">未完成</option></select><button type="button" onClick={() => { window.location.hash = 'tasks'; }}>全部后台任务 <ArrowRight size={15} /></button></div></div>
     <section className="maintenance-run-list" aria-label="整理任务列表">
-      <div className="maintenance-list-toolbar"><span>{runs.length} 条整理记录</span><select aria-label="整理任务状态" value={filter} onChange={event => setFilter(event.target.value)}><option value="all">全部状态</option><option value="active">处理中</option><option value="completed">已完成</option><option value="unfinished">未完成</option></select></div>
-      <table><thead><tr><th>任务</th><th>状态 / 当前阶段</th><th>更新时间</th><th><span className="maintenance-visually-hidden">操作</span></th></tr></thead><tbody>
-        {starting && <tr className="maintenance-submitting"><td><span className="maintenance-run-title">{starting === 'quick' ? '快速维护' : 'AI 深度整理'}</span></td><td><span role="status"><LoaderCircle size={16} />正在创建任务…</span></td><td>—</td><td /></tr>}
+      <table><thead><tr><th>任务</th><th>状态</th><th>处理进度</th><th>时间</th><th>操作</th></tr></thead><tbody>
+        {starting && <tr className="maintenance-submitting"><td><span className="maintenance-run-title">{starting === 'quick' ? '快速维护' : 'AI 深度整理'}</span></td><td><span role="status"><LoaderCircle size={16} />正在创建任务…</span></td><td>准备处理</td><td>—</td><td /></tr>}
         {visible.map(run => {
           const name = run.product?.name ?? taskName(run.kind);
           const state = run.status;
           const percent=taskPercent(run);
-          const Icon = state === 'running' ? LoaderCircle : state === 'queued' ? CircleDashed : state === 'completed' ? CheckCircle2 : state === 'cancelled' ? CircleStop : XCircle;
           return <tr key={run.id} className="maintenance-run-row" tabIndex={0} aria-label={`查看${name}任务`} onClick={() => select(run)} onKeyDown={event => { if (event.target === event.currentTarget && ['Enter', ' '].includes(event.key)) { event.preventDefault(); select(run); } }}>
-            <td><div className="maintenance-run-name"><span className="maintenance-run-icon"><FileText size={20} /></span><div><b>{name}</b><small>{run.trigger === 'scheduled' ? '自动整理 · ' : ''}{description(run)}</small></div></div></td>
-            <td><span className={`maintenance-run-state maintenance-state-${state}`}><Icon size={18} />{taskStatus(run)}{percent != null && <small>{percent}%</small>}</span><small className="maintenance-run-stage">{taskRoundCompleted(run)?taskRoundListSummary(run):run.product?.errorReason ?? (activeTask(run) ? run.product?.stage ?? '等待执行' : run.product?.metrics.filter(metric => metric.value > 0).slice(0, 2).map(metric => `${metric.label} ${metric.value}`).join(' · ') || run.product?.stage)}</small></td>
-            <td><time dateTime={run.completedAt ?? run.startedAt}>{formatDate(run.completedAt ?? run.startedAt, '—')}</time></td><td><button type="button" aria-label={`查看${name}详情`} onClick={event => { event.stopPropagation(); select(run); }}><ArrowUpRight size={17} /></button></td>
+            <td><div className="maintenance-run-name"><span className="maintenance-run-icon">{run.kind.includes('quick') ? <PenLine size={18} /> : <Sparkles size={18} />}</span><div><b>{name}</b><small>{run.trigger === 'scheduled' ? '自动整理' : '手动整理'}{run.product?.scope?.name ? ` · ${run.product.scope.name}` : ''}</small></div></div></td>
+            <td><span className={`maintenance-run-state maintenance-state-${state}`}>{taskStatus(run)}</span></td>
+            <td><div className="maintenance-run-progress">{percent != null && <div className="maintenance-progress-bar" role="progressbar" aria-label={`${name}处理进度`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}><span style={{ width: `${percent}%` }} /></div>}<small className="maintenance-run-stage">{percent != null ? `${percent}% · ` : ''}{taskRoundCompleted(run)?taskRoundListSummary(run):run.product?.errorReason ?? (activeTask(run) ? run.product?.stage ?? '等待执行' : run.product?.metrics.filter(metric => metric.value > 0).slice(0, 2).map(metric => `${metric.label} ${metric.value}`).join(' · ') || run.product?.stage)}</small></div></td>
+            <td><time dateTime={run.completedAt ?? run.startedAt}>{formatDate(run.completedAt ?? run.startedAt, '—')}</time></td><td><div className="maintenance-run-actions"><button type="button" aria-label={`查看${name}详情`} onClick={event => { event.stopPropagation(); select(run); }}>详情</button>{activeTask(run) && <button type="button" className="maintenance-stop" disabled={Boolean(busyId) || taskStopping(run)} onClick={event => { event.stopPropagation(); requestStop(run); }}>{busyId === run.id || taskStopping(run) ? '正在停止…' : '停止'}</button>}{taskCanRetry(run) && <button type="button" disabled={Boolean(busyId)} onClick={event => { event.stopPropagation(); void act(run, true); }}>{busyId === run.id ? '提交中…' : taskUsesFileQueue(run.kind)||run.status==='completed' ? '继续' : '重新执行'}</button>}</div></td>
           </tr>;
         })}
       </tbody></table>
       {!visible.length && !starting && <div className="maintenance-list-empty"><FileText size={28} /><b>{tasks.loaded ? runs.length ? '没有符合筛选的任务' : '暂无整理记录' : '正在读取任务…'}</b>{tasks.loaded && !runs.length && <span>发起整理后，进度和结果会保存在这里。</span>}</div>}
     </section>
     <p className="maintenance-retention">离开页面不影响后台任务，完成后可在这里查看结果。</p>
-    {selected && <MaintenanceTaskDetail key={selected.id} run={localRuns.find(run => run.id === selected.id) ?? selected} onClose={close} onChange={update} />}
+    {selected && <MaintenanceTaskDetail key={selected.id} run={localRuns.find(run => run.id === selected.id) ?? selected} onClose={close} onAction={(run, retry) => void act(run, retry)} onStop={requestStop} busy={Boolean(busyId)} error={error} />}
+    {stopRun && <MaintenanceStopDialog run={runs.find(run => run.id === stopRun.id) ?? stopRun} busy={Boolean(busyId)} error={error} onClose={() => { if (!acting.current) setStopRun(null); }} onConfirm={() => void act(stopRun, false)} />}
   </div>;
 }

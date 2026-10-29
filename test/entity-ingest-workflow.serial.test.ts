@@ -21,6 +21,51 @@ const url=process.env.PMBRAIN_RELATION_TEST_DATABASE_URL;
 const context={slug:'申报.xlsx',sourceId:'vault',body:'四川省商务厅牵头川商出海项目，并组织企业参加广交会。张三负责川商出海项目。',chunkBody:'四川省商务厅牵头川商出海项目，并组织企业参加广交会。张三负责川商出海项目。'};
 const receipt={entities:['companies/四川省商务厅','projects/川商出海','concepts/广交会'],relations:[{from:'companies/四川省商务厅',to:'projects/川商出海',link_type:'mentions',evidence:'四川省商务厅牵头川商出海项目'}]};
 
+test('快速维护只允许四类实体，同时仍可为新对象建页',async()=>{
+  const body='张三、星河公司、星河团队和星河项目采用晨会方法。';
+  const input={...context,body,chunkBody:body,quickEntitiesOnly:true};
+  for(const [slug,title,type] of [['people/张三','张三','person'],['companies/星河公司','星河公司','company'],['companies/星河团队','星河团队','organization'],['projects/星河项目','星河项目','project']]){
+    await validateIngestWrite(engine,input,'put_page',{slug,content:`---\ntitle: ${title}\ntype: ${type}\n---\n${title}。[Source: 申报.xlsx]`});
+  }
+  await expectRejection(validateIngestWrite(engine,input,'put_page',{slug:'concepts/晨会方法',content:'---\ntitle: 晨会方法\ntype: concept\n---\n晨会方法。[Source: 申报.xlsx]'}),'type');
+});
+
+test('快速维护不把同名概念或公司当成项目，仍可创建有证据的新项目',async()=>{
+  await page('concepts/晨光','concept','晨光平台','原有概念。');
+  await page('companies/晨光','company','晨光平台','同名公司。');
+  const body='晨光平台是已批准建设的软件项目。';
+  const input={...context,body,chunkBody:body,quickEntitiesOnly:true};
+  await validateIngestWrite(engine,input,'put_page',{slug:'projects/晨光',content:'---\ntitle: 晨光平台\ntype: project\n---\n晨光平台是软件项目。[Source: 申报.xlsx]'});
+});
+
+test('已有同名页面仍可更新，不允许用大小写或空格新建重复实体',async()=>{
+  await page('companies/existing-a','company','Northwind Demo Company','原来的公司资料。');
+  await page('companies/existing-b','company','Northwind Demo Company','另一个同名公司资料。');
+  await engine.putPage('companies/existing-a',{type:'company',title:'Northwind Demo Company',compiled_truth:'原来的公司资料。',frontmatter:{aliases:['北风一号']}},{sourceId:'vault'});
+  const body='Northwind Demo Company（北风一号）发布了新资料。';
+  const input={...context,body,chunkBody:body,quickEntitiesOnly:true};
+  await validateIngestWrite(engine,input,'put_page',{slug:'companies/existing-a',content:'Northwind Demo Company 发布了新资料。[Source: 申报.xlsx]'});
+  const ambiguous='Northwind Demo Company 发布了新资料。';
+  await expectRejection(validateIngestWrite(engine,{...input,body:ambiguous,chunkBody:ambiguous},'put_page',{slug:'companies/existing-b',content:'Northwind Demo Company 发布了新资料。[Source: 申报.xlsx]'}),'ambiguous');
+  const lower='northwind demo company 发布了新资料。';
+  await expectRejection(validateIngestWrite(engine,{...input,body:lower,chunkBody:lower},'put_page',{slug:'companies/new-variant',content:'---\ntitle: northwind demo company\ntype: company\n---\nnorthwind demo company 发布了新资料。[Source: 申报.xlsx]'}),'existing');
+});
+
+test('新资料重复同一事实时复用旧事实并保留新来源，同时追加不同事实',async()=>{
+  const old='川商出海新增验收负责人。[Source: 申报.xlsx]';
+  const first=await annotateIngestContent(engine,{...context,quickEntitiesOnly:true},'projects/川商出海',`---\ntitle: 川商出海\ntype: project\n---\n${old}`);
+  await engine.putPage('projects/川商出海',parseMarkdown(first,'projects/川商出海'),{sourceId:'vault'});
+  const body='川商出海新增验收负责人，项目将在六月复核。';
+  await page('第二份.md','note','第二份资料',body);
+  const input={...context,slug:'第二份.md',body,chunkBody:body,quickEntitiesOnly:true};
+  const second=await annotateIngestContent(engine,input,'projects/川商出海','---\ntitle: 川商出海\ntype: project\n---\n川商出海新增验收负责人。[Source: 第二份.md]\n\n项目将在六月复核。[Source: 第二份.md]');
+  await engine.putPage('projects/川商出海',parseMarkdown(second,'projects/川商出海'),{sourceId:'vault'});
+  const saved=(await engine.getPage('projects/川商出海',{sourceId:'vault'}))!;
+  expect(saved.compiled_truth.match(/川商出海新增验收负责人。/g)).toHaveLength(1);
+  expect(saved.compiled_truth).toContain('项目将在六月复核。');
+  expect((await activeIngestContent(engine,saved)).origins.map(origin=>origin.slug).sort()).toEqual(['申报.xlsx','第二份.md'].sort());
+});
+
 test('新项目名不能采用原文明确否定的建设对象，肯定对象继续保留',async()=>{
   const body='与赵经理中转站管理系统沟通结果：不是做中转站管理系统，是做一个应急时期的供销存管理系统。';
   const input={...context,body,chunkBody:body};

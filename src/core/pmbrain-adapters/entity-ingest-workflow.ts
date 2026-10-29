@@ -28,6 +28,7 @@ export interface EntityIngestContext {
   turn_entity_refs?:string[];
   compact_contract?:boolean;
   batch_capture?:boolean;
+  quickEntitiesOnly?:boolean;
   pageId?:number|string;
   sourceIncarnation?:string;
 }
@@ -82,6 +83,7 @@ function parseReceipt(text:string):IngestReceipt {
 }
 
 function surfaceName(value:string):string{return value.replace(/[\s"'“”‘’]/gu,'');}
+function identityName(value:string):string{return value.normalize('NFKC').toLowerCase().replace(/[\s"'“”‘’()（）]/gu,'');}
 function rejectedProjectIdentity(body:string,title:string):boolean{
   const name=surfaceName(title).replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
   const negative=new RegExp(`(?:不是(?:要|在)?(?:做|建设|开发)|不(?:做|建设|开发|叫|名为|称为)|(?:本项目|本系统|项目名称|系统名称)(?:不是|并非))[^，,。；;!?！？]{0,8}${name}(?=$|而是|而非|但是|但)`,'u');
@@ -121,6 +123,7 @@ async function resolveEntity(engine:BrainEngine,context:EntityIngestContext,refe
   if(![context.sourceId,'default'].includes(resolved.sourceId!))throw new UnrecoverableError(`ingest source boundary: ${reference}`);
   const page=await engine.getPage(resolved.slug,{sourceId:resolved.sourceId});
   if(!page||!['person','company','organization','entity','project','concept'].includes(page.type))throw new UnrecoverableError(`ingest target is not an entity: ${reference}`);
+  if(context.quickEntitiesOnly&&!['person','company','organization','project'].includes(page.type))throw new UnrecoverableError(`ingest invalid quick entity type: ${reference}`);
   const indexed=pages.find(candidate=>candidate.slug===page.slug&&candidate.source_id===resolved.sourceId);
   const aliases=[page.frontmatter.aliases,indexed?.aliases].flatMap(value=>Array.isArray(value)?value.filter((x):x is string=>typeof x==='string'):[]);
   const evidence=evidenceFor(context.chunkBody,[page.title,...aliases]);
@@ -172,6 +175,7 @@ export async function validateIngestWrite(engine:BrainEngine,context:EntityInges
     const title=String(input.title??metadata.title??existing?.title??parsed.title);
     const aliases=parsed.frontmatter.aliases??existing?.frontmatter.aliases;
     const entityType=String(input.type??metadata.type??existing?.type??parsed.type);
+    if(context.quickEntitiesOnly&&(!['person','company','organization','project'].includes(entityType)||existing&&entityType!==existing.type))throw new UnrecoverableError(`ingest invalid quick entity type: ${slug}`);
     if(!existing&&entityType==='project'){
       if(rejectedProjectIdentity(context.body,title))throw new UnrecoverableError(`ingest project identity rejected by the source: '${title}' is explicitly excluded as the project name or construction target; keep the affirmative identity and other evidenced entities, without changing historical pages`);
       const escaped=surfaceName(title).replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
@@ -192,10 +196,17 @@ export async function validateIngestWrite(engine:BrainEngine,context:EntityInges
     if(!content.includes('[Source:')||!content.includes(context.slug))throw new UnrecoverableError(`ingest provenance missing: ${slug}`);
     if(!['person','company','organization','entity','project','concept'].includes(String(input.type??metadata.type??existing?.type??parsed.type)))throw new UnrecoverableError(`ingest invalid entity type: ${slug}`);
     const pages=await loadLinkPageMetadata(engine);
-    const matching=pages.filter(p=>['person','company','organization','entity','project','concept'].includes(p.type)&&(p.title===title||Array.isArray(p.aliases)&&p.aliases.includes(title))&&[context.sourceId,'default'].includes(p.source_id));
+    const compatibleType=(type:string)=>!context.quickEntitiesOnly||type===entityType||['company','organization'].includes(type)&&['company','organization'].includes(entityType);
+    const matching=pages.filter(p=>['person','company','organization','entity','project','concept'].includes(p.type)&&compatibleType(p.type)&&[p.title,...(Array.isArray(p.aliases)?p.aliases:[])].some(name=>typeof name==='string'&&identityName(name)===identityName(title))&&[context.sourceId,'default'].includes(p.source_id));
     const local=matching.filter(p=>p.source_id===context.sourceId);
     const preferred=local.length?local:matching;
-    if(preferred.some(p=>p.slug!==slug||p.source_id!==sourceId))throw new UnrecoverableError(`ingest reuse existing entity: ${preferred.map(p=>`${p.source_id}:${p.slug}`).join(', ')}`);
+    const target=preferred.find(p=>p.slug===slug&&p.source_id===sourceId);
+    if(preferred.length&&!target)throw new UnrecoverableError(`ingest reuse existing entity: ${preferred.map(p=>`${p.source_id}:${p.slug}`).join(', ')}`);
+    if(target&&preferred.length>1){
+      const uniqueAlias=(Array.isArray(target.aliases)?target.aliases:[]).some(alias=>typeof alias==='string'&&identityName(alias).length>=2&&identityName(context.chunkBody).includes(identityName(alias))&&!preferred.some(other=>other!==target&&[other.title,...(Array.isArray(other.aliases)?other.aliases:[])].some(name=>typeof name==='string'&&identityName(name)===identityName(alias))));
+      const known=Array.isArray(existing?.frontmatter.pmbrain_ingest_provenance)&&existing.frontmatter.pmbrain_ingest_provenance.some((record:Record<string,unknown>)=>record.sourceId===context.sourceId&&record.slug===context.slug&&record.pageId===String(context.pageId));
+      if(!uniqueAlias&&!known)throw new UnrecoverableError(`ingest ambiguous existing entity: ${preferred.map(p=>`${p.source_id}:${p.slug}`).join(', ')}`);
+    }
     if(!existing){
       const name=surfaceName(title);
       const nearby=pages.filter(p=>[context.sourceId,'default'].includes(p.source_id)&&p.type===String(metadata.type)&&surfaceName(p.title)!==name&&(surfaceName(p.title).includes(name)||name.includes(surfaceName(p.title))));
@@ -396,8 +407,8 @@ export async function finalizeEntityIngest(engine:BrainEngine,context:EntityInge
     const created=rows.length?await tx.addLinksBatch(rows):0;
     for(const row of rows){
       const stored=await tx.executeRaw(`SELECT l.id FROM links l JOIN pages f ON f.id=l.from_page_id JOIN pages t ON t.id=l.to_page_id
-        WHERE f.slug=$1 AND f.source_id=$2 AND t.slug=$3 AND t.source_id=$4 AND l.link_type=$5 AND l.origin_field=$6`,
-        [row.from_slug,row.from_source_id,row.to_slug,row.to_source_id,row.link_type,row.origin_field]);
+        WHERE f.slug=$1 AND f.source_id=$2 AND t.slug=$3 AND t.source_id=$4 AND l.link_type=$5 AND l.origin_field=$6 AND l.origin_page_id=$7`,
+        [row.from_slug,row.from_source_id,row.to_slug,row.to_source_id,row.link_type,row.origin_field,source.id]);
       if(stored.length!==1)throw new UnrecoverableError(`ingest relationship readback failed: ${row.from_slug} -> ${row.to_slug}`);
     }
     return created;

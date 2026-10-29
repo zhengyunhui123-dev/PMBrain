@@ -1,6 +1,6 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { ArrowLeft, Box, Cable, CircleHelp, Database, FileText, Home, Library, MessageCircle, Link, ListTodo, Monitor, PanelLeftClose, PanelLeftOpen, PenLine, RefreshCw, Search, Settings, ShieldCheck, SlidersHorizontal, Waypoints } from 'lucide-react';
+import { ArrowLeft, Box, Cable, CircleHelp, Database, FileText, Home, Library, MessageCircle, Link, ListTodo, Monitor, Moon, PanelLeftClose, PanelLeftOpen, PenLine, RefreshCw, Search, Settings, ShieldCheck, SlidersHorizontal, Sun, Waypoints } from 'lucide-react';
 import { useServiceAvailability } from './useServiceAvailability';
 import { TaskActivityProvider } from './TaskActivity';
 const SettingsPage = React.lazy(() => import('../pages/Settings').then(module => ({ default: module.SettingsPage })));
@@ -72,7 +72,7 @@ export function ProductApp() {
   const [setupLoading, setSetupLoading] = useState(false);
   const setupRequest = useRef(0);
   const [filter, setFilter] = useState('');
-  const [collapsed, setCollapsed] = useState(() => localStorage.getItem(NAV_COLLAPSED_KEY) === '1');
+  const [collapsed, setCollapsed] = useState(() => localStorage.getItem(NAV_COLLAPSED_KEY) !== '0');
   const [maintenanceOpen, setMaintenanceOpen] = useState(false);
   const [restarting,setRestarting]=useState(false);
   const [restartError,setRestartError]=useState('');
@@ -206,6 +206,7 @@ export function ProductApp() {
     window.addEventListener('pmbrain:settings-panel', showPanel);
     return () => { setupRequest.current++; unsubscribe(); unsubscribeTheme(); unsubscribeNavigation(); unsubscribePanel(); unsubscribeUpdates(); unsubscribeStartup(); unsubscribeUpdateState(); window.removeEventListener('pmbrain:settings-panel', showPanel); };
   }, []);
+  const resolvedTheme = desktopTheme ?? (theme === 'system' ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : theme);
   const changeTheme = (next: ThemeMode) => {
     if (desktop) void desktop.setTheme(next).then(() => setTheme(next)).catch((error: unknown) => setStateError(String(error)));
     else { storeThemeMode(next); setTheme(next); }
@@ -230,14 +231,16 @@ export function ProductApp() {
     : mode === 'ready' && availability.databaseReady
       ? <span className="home-health-anchor"><StatusChip kind="ready" label="知识库 · 正常" onClick={() => setHealthOpen(open => !open)} />{healthOpen && <div className="home-health-menu" onClick={event => event.stopPropagation()}><p>知识库服务正在运行。</p><button type="button" onClick={() => { setHealthOpen(false); navigate(desktop ? 'settings-system' : 'settings-knowledge'); }}>{desktop ? '打开系统设置' : '打开知识库设置'}</button></div>}</span>
       : ready && mode === 'ready' ? <StatusChip kind="busy" label="知识库正在准备" onClick={() => setMaintenanceOpen(true)} /> : null;
-  return <TaskActivityProvider enabled={ready && needsSetup !== true}><React.Suspense fallback={<p className="pm-empty" role="status">正在打开页面…</p>}><div className={`product-app ${isSettings ? 'settings-open' : ''} ${collapsed ? 'nav-collapsed' : ''}`}>
+  return <TaskActivityProvider enabled={ready && needsSetup !== true}><React.Suspense fallback={<p className="pm-empty" role="status">正在打开页面…</p>}><div data-page={page} className={`product-app ${['home', 'assistant', 'data', 'dream'].includes(page) ? 'design-refresh' : ''} ${isSettings ? 'settings-open' : ''} ${collapsed ? 'nav-collapsed' : ''}`}>
     <aside className="product-nav" hidden={isSettings}>
       <button type="button" className="nav-collapse" aria-expanded={!collapsed} aria-label={collapsed ? '展开菜单' : '收起菜单'} onClick={toggleNav}>{collapsed ? <PanelLeftOpen size={15} /> : <PanelLeftClose size={15} />}</button>
       <div className="product-brand"><span>P</span><b>PMBrain</b></div>
+      <div className="product-nav-label">工作空间</div>
       <nav aria-label="PMBrain 主导航">{primaryNav.map(([Icon, label, target]) => <button key={target} type="button" className={((target === 'assistant' && assistantTarget(page)) || (target === 'home' && (page === 'home' || page === 'create')) || page === target) ? 'active' : ''} aria-label={label} title={collapsed ? label : undefined} onClick={() => navigate(target)}><Icon /><span>{label}</span></button>)}<hr /><button type="button" className={page === 'docs' ? 'active' : ''} aria-label="帮助支持" title={collapsed ? '帮助支持' : undefined} onClick={() => navigate('docs')}><CircleHelp /><span>帮助支持</span></button><button type="button" className={isSettings ? 'active' : ''} aria-label="设置" title={collapsed ? '设置' : undefined} onClick={() => { sessionStorage.removeItem(CREATE_RETURN_KEY); navigate('settings-models'); }}><Settings /><span>设置</span></button></nav>
-      <small className="product-nav-version">v{PRODUCT_VERSION}</small>
+      <div className="product-nav-bottom"><button type="button" className="product-theme-toggle" aria-label="切换主题" title="切换浅色或深色" onClick={() => changeTheme(resolvedTheme === 'dark' ? 'light' : 'dark')}>{resolvedTheme === 'dark' ? <Sun /> : <Moon />}<span>{resolvedTheme === 'dark' ? '切换浅色' : '切换深色'}</span></button><small className="product-nav-version">v{PRODUCT_VERSION}</small></div>
     </aside>
     <main className={`product-main ${isSettings ? 'is-settings' : ''}`}>
+      {['home', 'data', 'dream'].includes(page) && <header className="product-page-header"><strong>{({ home: '首页', data: '知识库', dream: '知识整理' } as Record<string, string>)[page]}</strong><div>{page === 'home' && status}</div></header>}
       {stateError && <div className="product-error" role="alert">{stateError}</div>}
       {setupError && <div className="product-error" role="alert">{setupError}<button type="button" className="pm-ghost" disabled={setupLoading} onClick={() => void readSetup()}>重试读取配置</button></div>}
       <MaintenanceDialog view={maintenance} open={maintenanceOpen} onClose={() => setMaintenanceOpen(false)} onRecover={() => { setMaintenanceOpen(false); navigate(service?.phase === 'failed' ? 'settings-recovery' : 'settings-updates'); }} onRestart={desktop&&service?.phase==='failed'&&service.category==='transient'?()=>void restartService():undefined} restarting={restarting} restartError={restartError} />

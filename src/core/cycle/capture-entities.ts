@@ -19,10 +19,10 @@ import { alignCapturedEntityGraph } from './entity-graph-align.ts';
 import { lineGrammarOptions } from '../line-grammar.ts';
 import { locateIngestSkillsDir, readIngestContract,readEntityCaptureContract, pruneEntityIngestLinks,ingestAbortKind } from '../pmbrain-adapters/entity-ingest-workflow.ts';
 import { captureScopeKey,captureChunkKey,planCaptureBodies,sourceTimelineDates } from '../pmbrain-adapters/entity-capture-plan.ts';
-import { captureReceiptProof,reuseCaptureReceipt,type CaptureReceipt } from '../pmbrain-adapters/entity-capture-receipts.ts';
+import { captureReceiptProof,reuseCaptureReceipt,quickCaptureReceipt,type CaptureReceipt } from '../pmbrain-adapters/entity-capture-receipts.ts';
 import { runCaptureWindow,CaptureAdmission,withCaptureWrite } from '../pmbrain-adapters/entity-capture-window.ts';
 import { pendingCaptureCandidates, publishCaptureManifest } from '../pmbrain-adapters/entity-capture-manifest.ts';
-import { excludedCapturePath } from '../pmbrain-adapters/entity-capture-request.ts';
+import { excludedEntityCapturePath } from '../pmbrain-adapters/entity-capture-request.ts';
 import {
   ENTITY_CAPTURE_CANDIDATE_LIMIT,
   type CaptureEntityBrief,
@@ -83,6 +83,7 @@ export interface EntityCaptureChunk extends EntityCaptureCandidate {
 }
 
 export interface CaptureEntitiesOpts {
+  quickEntitiesOnly?: boolean;
   window?:{maxChunks:number;maxDurationMs:number};
   batchCapture?: boolean;
   getConcurrency?:()=>number;
@@ -139,6 +140,7 @@ export function buildEntityCapturePrompt(
   candidates: CaptureEntityBrief[] = [],
   acknowledged:CaptureEntityBrief[] = [],
   maxTurns=20,
+  quickEntitiesOnly=false,
 ): string {
   const isChunk = 'chunkBody' in page;
   const body = isChunk ? page.chunkBody : page.body;
@@ -162,8 +164,8 @@ ${candidateBlock}
 已写入同一份未变化原文并通过证据检查的实体（中断前已持久化；不要再次 search、get_page 或 put_page；全部列入最终 entities）：
 ${acknowledged.length?acknowledged.map(entity=>`${entity.sourceId}:${entity.slug} | ${entity.title}`).join('\n'):'无'}
 
-put_page 只提交本段全部新增事实和需要更新的当前状态，程序读取旧页并合并保留旧事实、时间线、手工内容和隐私设置，无需把已有实体整页读回再重写。只有需要理解旧内容时才 get_page。一次提交本段关于同一实体的全部事实，避免拆成多次补写。当前状态只保留一节。content 必须以完整 YAML frontmatter 开头，包含 title 和 type；Markdown 的 # 标题不能设置页面身份。title 使用本段原文名称，复用现有准确 slug，禁止将拼音 slug 当标题。类型是 person、company、organization、project、concept；未知类型不建页。项目和概念只有原文明确信息才建，不作普通关键词互连。
-人物 people/、单位 companies/、项目 projects/、概念 concepts/。已有实体标题不在本段逐字出现时，在 YAML aliases 中记录本段明确使用的名称并保留原身份，禁止臆测别名。原始资料本身就是可用的 brain context，包含明确职责、项目或事件时可满足有意义内容要求；不需外部补充。正文每条事实带 [Source: ${page.slug}]。使用 [[${page.sourceId}:${page.slug}]] 回链资料，禁止猜测或缩写路径。同一明确日期事件传播到每个实际参与实体；add_timeline_entry 的 source 必须包含 ${page.slug}，date 必须为原文明确给出的 YYYY-MM-DD；只有月份或阶段范围的事实留在正文，不得编造某月 1 日。
+put_page 只提交本段全部新增事实和需要更新的当前状态，程序读取旧页并合并保留旧事实、时间线、手工内容和隐私设置，无需把已有实体整页读回再重写。只有需要理解旧内容时才 get_page。一次提交本段关于同一实体的全部事实，避免拆成多次补写。当前状态只保留一节。content 必须以完整 YAML frontmatter 开头，包含 title 和 type；Markdown 的 # 标题不能设置页面身份。title 使用本段原文名称，复用现有准确 slug，禁止将拼音 slug 当标题。类型是 ${quickEntitiesOnly?'person、company、organization、project':'person、company、organization、project、concept'}；未知类型不建页。项目${quickEntitiesOnly?'':'和概念'}只有原文明确信息才建，不作普通关键词互连。
+人物 people/、单位 companies/、项目 projects/${quickEntitiesOnly?'':'、概念 concepts/'}。已有实体标题不在本段逐字出现时，在 YAML aliases 中记录本段明确使用的名称并保留原身份，禁止臆测别名。原始资料本身就是可用的 brain context，包含明确职责、项目或事件时可满足有意义内容要求；不需外部补充。正文每条事实带 [Source: ${page.slug}]。使用 [[${page.sourceId}:${page.slug}]] 回链资料，禁止猜测或缩写路径。同一明确日期事件传播到每个实际参与实体；add_timeline_entry 的 source 必须包含 ${page.slug}，date 必须为原文明确给出的 YYYY-MM-DD；只有月份或阶段范围的事实留在正文，不得编造某月 1 日。
 已有候选和本段足够确认实体身份时，直接在同一轮批量调用各实体 put_page、必要的 add_link/add_timeline_entry，最后调用 complete_ingest 提交完整验收清单。只有身份确有歧义或缺少查重结果时才调用一次 search，query 用逗号分隔全部待确认名称。程序按依赖顺序执行并统一读回验收，成功后直接结束，不再调用模型总结。禁止反复搜索、resolve_slugs 或整库 list_pages。新实体内容来自本段资料，不要求额外读取其他原始文档；已有实体复用准确身份，只提交新事实。只有增加明确新事实才 put_page。add_link 的 from/to 使用准确 slug，context 必须逐字引用本段同时包含两端名称的原文；不得凭共现编造任职、拥有或投资关系，普通引用使用 mentions。
 优先完成资料的主题项目、牵头单位和明确职责关系，再处理有明确身份、职责或事件的人物；只有姓名的名单不单独建实体。一次批量完成查重，不要逐个姓名分轮搜索。本分块初始允许 ${Math.min(8,maxTurns)} 轮，按不同实体数量放宽，最多 ${maxTurns} 轮，包括最后的验收回执；不要重复操作已完成的实体。
 写入完成后返回唯一 JSON 验收清单（不写额外总结）。页面和关系由程序统一读回验收，不再要求模型反复查询图谱：
@@ -443,10 +445,10 @@ async function countCaptureLinkGaps(
   engine: BrainEngine,
   entities:Array<{slug:string;sourceId:string}>,
   sources:Array<{slug:string;sourceId:string;body:string}>,
-): Promise<{ isolated: number; unlinkedMentions: number;linked:number }> {
-  if (!entities.length) return { isolated: 0, unlinkedMentions: 0,linked:0 };
-  const isolatedRows = await engine.executeRaw<{ n: number }>(
-    `SELECT count(DISTINCT p.slug)::int AS n
+): Promise<{ isolated: number; unlinkedMentions: number;linked:number;isolatedRefs:Set<string>;missingPairs:Set<string> }> {
+  if (!entities.length) return { isolated: 0, unlinkedMentions: 0,linked:0,isolatedRefs:new Set(),missingPairs:new Set() };
+  const isolatedRows = await engine.executeRaw<{ slug: string; source_id:string }>(
+    `SELECT p.slug,p.source_id
        FROM pages p
       WHERE p.deleted_at IS NULL
         AND p.source_id||':'||p.slug = ANY($1::text[])
@@ -457,7 +459,8 @@ async function countCaptureLinkGaps(
         )`,
     [entities.map(entity=>`${entity.sourceId}:${entity.slug}`)],
   );
-  let unlinkedMentions=0;const linked=new Set<string>();
+  let unlinkedMentions=0;const linked=new Set<string>(),missingPairs=new Set<string>();
+  const isolatedRefs=new Set(isolatedRows.map(row=>`${row.source_id}:${row.slug}`));
   const normalize=(value:string)=>value.replace(/[\s"'“”‘’]/gu,'');
   const rows=await engine.executeRaw<{slug:string;source_id:string;title:string;aliases:unknown}>(`SELECT slug,source_id,title,frontmatter->'aliases' aliases
     FROM pages WHERE deleted_at IS NULL AND source_id||':'||slug=ANY($1::text[])`,[entities.map(entity=>`${entity.sourceId}:${entity.slug}`)]);
@@ -475,12 +478,12 @@ async function countCaptureLinkGaps(
     for(const entity of named){
       if(entity.sourceId!==source.sourceId&&entity.sourceId!=='default')continue;
       if(!entity.names.some(name=>name.trim().length>=2&&normalized.includes(normalize(name))))continue;
-      if(present.has(pair(`${source.sourceId}:${source.slug}`,`${entity.sourceId}:${entity.slug}`)))linked.add(`${entity.sourceId}:${entity.slug}`);else unlinkedMentions++;
+      if(present.has(pair(`${source.sourceId}:${source.slug}`,`${entity.sourceId}:${entity.slug}`)))linked.add(`${entity.sourceId}:${entity.slug}`);else{unlinkedMentions++;missingPairs.add(JSON.stringify([`${source.sourceId}:${source.slug}`,`${entity.sourceId}:${entity.slug}`]));}
     }
   }
   return {
-    isolated: Number(isolatedRows[0]?.n ?? 0),
-    unlinkedMentions,linked:linked.size,
+    isolated: isolatedRefs.size,
+    unlinkedMentions,linked:linked.size,isolatedRefs,missingPairs,
   };
 }
 
@@ -496,7 +499,7 @@ export async function runPhaseCaptureEntities(
     throwIfAborted(opts.signal, '[dream] capture candidate planning');
     if(opts.slugs?.length===0)break;
     const batch = await selectEntityCaptureCandidates(engine, opts.sourceId, { metadataOnly: true, slugs: opts.slugs, afterPageId, limit: 100 });
-    selected.push(...batch.filter(page=>!excludedCapturePath(page.slug)));
+    selected.push(...batch.filter(page=>!excludedEntityCapturePath(page.slug)));
     if (batch.length < 100) break;
     afterPageId = Number(batch.at(-1)!.pageId);
     await opts.yieldDuringPhase?.();
@@ -587,8 +590,9 @@ export async function runPhaseCaptureEntities(
     execution_mode: executionMode,
     fallback_used: false,
   };
-  const systemContract=readEntityCaptureContract(skillsDir);
-  const manifestOptions={model:chosen.model,contract:systemContract};
+  const baseContract=readEntityCaptureContract(skillsDir);
+  const systemContract=baseContract+(opts.quickEntitiesOnly?'\n快速维护只识别 person、company、organization、project 四类；不创建或更新其他类型。':'');
+  const manifestOptions={model:opts.quickEntitiesOnly?'quick-entities-v1':chosen.model,contract:systemContract};
   const {loadExtractionPack}=await import('../link-extraction.ts');
   const grammar=await lineGrammarOptions(engine);
   const policies=new Map<string,string>();
@@ -746,6 +750,46 @@ export async function runPhaseCaptureEntities(
   const failedPageSlugs = new Set<string>();
   const windowReached=()=>!failureStop&&opts.window!=null&&windowStartedAt>0&&(windowAdmissions>=Math.max(1,opts.window.maxChunks)||Date.now()-windowStartedAt>=Math.max(1,opts.window.maxDurationMs));
   const verifiedChildIds:number[]=[];
+  const duplicateLocks=new Map<string,Promise<void>>();
+  const withDuplicateLock=async<T>(item:PendingPage,work:()=>Promise<T>):Promise<T>=>{
+    if(!opts.quickEntitiesOnly)return work();
+    const key=JSON.stringify([item.page.sourceId,item.bodyHash]);
+    const previous=duplicateLocks.get(key);
+    let release!:()=>void;
+    const current=new Promise<void>(resolve=>{release=resolve;});
+    duplicateLocks.set(key,current);
+    try{if(previous)await previous;throwIfAborted(opts.signal,'[dream] duplicate capture');return await work();}
+    finally{release();if(duplicateLocks.get(key)===current)duplicateLocks.delete(key);}
+  };
+  const reuseDuplicateChunk=async(chunk:EntityCaptureChunk):Promise<boolean>=>{
+    if(!opts.quickEntitiesOnly)return false;
+    const rows=await engine.executeRaw<{id:number;receipt:CaptureReceipt;origin:import('../pmbrain-adapters/entity-ingest-workflow.ts').EntityIngestContext}>(`SELECT j.id,j.result AS receipt,j.data->'ingest_context' AS origin FROM minion_jobs j
+      JOIN pages p ON p.slug=j.data->'ingest_context'->>'slug' AND p.source_id=j.data->'ingest_context'->>'sourceId'
+      JOIN sources s ON s.id=p.source_id
+      WHERE j.status='completed' AND j.result->>'ingest_verified'='true' AND j.result ? 'capture_proof'
+        AND j.data->'ingest_context'->>'sourceId'=$1
+        AND j.data->'ingest_context'->>'body'=$2 AND j.data->'ingest_context'->>'chunkBody'=$3
+        AND left(j.data->>'system',length($4))=$4
+        AND p.deleted_at IS NULL AND NOT s.archived AND p.compiled_truth=$2
+        AND p.id::text=j.data->'ingest_context'->>'pageId' AND s.incarnation::text=j.data->'ingest_context'->>'sourceIncarnation'
+      ORDER BY j.id DESC LIMIT 16`,[chunk.sourceId,chunk.body,chunk.chunkBody,baseContract]);
+    for(const row of rows){
+      const context={slug:chunk.slug,sourceId:chunk.sourceId,body:chunk.body,chunkBody:chunk.chunkBody,pageId:chunk.pageId,sourceIncarnation:chunk.sourceIncarnation,quickEntitiesOnly:true};
+      const receipt=quickCaptureReceipt(row.receipt,chunk.sourceId);
+      if(!receipt)continue;
+      const reused=await reuseCaptureReceipt(engine,context,receipt,row.origin.slug===chunk.slug?undefined:row.origin);
+      if(!reused)continue;
+      const manifest=manifestPages.get(manifestId(chunk))!;
+      manifest.receiptIds.add(row.id);
+      manifest.proofs.push(...await captureReceiptProof(engine,context,reused.entities));
+      manifest.unresolved.push(...(reused.unresolved??[]));unresolvedReferences.push(...(reused.unresolved??[]));
+      for(const entity of reused.entities){manifest.entities.set(`${entity.sourceId}:${entity.slug}`,entity);recognizedEntities.set(`${entity.sourceId}:${entity.slug}`,entity);}
+      sourceRefs.set(`${chunk.sourceId}:${chunk.slug}`,{...chunk,body:'',bodyHash:createHash('sha256').update(chunk.body).digest('hex')});
+      directLinks+=reused.links;previouslyCompleted++;verifiedChildIds.push(row.id);
+      return true;
+    }
+    return false;
+  };
   const rememberRelationError = (error: unknown) => {
     if (opts.signal?.aborted) throw error;
     failureStop = true;
@@ -800,7 +844,7 @@ export async function runPhaseCaptureEntities(
         await engine.executeRaw("UPDATE minion_jobs SET result=jsonb_set(result,'{graph_reconciled}','true'::jsonb) WHERE id=ANY($1::int[]) AND status='completed'",[[...cachedJobIds]]);
         cachedRepairNeeded=false;cachedJobIds.clear();
       }
-      try{await runCaptureWindow(batch,async(item,slot)=>{
+      try{await runCaptureWindow(batch,(item,slot)=>withDuplicateLock(item,async()=>{
         const pageQueueName=`${childQueueName}-${slot}`;
         throwIfAborted(opts.signal, '[dream] capture entities');
         const pageStop = stopState();
@@ -817,12 +861,13 @@ export async function runPhaseCaptureEntities(
         const entityIndex = await loadCaptureEntityIndex(engine, opts.sourceId);
         for (const planned of item.chunks) {
           if(fatalFailure||budgetStop||windowDeferred)break;
+          const chunk:EntityCaptureChunk={...activePage,chunkIndex:planned.index,chunkCount:item.totalChunks,chunkBody:activePage.body.slice(planned.start,planned.start+planned.length)};
+          if(await reuseDuplicateChunk(chunk)){completedForPage++;reportProgress(undefined,chunk.slug,'复用相同资料');continue;}
           if(windowReached()){windowDeferred=true;break;}
           const release=await admission.acquire(executionSignal);
           try{
           if(windowReached()){windowDeferred=true;break;}
           if(opts.window){windowAdmissions++;windowStartedAt ||=Date.now();}
-          const chunk:EntityCaptureChunk={...activePage,chunkIndex:planned.index,chunkCount:item.totalChunks,chunkBody:activePage.body.slice(planned.start,planned.start+planned.length)};
           throwIfAborted(opts.signal, '[dream] capture entities');
           const chunkStop = stopState();
           if (chunkStop) {
@@ -830,21 +875,21 @@ export async function runPhaseCaptureEntities(
             break;
           }
           const related = rankCaptureCandidates(chunk.chunkBody, entityIndex.filter(entity =>
-            entity.sourceId === chunk.sourceId || entity.sourceId === 'default',
+            (entity.sourceId === chunk.sourceId || entity.sourceId === 'default')&&(!opts.quickEntitiesOnly||['person','company','organization','project'].includes(entity.type)),
           ), { limit: ENTITY_CAPTURE_CANDIDATE_LIMIT, sourceId: chunk.sourceId });
           const baseKey = captureChunkKey(item.scopeKey,chunk.chunkBody);
           const idempotencyKey = planned.force?`${baseKey}:retry:${nonce}`:await retryableKey(engine, baseKey, nonce);
-          const acknowledged=await acknowledgedIngestEntities(engine,chunk,entityIndex);
+          const acknowledged=(await acknowledgedIngestEntities(engine,chunk,entityIndex)).filter(entity=>!opts.quickEntitiesOnly||['person','company','organization','project'].includes(entity.type));
           const batchCapture=opts.batchCapture??opts.handler==null;
           const data: SubagentHandlerData = {
-            prompt: buildEntityCapturePrompt(chunk, related,acknowledged,maxDocumentTurns),
+            prompt: buildEntityCapturePrompt(chunk, related,acknowledged,maxDocumentTurns,!!opts.quickEntitiesOnly),
             model: chosen.model,
             max_turns: maxDocumentTurns,
             turn_timeout_ms:turnTimeoutMs,
             model_output_limit:modelOutputLimit,
             no_self_fix: true,
             system: batchCapture?`${systemContract}\n本次按批量事实增量执行：候选目录已由程序提供，只有实际歧义才 search。优先一次调用 capture_entities 提交本段全部实体及证据关系；每批最多32个实体，仍有实体时 has_more:true 并继续分批，不得遗漏。全部准备好后由程序验收，不再逐个 put_page 或调用模型写总结。有明确日期的时间线使用保留的时间线工具，最后 complete_ingest。`:systemContract,
-            ingest_context: {slug:chunk.slug,sourceId:chunk.sourceId,body:chunk.body,chunkBody:chunk.chunkBody,pageId:chunk.pageId,sourceIncarnation:chunk.sourceIncarnation,compact_contract:true,batch_capture:batchCapture,acknowledged:acknowledged.map(entity=>`${entity.sourceId}:${entity.slug}`),turn_entity_refs:[...new Set([...related,...acknowledged].map(entity=>`${entity.sourceId}:${entity.slug}`))]},
+            ingest_context: {slug:chunk.slug,sourceId:chunk.sourceId,body:chunk.body,chunkBody:chunk.chunkBody,pageId:chunk.pageId,sourceIncarnation:chunk.sourceIncarnation,compact_contract:true,batch_capture:batchCapture,quickEntitiesOnly:opts.quickEntitiesOnly,acknowledged:acknowledged.map(entity=>`${entity.sourceId}:${entity.slug}`),turn_entity_refs:[...new Set([...related,...acknowledged].map(entity=>`${entity.sourceId}:${entity.slug}`))]},
             usage_limits: {
               input: maxDocumentInput,
               output: maxDocumentOutput,
@@ -853,7 +898,7 @@ export async function runPhaseCaptureEntities(
             },
             allowed_tools: ENTITY_CAPTURE_TOOLS.filter(name=>(name!=='add_timeline_entry'||sourceTimelineDates(chunk.chunkBody).length>0)
               &&(batchCapture?!['put_page','add_link'].includes(name):name!=='capture_entities')),
-            allowed_slug_prefixes: [...ENTITY_CAPTURE_SLUG_PREFIXES],
+            allowed_slug_prefixes: ENTITY_CAPTURE_SLUG_PREFIXES.filter(prefix=>!opts.quickEntitiesOnly||prefix!=='concepts/*'),
             source_id: chunk.sourceId,
             skills_dir: skillsDir,
             discovery_profile: 'entity_capture',
@@ -977,7 +1022,7 @@ export async function runPhaseCaptureEntities(
         }
         if (submittedForPage > 0) pagesSubmitted += 1;
         if (!budgetStop && completedForPage === item.chunks.length) {pagesProcessed += 1;manifestPages.get(manifestId(item.page))!.complete=true;}
-      },{signal:opts.signal,shouldStop:()=>!!budgetStop||fatalFailure||windowDeferred,sizeOf:item=>item.bytes,
+      }),{signal:opts.signal,shouldStop:()=>!!budgetStop||fatalFailure||windowDeferred,sizeOf:item=>item.bytes,
         getConcurrency});}catch(error){
         if(!opts.signal?.aborted&&!phaseAbort.signal.aborted)throw error;
         activeChunks=0;failureStop=true;fatalFailure=true;
@@ -1043,7 +1088,7 @@ export async function runPhaseCaptureEntities(
     const relationsCreated = cachedLinks + mentionLinks + nerLinks + extractLinks + directLinks + (toolLinks?.n??0)+batchLinks;
     const recognized = [...new Map([...createdEntityRefs,...recognizedEntities].map(([,value])=>[`${value.sourceId}:${value.slug}`,value])).values()];
     const gaps = opts.dryRun
-      ? { isolated: 0, unlinkedMentions: 0,linked:0 }
+      ? { isolated: 0, unlinkedMentions: 0,linked:0,isolatedRefs:new Set<string>(),missingPairs:new Set<string>() }
       : await countCaptureLinkGaps(engine, recognized,[...sourceRefs.values()]);
     const linkedEntities = gaps.linked;
     const costCny = ollama ? 0 : (sawPricedUsage ? Number(knownCost.toFixed(6)) : null);
@@ -1054,7 +1099,11 @@ export async function runPhaseCaptureEntities(
     const status: PhaseResult['status'] = cleanStatus === 'ok' && (gaps.isolated > 0 || gaps.unlinkedMentions > 0 || unresolvedReferences.length>0)
       ? 'warn'
       : cleanStatus;
-    if(!relationError&&gaps.isolated===0&&gaps.unlinkedMentions===0&&!opts.signal?.aborted)for(const manifest of manifestPages.values())if(manifest.eligible&&manifest.complete)await publishCaptureManifest(engine,manifest.page,[...manifest.entities.values()],manifest.chunks,{...manifestOptions,proofs:manifest.proofs,receiptIds:[...manifest.receiptIds],unresolved:manifest.unresolved});
+    if(!relationError&&!opts.signal?.aborted)for(const manifest of manifestPages.values())if(manifest.eligible&&manifest.complete){
+      const source=`${manifest.page.sourceId}:${manifest.page.slug}`;
+      const incomplete=[...manifest.entities.values()].some(entity=>{const ref=`${entity.sourceId}:${entity.slug}`;return gaps.isolatedRefs.has(ref)||gaps.missingPairs.has(JSON.stringify([source,ref]));});
+      if(!incomplete)await publishCaptureManifest(engine,manifest.page,[...manifest.entities.values()],manifest.chunks,{...manifestOptions,proofs:manifest.proofs,receiptIds:[...manifest.receiptIds],unresolved:manifest.unresolved});
+    }
     const reportLine = captureReportLine({
       model: chosen.model,
       pagesProcessed,

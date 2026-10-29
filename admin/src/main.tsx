@@ -20,3 +20,4 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
 import './product/model-services.css';
 import './product/product-theme.css';
 import './product/product-ui.css';
+import './product/design-refresh.css';

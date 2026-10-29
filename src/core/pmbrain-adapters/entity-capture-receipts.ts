@@ -2,12 +2,38 @@ import { createHash } from 'node:crypto';
 import type { BrainEngine } from '../engine.ts';
 import { finalizeEntityIngest,type EntityIngestContext } from './entity-ingest-workflow.ts';
 import { UnrecoverableError } from '../minions/types.ts';
+import { parseLlmJson } from '../llm-json.ts';
 
 type EntityReference={slug:string;sourceId:string};
 interface EntityProof extends EntityReference {id:number;title:string;type:string;aliases:string;revision:string;lines:string[]}
 export interface CaptureReceipt {result?:string;ingest_entities?:EntityReference[];capture_proof?:EntityProof[];graph_reconciled?:boolean}
 const hash=(value:string)=>createHash('sha256').update(value).digest('hex');
 const aliases=(value:unknown)=>JSON.stringify(Array.isArray(value)?[...value].sort():[]);
+
+export function quickCaptureReceipt(receipt:CaptureReceipt,sourceId:string):CaptureReceipt|null{
+  if(!Array.isArray(receipt.capture_proof)||typeof receipt.result!=='string')return null;
+  const parsed=parseLlmJson<{entities:unknown;relations:unknown;no_entities?:boolean}>(receipt.result);
+  if(!parsed||!Array.isArray(parsed.entities)||!parsed.entities.every(ref=>typeof ref==='string')||!Array.isArray(parsed.relations))return null;
+  const proofs=receipt.capture_proof;
+  const resolve=(reference:string)=>{
+    const at=reference.indexOf(':'),slug=at<0?reference:reference.slice(at+1),source=at<0?null:reference.slice(0,at);
+    const matches=proofs.filter(proof=>proof.slug===slug&&(!source||proof.sourceId===source));
+    return matches.find(proof=>proof.sourceId===sourceId)??matches.find(proof=>proof.sourceId==='default');
+  };
+  const resolved=parsed.entities.map(reference=>({reference,proof:resolve(reference)}));
+  if(resolved.some(item=>!item.proof)||proofs.some(proof=>!resolved.some(item=>item.proof===proof)))return null;
+  const allowed=resolved.filter(item=>['person','company','organization','project'].includes(item.proof!.type));
+  const selected=new Set(allowed.map(item=>`${item.proof!.sourceId}:${item.proof!.slug}`));
+  const relations=parsed.relations.filter(relation=>{
+    if(!relation||typeof relation!=='object')return false;
+    const value=relation as {from?:unknown;to?:unknown};
+    if(typeof value.from!=='string'||typeof value.to!=='string')return false;
+    const from=resolve(value.from),to=resolve(value.to);
+    return !!from&&!!to&&selected.has(`${from.sourceId}:${from.slug}`)&&selected.has(`${to.sourceId}:${to.slug}`);
+  });
+  return {...receipt,result:JSON.stringify({entities:allowed.map(item=>item.reference),relations,...(allowed.length?{}:{no_entities:true})}),
+    ingest_entities:allowed.map(item=>({slug:item.proof!.slug,sourceId:item.proof!.sourceId})),capture_proof:proofs.filter(proof=>selected.has(`${proof.sourceId}:${proof.slug}`))};
+}
 
 export async function captureReceiptProof(engine:BrainEngine,context:EntityIngestContext,entities:EntityReference[]):Promise<EntityProof[]>{
   const proofs:EntityProof[]=[];
@@ -23,14 +49,20 @@ export async function captureReceiptProof(engine:BrainEngine,context:EntityInges
   return proofs;
 }
 
-export async function reuseCaptureReceipt(engine:BrainEngine,context:EntityIngestContext,receipt:CaptureReceipt):Promise<{entities:EntityReference[];links:number;rebound:boolean;unresolved?:unknown[]}|null>{
+export async function reuseCaptureReceipt(engine:BrainEngine,context:EntityIngestContext,receipt:CaptureReceipt,duplicateOf?:EntityIngestContext):Promise<{entities:EntityReference[];links:number;rebound:boolean;unresolved?:unknown[]}|null>{
   if(!Array.isArray(receipt.capture_proof))return null;
+  if(duplicateOf&&(typeof receipt.result!=='string'||duplicateOf.sourceId!==context.sourceId||duplicateOf.body!==context.body||duplicateOf.chunkBody!==context.chunkBody))return null;
   try{
     return await engine.transaction(async tx=>{
       let rebound=false;
       const [source]=await tx.executeRaw<{id:number;body:string;incarnation:string}>(`SELECT p.id,p.compiled_truth AS body,s.incarnation::text incarnation
         FROM pages p JOIN sources s ON s.id=p.source_id WHERE p.slug=$1 AND p.source_id=$2 AND p.deleted_at IS NULL AND NOT s.archived FOR SHARE OF p,s`,[context.slug,context.sourceId]);
       if(!source||source.id!==context.pageId||source.body!==context.body||source.incarnation!==context.sourceIncarnation)throw new Error('实体识别原文身份或内容已改变');
+      if(duplicateOf){
+        const [original]=await tx.executeRaw<{id:number;body:string;incarnation:string}>(`SELECT p.id,p.compiled_truth AS body,s.incarnation::text incarnation
+          FROM pages p JOIN sources s ON s.id=p.source_id WHERE p.slug=$1 AND p.source_id=$2 AND p.deleted_at IS NULL AND NOT s.archived FOR SHARE OF p,s`,[duplicateOf.slug,duplicateOf.sourceId]);
+        if(!original||original.id!==duplicateOf.pageId||original.body!==context.body||original.incarnation!==duplicateOf.sourceIncarnation)throw new UnrecoverableError('cached original document changed');
+      }
       for(const proof of receipt.capture_proof!){
         if(![context.sourceId,'default'].includes(proof.sourceId))throw new Error('实体识别回执越过 Source 边界');
         await tx.executeRaw('SELECT id FROM pages WHERE id=$1 FOR UPDATE',[proof.id]);
@@ -45,6 +77,10 @@ export async function reuseCaptureReceipt(engine:BrainEngine,context:EntityInges
         const records=Array.isArray(page.frontmatter.pmbrain_ingest_provenance)?page.frontmatter.pmbrain_ingest_provenance as Array<Record<string,unknown>>:[];
         const next=records.map(record=>proof.lines.includes(String(record.line))&&record.sourceId===context.sourceId&&record.slug===context.slug&&record.pageId===String(context.pageId)&&record.chunkHash===hash(context.chunkBody)
           ? {...record,bodyHash:hash(context.body)}:record);
+        if(duplicateOf)for(const record of records){
+          if(!proof.lines.includes(String(record.line))||record.sourceId!==duplicateOf.sourceId||record.slug!==duplicateOf.slug||record.pageId!==String(duplicateOf.pageId)||record.bodyHash!==hash(duplicateOf.body)||record.chunkHash!==hash(duplicateOf.chunkBody))continue;
+          if(!next.some(item=>item.line===record.line&&item.sourceId===context.sourceId&&item.slug===context.slug&&item.pageId===String(context.pageId)&&item.chunkHash===hash(context.chunkBody)))next.push({...record,sourceId:context.sourceId,slug:context.slug,pageId:String(context.pageId),bodyHash:hash(context.body),chunkHash:hash(context.chunkBody)});
+        }
         if(JSON.stringify(next)!==JSON.stringify(records)){
           await tx.putPage(page.slug,{type:page.type,title:page.title,compiled_truth:page.compiled_truth,timeline:page.timeline,frontmatter:{...page.frontmatter,pmbrain_ingest_provenance:next}},{sourceId:proof.sourceId});
           rebound=true;

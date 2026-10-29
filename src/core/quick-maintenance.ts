@@ -55,6 +55,7 @@ export async function runQuickMaintenance(
 ): Promise<CycleReport> {
   return runCycle(engine, {
     ...opts,
+    quickEntitiesOnly: true,
     phases: resolveQuickMaintenancePhases(!!opts.captureEntitySlugs?.length||!!opts.prepareEntityCapture),
     includeByMention: true,
     includeNer: true,
