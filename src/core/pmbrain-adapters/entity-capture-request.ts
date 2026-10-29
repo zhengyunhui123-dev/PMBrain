@@ -3,11 +3,12 @@ import type { BrainEngine } from '../engine.ts';
 export const ENTITY_CAPTURE_PENDING_PREFIX = 'dream.entity_capture.pending.';
 export const ENTITY_CAPTURE_MIN_BODY_CHARS = 8;
 export const EXCLUDED_CAPTURE_PATH=/((^|\/)(\.pmbrain|\.gbrain|\.git|node_modules|backups?)(\/|$))|(^output\/(agent-notes|wiki-compile|wiki-health|qa)(\/|$))|(\.(bak|backup)(\.|$))/i;
+export const EXCLUDED_ENTITY_CAPTURE_PATH=/((^|\/)(\.pmbrain|\.gbrain|\.git|node_modules)(\/|$))|(^output\/(agent-notes|wiki-compile|wiki-health|qa)(\/|$))/i;
 export function excludedCapturePath(slug:string):boolean {
   return EXCLUDED_CAPTURE_PATH.test(slug.replace(/\\/g,'/'));
 }
 export function excludedEntityCapturePath(slug:string):boolean {
-  return /((^|\/)(\.pmbrain|\.gbrain|\.git|node_modules)(\/|$))|(^output\/(agent-notes|wiki-compile|wiki-health|qa)(\/|$))/i.test(slug.replace(/\\/g,'/'));
+  return EXCLUDED_ENTITY_CAPTURE_PATH.test(slug.replace(/\\/g,'/'));
 }
 export async function requestImportedEntityCapture(engine: BrainEngine, sourceId: string, page: {slug:string;type:string;compiled_truth:string;frontmatter:Record<string,unknown>}): Promise<void> {
   if(page.frontmatter.document_ocr_deferred===true)return;

@@ -14,6 +14,9 @@
 
 import { describe, test, expect, beforeAll, afterAll, beforeEach } from 'bun:test';
 import { PGLiteEngine } from '../src/core/pglite-engine.ts';
+import { PostgresEngine } from '../src/core/postgres-engine.ts';
+import type { BrainEngine } from '../src/core/engine.ts';
+import { assertSafeE2eDatabaseUrl } from './helpers/db-guard.ts';
 import {
   runPhaseExtractAtoms,
   discoverExtractablePages,
@@ -21,14 +24,18 @@ import {
 import { resetPgliteState } from './helpers/reset-pglite.ts';
 import type { ChatOpts, ChatResult } from '../src/core/ai/gateway.ts';
 import { configureGateway, resetGateway } from '../src/core/ai/gateway.ts';
+import { runPhaseSynthesizeConcepts } from '../src/core/cycle/synthesize-concepts.ts';
+import { prepareLinkReconciliation } from '../src/core/link-reconciliation.ts';
 
-let engine: PGLiteEngine;
+const testUrl=process.env.PMBRAIN_RELATION_TEST_DATABASE_URL;
+let engine: BrainEngine;
 
 beforeAll(async () => {
   resetGateway();
   configureGateway({ generative_enabled: false, env: {} });
-  engine = new PGLiteEngine();
-  await engine.connect({});
+  if(testUrl)assertSafeE2eDatabaseUrl(testUrl);
+  engine = testUrl ? new PostgresEngine() : new PGLiteEngine();
+  await engine.connect(testUrl?{database_url:testUrl}:{});
   await engine.initSchema();
 }, 60000);
 
@@ -38,7 +45,7 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-  await resetPgliteState(engine);
+  await resetPgliteState(engine as PGLiteEngine);
 });
 
 test('待后台识图的资料不进入长期知识提炼，补齐后恢复候选',async()=>{
@@ -82,6 +89,148 @@ function stubChatUnique(): (o: ChatOpts) => Promise<ChatResult> {
 }
 
 const LONG_CONTENT = 'a'.repeat(800); // > MIN_PAGE_CHARS_FOR_EXTRACTION (500)
+
+test('资料进入队列后发生变化时不调用模型，更新的内容留待下次处理',async()=>{
+  const quote='项目验收必须保存来源证据并由负责人复核。';
+  const content=quote+'验收记录需要保护原文与工作过程。'.repeat(40);
+  await seedPage({slug:'notes/changed-during-discovery',type:'note',content_hash:'before-change-123456789',compiled_truth:content});
+  let calls=0,changed=false;
+  const chat:typeof import('../src/core/ai/gateway.ts').chat=async()=>{
+    calls++;
+    const text=JSON.stringify([{title:'验收证据',atom_type:'insight',body:quote,source_quote:quote,concepts:['验收管理']}]);
+    return {text,blocks:[{type:'text',text}],stopReason:'end',usage:{input_tokens:100,output_tokens:50,cache_read_tokens:0,cache_creation_tokens:0},model:'anthropic:claude-haiku-4-5',providerId:'anthropic'};
+  };
+  const originalTransaction=engine.transaction;
+  const boundTransaction=originalTransaction.bind(engine) as BrainEngine['transaction'];
+  engine.transaction=async <T>(fn:(tx:BrainEngine)=>Promise<T>):Promise<T>=>{
+    if(!changed){
+      changed=true;
+      await engine.executeRaw("UPDATE pages SET content_hash='after-change-1234567890',compiled_truth=compiled_truth || '补充验收结论。' WHERE source_id='default' AND slug='notes/changed-during-discovery'");
+    }
+    return boundTransaction(fn);
+  };
+  const opts={sourceId:'default',_transcripts:[],_chat:chat,requireSourceQuotes:true,reuseDuplicateSources:true};
+  try{
+    const result=await runPhaseExtractAtoms(engine,opts);
+    expect(calls).toBe(0);
+    expect(result.status).toBe('warn');
+    expect(JSON.stringify(result.details?.failures)).toContain('atom_revision_conflict');
+    expect(result.details?.pages_remaining).toBe(1);
+  }finally{engine.transaction=originalTransaction;}
+  const resumed=await runPhaseExtractAtoms(engine,opts);
+  expect(resumed.status,JSON.stringify(resumed.details)).toBe('ok');
+  expect(calls).toBe(1);
+},120000);
+
+test('相同正文的备份复用已提炼知识并保留两份来源，内容变化的备份仍正常提炼',async()=>{
+  const quote='项目验收必须保存来源证据并由负责人复核。';
+  const content=quote+'验收记录需要保护原文与工作过程。'.repeat(40);
+  await seedPage({slug:'notes/original',type:'note',content_hash:'original-hash-1234567890',compiled_truth:content});
+  await seedPage({slug:'notes/backups/copy.bak.md',type:'note',content_hash:'backup-hash-1234567890',compiled_truth:content});
+  await seedPage({slug:'notes/backups/changed',type:'note',content_hash:'changed-hash-123456789',compiled_truth:content+'新的验收结论。'});
+  let calls=0;
+  const chat:typeof import('../src/core/ai/gateway.ts').chat=async()=>{
+    calls++;
+    const text=JSON.stringify([{title:`证据记录${calls}`,atom_type:'insight',body:quote,source_quote:quote,concepts:['测试主题']}]);
+    return {text,blocks:[{type:'text',text}],stopReason:'end',usage:{input_tokens:100,output_tokens:50,cache_read_tokens:0,cache_creation_tokens:0},model:'anthropic:claude-haiku-4-5',providerId:'anthropic'};
+  };
+  const opts={sourceId:'default',_transcripts:[],_chat:chat,requireSourceQuotes:true,reuseDuplicateSources:true};
+  const first=await runPhaseExtractAtoms(engine,opts);
+  expect(first.status,JSON.stringify(first.details)).toBe('ok');expect(calls).toBe(2);
+  await seedPage({slug:'notes/备份/copy2',type:'note',content_hash:'copy-two-hash-123456789',compiled_truth:content});
+  await runPhaseExtractAtoms(engine,opts);expect(calls).toBe(2);
+  const links=await engine.executeRaw<{slug:string}>("SELECT DISTINCT source.slug FROM links l JOIN pages source ON source.id=l.from_page_id JOIN pages atom ON atom.id=l.to_page_id WHERE source.slug=ANY($1::text[]) AND atom.type='atom' AND l.link_type='evidence_of'",[['notes/original','notes/backups/copy.bak.md']]);
+  expect(links.map(row=>row.slug).sort()).toEqual(['notes/backups/copy.bak.md','notes/original']);
+  expect((await engine.executeRaw("SELECT l.id FROM links l JOIN pages p ON p.id=l.from_page_id WHERE p.slug='notes/备份/copy2' AND l.link_type='evidence_of'")).length).toBeGreaterThan(0);
+  await runPhaseExtractAtoms(engine,opts);expect(calls).toBe(2);
+  const [primary]=await engine.executeRaw<{source_slug:string}>("SELECT frontmatter->>'source_slug' source_slug FROM pages WHERE type='atom' AND frontmatter->>'source_slug'=ANY($1::text[])",[['notes/original','notes/backups/copy.bak.md']]);
+  const alternates=['notes/original','notes/backups/copy.bak.md','notes/备份/copy2'].filter(slug=>slug!==primary.source_slug);
+  for(const alternate of alternates)await (await prepareLinkReconciliation(engine))(alternate,'default');
+  await engine.executeRaw("UPDATE pages SET content_hash='primary-modified',compiled_truth=compiled_truth || '原件发生变化' WHERE source_id='default' AND slug=$1",[primary.source_slug]);
+  const withAlternate=await runPhaseSynthesizeConcepts(engine,{sourceId:'default'});
+  expect(withAlternate.details.atoms_seen).toBe(2);
+  await engine.executeRaw("UPDATE pages SET content_hash='alternate-modified',compiled_truth=compiled_truth || '备份也发生变化' WHERE source_id='default' AND slug=ANY($1::text[])",[alternates]);
+  const withoutAlternate=await runPhaseSynthesizeConcepts(engine,{sourceId:'default'});
+  expect(withoutAlternate.details.atoms_seen).toBe(1);
+},120000);
+
+test('原文证据不合格的相同资料限制重复调用，修改后重新提炼',async()=>{
+  const quote='项目验收必须保存来源证据并由负责人复核。';
+  await seedPage({slug:'notes/failing-evidence',type:'note',content_hash:'failing-hash-1234567890',compiled_truth:quote+'验收记录需要保护原文与工作过程。'.repeat(40)});
+  let calls=0,invalid=true;
+  const chat:typeof import('../src/core/ai/gateway.ts').chat=async()=>{
+    calls++;
+    const text=JSON.stringify([{title:'验收证据',atom_type:'insight',body:quote,source_quote:invalid?'原文没有这句话':quote}]);
+    return {text,blocks:[{type:'text',text}],stopReason:'end',usage:{input_tokens:100,output_tokens:50,cache_read_tokens:0,cache_creation_tokens:0},model:'anthropic:claude-haiku-4-5',providerId:'anthropic'};
+  };
+  const opts={sourceId:'default',_transcripts:[],_chat:chat,requireSourceQuotes:true,reuseDuplicateSources:true};
+  for(let i=0;i<3;i++)expect((await runPhaseExtractAtoms(engine,opts)).status).toBe('warn');
+  const held=await runPhaseExtractAtoms(engine,opts);
+  expect(calls).toBe(3);expect(held.status).toBe('warn');expect(held.details.pages_held).toBe(1);
+  const page=(await engine.getPage('notes/failing-evidence'))!;
+  await engine.putPage('notes/failing-evidence',{...page,compiled_truth:page.compiled_truth+'补充内容。',content_hash:'changed-hash-1234567890'});
+  await engine.executeRaw("UPDATE pages SET content_hash='changed-hash-1234567890' WHERE slug='notes/failing-evidence'");
+  invalid=false;expect((await runPhaseExtractAtoms(engine,opts)).details.pages_processed).toBe(1);expect(calls).toBe(4);
+},120000);
+
+test('旧版已成功资料可被新备份复用，不跨资料源复用',async()=>{
+  const quote='项目启动前必须核验原始证据。';
+  const content=quote+'其余项目资料保存在原来的来源目录中。'.repeat(40);
+  await seedPage({slug:'notes/legacy-original',type:'note',content_hash:'legacy-hash-1234567890',compiled_truth:content});
+  let calls=0;
+  const chat:typeof import('../src/core/ai/gateway.ts').chat=async()=>{
+    calls++;
+    const text=JSON.stringify([{title:`旧资料知识${calls}`,atom_type:'insight',body:quote,source_quote:quote}]);
+    return {text,blocks:[{type:'text',text}],stopReason:'end',usage:{input_tokens:100,output_tokens:50,cache_read_tokens:0,cache_creation_tokens:0},model:'anthropic:claude-haiku-4-5',providerId:'anthropic'};
+  };
+  await runPhaseExtractAtoms(engine,{sourceId:'default',_transcripts:[],_chat:chat,requireSourceQuotes:true});
+  expect(calls).toBe(1);
+  await seedPage({slug:'notes/备份/legacy-copy',type:'note',content_hash:'copy-hash-1234567890',compiled_truth:content});
+  const options={sourceId:'default',_transcripts:[],_chat:chat,requireSourceQuotes:true,reuseDuplicateSources:true};
+  await runPhaseExtractAtoms(engine,options);expect(calls).toBe(1);
+  expect((await engine.executeRaw("SELECT l.id FROM links l JOIN pages p ON p.id=l.from_page_id WHERE p.slug='notes/备份/legacy-copy' AND l.link_type='evidence_of'")).length).toBeGreaterThan(0);
+  await engine.executeRaw("INSERT INTO sources(id,name) VALUES('isolated-other','隔离来源')");
+  await seedPage({slug:'notes/foreign',type:'note',source_id:'isolated-other',content_hash:'foreign-hash-1234567890',compiled_truth:content});
+  await runPhaseExtractAtoms(engine,{...options,sourceId:'isolated-other'});expect(calls).toBe(2);
+},120000);
+
+test('临时模型服务错误不会被当作固定内容失败永久停止重试',async()=>{
+  await seedPage({slug:'notes/transient',type:'note',content_hash:'transient-hash-123456789',compiled_truth:'这是一份足够长的测试资料。'.repeat(60)});
+  let calls=0;
+  const chat:typeof import('../src/core/ai/gateway.ts').chat=async()=>{calls++;throw new Error('429 rate limit');};
+  const options={sourceId:'default',_transcripts:[],_chat:chat,reuseDuplicateSources:true};
+  for(let i=0;i<4;i++)expect((await runPhaseExtractAtoms(engine,options)).status).toBe('warn');
+  expect(calls).toBe(4);
+  const page=(await engine.getPage('notes/transient'))!;
+  expect(page.frontmatter.atoms_fail_count).toBeUndefined();
+},120000);
+
+test('相同长资料分段复用，每次扩大处理范围也只提炼一次',async()=>{
+  await engine.setConfig('cycle.extract_atoms.max_input_chars','1000');
+  const content=Array.from({length:150},(_,i)=>`第${i}条项目验收记录，资料保留在原始位置。`).join('\n');
+  for(const [slug,contentHash] of [['notes/long-original','long-hash-1234567890'],['notes/备份/long-copy','copy-long-hash-123456']])await seedPage({slug,type:'note',content_hash:contentHash,compiled_truth:content});
+  let calls=0;
+  const chat:typeof import('../src/core/ai/gateway.ts').chat=async()=>{
+    calls++;
+    const text=JSON.stringify([{title:`长资料知识${calls}`,atom_type:'insight',body:'资料分段包含项目验收记录。'}]);
+    return {text,blocks:[{type:'text',text}],stopReason:'end',usage:{input_tokens:100,output_tokens:50,cache_read_tokens:0,cache_creation_tokens:0},model:'anthropic:claude-haiku-4-5',providerId:'anthropic'};
+  };
+  const options={sourceId:'default',_transcripts:[],_chat:chat,reuseDuplicateSources:true};
+  await runPhaseExtractAtoms(engine,options);expect(calls).toBe(1);
+  for(const slug of ['notes/long-original','notes/备份/long-copy']){
+    const page=(await engine.getPage(slug))!;
+    expect(page.frontmatter.atoms_scan_hash).toBeUndefined();
+    expect(page.frontmatter.atoms_window_hash).toBe(page.content_hash!.slice(0,16));
+  }
+  await runPhaseExtractAtoms(engine,options);expect(calls).toBe(1);
+  await engine.setConfig('cycle.extract_atoms.max_input_chars','5000');
+  await runPhaseExtractAtoms(engine,options);expect(calls).toBe(2);
+  const links=await engine.executeRaw<{slug:string;count:number}>(`SELECT source.slug,count(DISTINCT atom.id)::int AS count
+    FROM links l JOIN pages source ON source.id=l.from_page_id JOIN pages atom ON atom.id=l.to_page_id
+    WHERE source.slug=ANY($1::text[]) AND atom.type='atom' AND l.link_type='evidence_of'
+    GROUP BY source.slug ORDER BY source.slug`,[['notes/long-original','notes/备份/long-copy']]);
+  expect(links).toEqual([{slug:'notes/long-original',count:2},{slug:'notes/备份/long-copy',count:2}]);
+},120000);
 
 async function seedPage(opts: {
   slug: string;

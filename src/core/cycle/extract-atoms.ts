@@ -2,7 +2,9 @@ import { normalizeForGrounding } from './synthesize-verify.ts';
 import { loadConfig } from '../config.ts';
 import { loadActivePack } from '../schema-pack/load-active.ts';
 import { extractableTypesFromPack } from '../schema-pack/extractable.ts';
-import { excludedCapturePath,EXCLUDED_CAPTURE_PATH } from '../pmbrain-adapters/entity-capture-request.ts';
+import { excludedCapturePath,excludedEntityCapturePath,EXCLUDED_CAPTURE_PATH,EXCLUDED_ENTITY_CAPTURE_PATH } from '../pmbrain-adapters/entity-capture-request.ts';
+import { createHash } from 'node:crypto';
+import { reuseAtomSource } from '../pmbrain-adapters/atom-duplicate-reuse.ts';
 import { readPhaseBudget } from './phase-budget.ts';
 import { CONVERSATION_PAGE_URI_PREFIX } from './transcript-discovery.ts';
 // v0.41.2.1 — extract_atoms cycle phase, post-fix-wave rebuild.
@@ -102,6 +104,7 @@ export interface ExtractAtomsOpts {
   schemaPack?:string;
   since?:string;
   requireSourceQuotes?:boolean;
+  reuseDuplicateSources?:boolean;
   brainDir?: string;
   sourceId?: string;
   dryRun?: boolean;
@@ -222,10 +225,11 @@ export async function discoverExtractablePages(
   engine: BrainEngine,
   sourceId: string,
   affectedSlugs?: string[],
-  scope?:{schemaPack?:string;since?:string;strict?:boolean},
+  scope?:{schemaPack?:string;since?:string;strict?:boolean;reuseDuplicateSources?:boolean;retrySignature?:string},
 ): Promise<DiscoveredPage[]> {
   const hasFilter = Array.isArray(affectedSlugs) && affectedSlugs.length > 0;
   const capSlot = hasFilter ? '$8' : '$7';
+  const retrySlot = hasFilter ? '$9' : '$8';
   const sql = `
     SELECT p.slug,
            p.id,p.knowledge_revision,(SELECT incarnation FROM sources WHERE id=p.source_id) AS source_incarnation,
@@ -258,6 +262,13 @@ export async function discoverExtractablePages(
       AND ($5::timestamptz IS NULL OR p.updated_at >= $5::timestamptz)
       AND p.slug !~* $6
       ${hasFilter ? "AND p.slug = ANY($7::text[])" : ''}
+      AND NOT (
+        COALESCE(p.frontmatter->>'atoms_fail_hash','') = p.content_hash
+        AND COALESCE(p.frontmatter->>'atoms_fail_signature','') = ${retrySlot}
+        AND CASE WHEN COALESCE(p.frontmatter->>'atoms_fail_count','') ~ '^[0-9]+$'
+          THEN (p.frontmatter->>'atoms_fail_count')::numeric >= 3 ELSE false END
+      )
+      ${scope?.reuseDuplicateSources ? '' : `
       AND NOT EXISTS (
         SELECT 1
         FROM pages atom
@@ -265,7 +276,7 @@ export async function discoverExtractablePages(
           AND atom.source_id = $1
           AND atom.frontmatter->>'source_hash' = substring(p.content_hash from 1 for 16)
           AND atom.deleted_at IS NULL
-      )
+      )`}
     ORDER BY p.updated_at DESC
     LIMIT $4
   `;
@@ -275,10 +286,11 @@ export async function discoverExtractablePages(
     MIN_PAGE_CHARS_FOR_EXTRACTION,
     PAGE_DISCOVERY_BUDGET,
     scope?.since??null,
-    EXCLUDED_CAPTURE_PATH.source,
+    (scope?.reuseDuplicateSources ? EXCLUDED_ENTITY_CAPTURE_PATH : EXCLUDED_CAPTURE_PATH).source,
   ];
   if (hasFilter) params.push(affectedSlugs);
   params.push(await resolveExtractAtomsInputCap(engine));
+  params.push(scope?.retrySignature??'');
 
   try {
     const rows = await engine.executeRaw<{
@@ -289,7 +301,7 @@ export async function discoverExtractablePages(
       atoms_read_chars: string | null;
       atoms_read_prefix_hash: string | null;
     }>(sql, params);
-    return rows.filter(r=>!excludedCapturePath(r.slug)).map((r) => {
+    return rows.filter(r=>!(scope?.reuseDuplicateSources?excludedEntityCapturePath(r.slug):excludedCapturePath(r.slug))).map((r) => {
       const readChars = Number(r.atoms_read_chars);
       const prior = Number.isInteger(readChars) && readChars >= 0 && r.atoms_read_prefix_hash
         ? { readChars, prefixHash: r.atoms_read_prefix_hash }
@@ -317,7 +329,7 @@ export async function discoverExtractablePages(
 export async function countExtractAtomsBacklog(
   engine: BrainEngine,
   sourceId: string,
-  scope?:{schemaPack?:string;since?:string},
+  scope?:{schemaPack?:string;since?:string;reuseDuplicateSources?:boolean;retrySignature?:string;heldOnly?:boolean},
 ): Promise<number | null> {
   try {
     const rows = await engine.executeRaw<{ cnt: string | number }>(
@@ -337,6 +349,10 @@ export async function countExtractAtomsBacklog(
           AND COALESCE(p.frontmatter->>'raw','') = ''
           AND ($4::timestamptz IS NULL OR p.updated_at >= $4::timestamptz)
           AND p.slug !~* $5
+          ${scope?.heldOnly ? `AND COALESCE(p.frontmatter->>'atoms_fail_hash','') = p.content_hash
+          AND COALESCE(p.frontmatter->>'atoms_fail_signature','') = $7
+          AND CASE WHEN COALESCE(p.frontmatter->>'atoms_fail_count','') ~ '^[0-9]+$'
+            THEN (p.frontmatter->>'atoms_fail_count')::numeric >= 3 ELSE false END` : ''}
           AND COALESCE(p.frontmatter->>'atoms_scan_hash', '') <> substring(p.content_hash from 1 for 16)
           AND NOT (
             COALESCE(p.frontmatter->>'atoms_window_hash', '') = substring(p.content_hash from 1 for 16)
@@ -346,15 +362,15 @@ export async function countExtractAtomsBacklog(
               ELSE false
             END
           )
-          AND NOT EXISTS (
+          ${scope?.reuseDuplicateSources ? '' : `AND NOT EXISTS (
             SELECT 1
               FROM pages atom
              WHERE atom.type = 'atom'
                AND atom.source_id = $1
                AND atom.frontmatter->>'source_hash' = substring(p.content_hash from 1 for 16)
                AND atom.deleted_at IS NULL
-          )`,
-      [sourceId, await resolveExtractableTypes(scope?.schemaPack), MIN_PAGE_CHARS_FOR_EXTRACTION,scope?.since??null,EXCLUDED_CAPTURE_PATH.source, await resolveExtractAtomsInputCap(engine)],
+          )`}`,
+      [sourceId, await resolveExtractableTypes(scope?.schemaPack), MIN_PAGE_CHARS_FOR_EXTRACTION,scope?.since??null,(scope?.reuseDuplicateSources?EXCLUDED_ENTITY_CAPTURE_PATH:EXCLUDED_CAPTURE_PATH).source, await resolveExtractAtomsInputCap(engine),...(scope?.heldOnly?[scope.retrySignature??'']:[])],
     );
     return Number(rows[0]?.cnt ?? 0);
   } catch (error) {
@@ -420,6 +436,9 @@ export async function runPhaseExtractAtoms(
   const chat = opts._chat ?? gatewayChat;
   const resolvedModel = await resolveDreamModel(engine, { phase: 'extract_atoms' });
   const modelDetails = dreamModelDetails(resolvedModel, 'single_chat');
+  const inputCap = await resolveExtractAtomsInputCap(engine);
+  const retrySignature=opts.reuseDuplicateSources?createHash('sha256').update(JSON.stringify([resolvedModel.model,inputCap,!!opts.requireSourceQuotes,'atom-extraction-v1'])).digest('hex'):'';
+  const sourceScope={...opts,retrySignature};
 
   // 1a. Get transcripts (test seam OR production discovery).
   //     v0.41.2.1: config loader switched to loadConfigWithEngine() so the
@@ -461,7 +480,7 @@ export async function runPhaseExtractAtoms(
   if (opts._pages !== undefined) {
     pages = opts._pages;
   } else {
-    pages = await discoverExtractablePages(engine, sourceId, opts.affectedSlugs,{...opts,strict:true});
+    pages = await discoverExtractablePages(engine, sourceId, opts.affectedSlugs,{...sourceScope,strict:true});
   }
 
   // 2. Apply transcript-side source-hash idempotency in ONE batch query
@@ -473,7 +492,6 @@ export async function runPhaseExtractAtoms(
   // Surface a heartbeat before the batch query so even an instant
   // short-circuit shows a sign of life (closes Issue 2 silent-phase pain).
   opts.progress?.heartbeat(`checking existing atoms for ${allHashes16.length} transcripts`);
-  const inputCap = await resolveExtractAtomsInputCap(engine);
   const existingHashes = await atomsExistingForHashes(engine, sourceId, allHashes16);
   const tombstoned = await skippedTranscriptKeys(engine, sourceId, allHashes16, inputCap);
   for (const t of transcripts) {
@@ -503,7 +521,7 @@ export async function runPhaseExtractAtoms(
   }
   const pageItems: WorkItem[] = [];
   for (const p of pages) {
-    if (seenHashes.has(p.contentHash)) { duplicatesSkipped++; continue; }
+    if (!opts.reuseDuplicateSources&&seenHashes.has(p.contentHash)) { duplicatesSkipped++; continue; }
     seenHashes.add(p.contentHash);
     pageItems.push({ kind: 'page', ...p });
   }
@@ -516,6 +534,13 @@ export async function runPhaseExtractAtoms(
 
   // Phase-level no-op: nothing to extract today.
   if (work.length === 0 && transcripts.length === 0 && pages.length === 0) {
+    const held=opts.reuseDuplicateSources?await countExtractAtomsBacklog(engine,sourceId,{...sourceScope,heldOnly:true}):0;
+    if(held===null)throw new Error('atom_backlog_unknown: unable to verify held inputs');
+    if(held>0)return {
+      phase:'extract_atoms',status:'warn',duration_ms:0,
+      summary:`extract_atoms: ${held} source(s) held after repeated deterministic failures`,
+      details:{...modelDetails,reason:'repeated_failures',source_id:sourceId,atoms_extracted:0,transcripts_processed:0,transcripts_total:0,pages_processed:0,pages_total:0,pages_remaining:held,pages_held:held,duplicates_skipped:0,failures:[],estimated_spend_usd:0,dry_run:opts.dryRun??false},
+    };
     return {
       phase: 'extract_atoms',
       status: 'skipped',
@@ -585,14 +610,18 @@ export async function runPhaseExtractAtoms(
   for (const item of work) {
     throwIfAborted(opts.signal, '[dream] extract_atoms');
     await maybeYield();
-    if (budgetExhausted || budgetTracker.totalSpent >= budgetCap) {
-      if (item.kind === 'transcript') transcriptsSkipped++;
-      else pagesSkipped++;
-      continue;
-    }
-
     const originLabel = item.kind === 'transcript' ? item.filePath : item.slug;
     try {
+      if(item.kind==='page'&&opts.reuseDuplicateSources&&!opts.dryRun&&opts._pages===undefined&&await reuseAtomSource(engine,sourceId,item,inputCap)){
+        duplicatesSkipped++;pagesProcessed++;
+        opts.progress?.tick(1,`${totalAtomsExtracted} atoms / ${duplicatesSkipped} skipped`);
+        continue;
+      }
+      if (budgetExhausted || budgetTracker.totalSpent >= budgetCap) {
+        if (item.kind === 'transcript') transcriptsSkipped++;
+        else pagesSkipped++;
+        continue;
+      }
       const windowPlan: AtomWindowPlan = item.kind === 'page'
         ? planAtomWindow(item.content, inputCap, item.prior ?? null)
         : (() => {
@@ -609,26 +638,27 @@ export async function runPhaseExtractAtoms(
           })();
       const promptContent = windowPlan.promptContent;
       const contentHash16 = item.contentHash.slice(0, 16);
+      const bodyHash=opts.reuseDuplicateSources?createHash('sha256').update(item.content).digest('hex'):'';
       const stampPageWindow = async (tx: { executeRaw: BrainEngine['executeRaw'] }) => {
         if (item.kind !== 'page') return;
         if (windowPlan.complete) {
           const updated = await tx.executeRaw(
-            `UPDATE pages SET frontmatter = frontmatter || jsonb_build_object('atoms_scan_hash', $1::text)
+            `UPDATE pages SET frontmatter = (frontmatter-'atoms_fail_hash'-'atoms_fail_signature'-'atoms_fail_count') || jsonb_build_object('atoms_scan_hash', $1::text) ${opts.reuseDuplicateSources?"|| jsonb_build_object('atoms_body_hash',$5::text)":''}
               WHERE source_id = $2 AND slug = $3 AND deleted_at IS NULL AND content_hash = $4 RETURNING slug`,
-            [contentHash16, sourceId, item.slug, item.contentHash],
+            [contentHash16, sourceId, item.slug, item.contentHash,...(opts.reuseDuplicateSources?[bodyHash]:[])],
           );
           if (!updated.length) throw new Error('atom_revision_conflict: source changed during extraction');
           return;
         }
         const updated = await tx.executeRaw(
-          `UPDATE pages SET frontmatter = frontmatter || jsonb_build_object(
+          `UPDATE pages SET frontmatter = (frontmatter-'atoms_fail_hash'-'atoms_fail_signature'-'atoms_fail_count') || jsonb_build_object(
               'atoms_read_chars', $1::int,
               'atoms_read_prefix_hash', $2::text,
               'atoms_window_hash', $3::text,
               'atoms_partial_cap', $4::int
-            )
+            ) ${opts.reuseDuplicateSources?"|| jsonb_build_object('atoms_body_hash',$8::text)":''}
             WHERE source_id = $5 AND slug = $6 AND deleted_at IS NULL AND content_hash = $7 RETURNING slug`,
-          [windowPlan.readEnd, atomTextHash16(item.content.slice(0, windowPlan.readEnd)), contentHash16, inputCap, sourceId, item.slug, item.contentHash],
+          [windowPlan.readEnd, atomTextHash16(item.content.slice(0, windowPlan.readEnd)), contentHash16, inputCap, sourceId, item.slug, item.contentHash,...(opts.reuseDuplicateSources?[bodyHash]:[])],
         );
         if (!updated.length) throw new Error('atom_revision_conflict: source changed during extraction');
       };
@@ -753,6 +783,19 @@ export async function runPhaseExtractAtoms(
         source: originLabel,
         error: err instanceof Error ? err.message : String(err),
       });
+      if(!opts.dryRun&&opts.reuseDuplicateSources&&opts._pages===undefined&&item.kind==='page'&&item.identity&&/atom_evidence_unverified|atoms_schema_failed|atoms_parse_failed|atoms_output_truncated|atoms_refusal|atoms_content_filter/.test(err instanceof Error?err.message:String(err))){
+        const identity=item.identity;
+        await engine.executeRaw(
+          `UPDATE pages p SET frontmatter=p.frontmatter || jsonb_build_object(
+            'atoms_fail_hash',$1::text,'atoms_fail_signature',$2::text,'atoms_fail_count',
+            CASE WHEN p.frontmatter->>'atoms_fail_hash'=$1 AND p.frontmatter->>'atoms_fail_signature'=$2
+              AND COALESCE(p.frontmatter->>'atoms_fail_count','') ~ '^[0-9]+$'
+              THEN LEAST((p.frontmatter->>'atoms_fail_count')::numeric+1,3) ELSE 1 END)
+           FROM sources s WHERE p.id=$3 AND p.source_id=$4 AND p.slug=$5 AND p.content_hash=$1
+             AND p.knowledge_revision=$6::uuid AND s.id=p.source_id AND s.incarnation=$7::uuid
+             AND p.deleted_at IS NULL AND s.archived=false`,
+          [item.contentHash,retrySignature,identity.pageId,sourceId,item.slug,identity.revision,identity.sourceIncarnation]);
+      }
       if (!opts.dryRun && item.kind === 'transcript') {
         const failCount = await recordTranscriptFailureCount(engine, sourceId, item.filePath, item.contentHash);
         if (failCount != null && failCount >= MAX_DETERMINISTIC_FAILURES) {
@@ -763,8 +806,10 @@ export async function runPhaseExtractAtoms(
   }
   });
   estimatedSpendUsd = budgetTracker.totalSpent;
-  const remainingPages=opts._pages===undefined?await countExtractAtomsBacklog(engine,sourceId,opts):pagesSkipped+failures.length;
+  const remainingPages=opts._pages===undefined?await countExtractAtomsBacklog(engine,sourceId,sourceScope):pagesSkipped+failures.length;
   if(remainingPages===null)throw new Error('atom_backlog_unknown: unable to verify remaining inputs');
+  const heldPages=opts.reuseDuplicateSources&&opts._pages===undefined?await countExtractAtomsBacklog(engine,sourceId,{...sourceScope,heldOnly:true}):0;
+  if(heldPages===null)throw new Error('atom_backlog_unknown: unable to verify held inputs');
 
   // v0.42 Wave B2: write extract receipt + rollup row when the phase
   // actually extracted atoms. Both are best-effort per F-OUT-19 —
@@ -818,6 +863,7 @@ export async function runPhaseExtractAtoms(
       transcripts_skipped_budget: transcriptsSkipped,
       pages_processed: pagesProcessed,
       pages_remaining:remainingPages,
+      pages_held:heldPages,
       pages_total: pages.length,
       pages_skipped_budget: pagesSkipped,
       duplicates_skipped: duplicatesSkipped,

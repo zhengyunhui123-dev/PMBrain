@@ -97,4 +97,11 @@ test('pending historical notes are not hidden by a newly synchronized file and i
   expect(extraction?.details.failures.some((row:any)=>row.error.includes('atom_evidence_unverified'))).toBe(true);
   expect(extraction?.details.pages_remaining).toBe(1);
   expect((await engine.executeRaw<{n:number}>("SELECT count(*)::int n FROM pages WHERE type='atom' AND frontmatter->>'source_slug'='notes/invalid-evidence'"))[0].n).toBe(0);
-},90_000);
+  await engine.executeRaw("UPDATE pages SET frontmatter=jsonb_set(frontmatter,'{atoms_fail_count}','3'::jsonb) WHERE source_id='default' AND slug='notes/invalid-evidence'");
+  unsupported=false;const callsBeforeRetry=extractionCalls;
+  expect((await runtime.retry(invalid.id))?.id).toBe(invalid.id);
+  const deadline=Date.now()+60000;let resumed:any;
+  while(Date.now()<deadline){resumed=await runtime.getRun(invalid.id);if(resumed&&!['queued','running'].includes(resumed.status))break;await Bun.sleep(40);}
+  expect(phase(resumed,'extract_atoms')?.details.pages_processed).toBe(1);
+  expect(extractionCalls).toBe(callsBeforeRetry+1);
+},180_000);

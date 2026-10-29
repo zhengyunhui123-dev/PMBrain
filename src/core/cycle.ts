@@ -393,6 +393,7 @@ export interface CycleReport {
 
 export interface CycleOpts {
   quickEntitiesOnly?: boolean;
+  reuseDuplicateKnowledgeSources?: boolean;
   captureEntitySlugs?: string[];
   prepareEntityCapture?: () => Promise<string[]>;
   captureEntityBudget?: import('./cycle/capture-entities.ts').CaptureEntitiesOpts['budget'];
@@ -2249,6 +2250,7 @@ export async function runCycle(
           schemaPack:opts.schemaPack,
           since:opts.knowledgeSince,
           requireSourceQuotes:opts.includePendingKnowledge,
+          reuseDuplicateSources:opts.reuseDuplicateKnowledgeSources,
           deferEmbedding:phases.includes('embed'),
           // v0.41.19.0 (T3): closure refreshes cycle lock + fires outer hook.
           yieldDuringPhase: buildYieldDuringPhase(lock, opts.yieldDuringPhase),
@@ -2376,6 +2378,7 @@ export async function runCycle(
           deadlineAtMs: opts.deadlineAtMs ?? null,
           privateQueueOwnerJobId: opts.privateQueueOwnerJobId ?? null,
           sourceId: cycleSourceId,
+          incremental:opts.reuseDuplicateKnowledgeSources,
         }));
         result.duration_ms = duration_ms;
         phaseResults.push(result);

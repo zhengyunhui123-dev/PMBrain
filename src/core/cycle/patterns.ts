@@ -26,7 +26,7 @@ import type { PhaseResult, PhaseError } from '../cycle.ts';
 import { MinionQueue } from '../minions/queue.ts';
 import { DEFAULT_PRIVATE_QUEUE_LEASE_MS } from '../minions/queue.ts';
 import { waitForCompletion, TimeoutError } from '../minions/wait-for-completion.ts';
-import type { MinionJobInput, SubagentHandlerData } from '../minions/types.ts';
+import type { MinionHandler, MinionJobInput, SubagentHandlerData } from '../minions/types.ts';
 import { loadAllowedSlugPrefixes } from './allowed-slug-prefixes.ts';
 import { serializeMarkdown } from '../markdown.ts';
 import type { Page, PageType } from '../types.ts';
@@ -47,6 +47,8 @@ export interface PatternsPhaseOpts {
   yieldDuringPhase?: () => Promise<void>;
   deadlineAtMs?: number | null;
   sourceId?: string;
+  incremental?: boolean;
+  _handler?: MinionHandler;
   privateQueueOwnerJobId?: number | null;
 }
 
@@ -77,6 +79,15 @@ export async function runPhasePatterns(
         `${reflections.length} reflections in last ${config.lookbackDays}d (need ≥${config.minEvidence})`,
         modelDetails,
       );
+    }
+
+    const evidenceKey = `dream.patterns.last_evidence.${opts.sourceId ?? 'all'}`;
+    const newestEvidence = reflections.reduce((latest, reflection) => Math.max(latest, reflection.updatedAt.getTime()), 0);
+    if (opts.incremental) {
+      const priorEvidence = Date.parse((await engine.getConfig(evidenceKey)) ?? '');
+      if (Number.isFinite(priorEvidence) && newestEvidence <= priorEvidence) {
+        return skipped('no_new_evidence', 'reflections have not changed since the last completed patterns run');
+      }
     }
 
     if (opts.dryRun) {
@@ -134,7 +145,7 @@ export async function runPhasePatterns(
       queue,
       childQueueName,
       renewPrivateQueueLease,
-      undefined,
+      opts._handler,
       undefined,
       opts.signal,
     );
@@ -165,6 +176,11 @@ export async function runPhasePatterns(
 
     // Reverse-write to fs.
     const reverseWriteCount = await reverseWriteRefs(engine, opts.brainDir, writtenRefs, opts.signal);
+
+    if (outcome !== 'completed') {
+      return { ...ok(`pattern detection did not complete (${outcome})`, { ...modelDetails, child_outcome: outcome, job_id: job.id }), status: 'warn' };
+    }
+    if(opts.incremental)await engine.setConfig(evidenceKey, new Date(newestEvidence).toISOString());
 
     return ok(`${writtenRefs.length} pattern page(s) written/updated (${outcome})`, {
       ...modelDetails,
@@ -223,6 +239,7 @@ interface ReflectionRef {
   slug: string;
   title: string;
   excerpt: string;
+  updatedAt: Date;
 }
 
 async function gatherReflections(
@@ -231,8 +248,8 @@ async function gatherReflections(
   sourceId?: string,
 ): Promise<ReflectionRef[]> {
   const since = new Date(Date.now() - lookbackDays * 24 * 60 * 60 * 1000).toISOString();
-  const rows = await engine.executeRaw<{ slug: string; title: string | null; compiled_truth: string | null }>(
-    `SELECT slug, title, compiled_truth
+  const rows = await engine.executeRaw<{ slug: string; title: string | null; compiled_truth: string | null; updated_at: Date | string }>(
+    `SELECT slug, title, compiled_truth, updated_at
        FROM pages
       WHERE slug LIKE $3
         AND deleted_at IS NULL AND COALESCE(frontmatter->>'visibility','world') <> 'private' AND COALESCE(frontmatter->>'private','false')<>'true'
@@ -246,6 +263,7 @@ async function gatherReflections(
     slug: r.slug,
     title: r.title ?? r.slug,
     excerpt: (r.compiled_truth ?? '').slice(0, 600),
+    updatedAt: new Date(r.updated_at),
   }));
 }
 

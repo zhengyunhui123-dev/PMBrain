@@ -325,6 +325,8 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
     ...resolveDreamRelationOptions(input.preset, input.phase),
     ...common, brainDir,
     ...await phaseOptions(sourceId ?? 'default'),
+    quickEntitiesOnly: input.preset === 'full',
+    reuseDuplicateKnowledgeSources: input.preset === 'full',
     schemaPack:knowledgePack,
     includePendingKnowledge:knowledgeEnabled,
     forcePackPhases: input.preset === 'meeting' ? ['extract_atoms'] : undefined,

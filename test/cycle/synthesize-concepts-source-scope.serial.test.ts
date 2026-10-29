@@ -1,10 +1,15 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
 import { configureGateway, resetGateway } from '../../src/core/ai/gateway.ts';
 import { PGLiteEngine } from '../../src/core/pglite-engine.ts';
+import { PostgresEngine } from '../../src/core/postgres-engine.ts';
+import type { BrainEngine } from '../../src/core/engine.ts';
+import { assertSafeE2eDatabaseUrl } from '../helpers/db-guard.ts';
 import { runPhaseSynthesizeConcepts } from '../../src/core/cycle/synthesize-concepts.ts';
 import { resetPgliteState } from '../helpers/reset-pglite.ts';
+import { resetHeldDreamKnowledge } from '../../src/product/tasks/dream-knowledge.ts';
 
-let engine: PGLiteEngine;
+const testUrl=process.env.PMBRAIN_RELATION_TEST_DATABASE_URL;
+let engine: BrainEngine;
 
 beforeAll(async () => {
   configureGateway({
@@ -12,8 +17,9 @@ beforeAll(async () => {
     embedding_dimensions: 1536,
     env: {},
   });
-  engine = new PGLiteEngine();
-  await engine.connect({});
+  if(testUrl)assertSafeE2eDatabaseUrl(testUrl);
+  engine = testUrl?new PostgresEngine():new PGLiteEngine();
+  await engine.connect(testUrl?{database_url:testUrl}:{});
   await engine.initSchema();
 }, 120_000);
 
@@ -23,7 +29,7 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-  await resetPgliteState(engine);
+  await resetPgliteState(engine as PGLiteEngine);
   await engine.executeRaw(
     `INSERT INTO sources (id, name) VALUES ('personal', 'Personal') ON CONFLICT (id) DO NOTHING`,
   );
@@ -150,3 +156,27 @@ describe('synthesize_concepts concept-provenance edges', () => {
     expect(await provenanceRows()).toEqual([]);
   }, 120_000);
 });
+
+test('概念综合失败保留已有内容，重复失败有上限，证据变化后恢复',async()=>{
+  const entries=Array.from({length:5},(_,index)=>({slug:`atoms/retry-${index}`,source_id:'personal',title:`证据${index}`,body:`内容${index}`,concept_refs:['retry-theme']}));
+  for(const atom of entries)await engine.putPage(atom.slug,{type:'atom',title:atom.title,compiled_truth:atom.body,timeline:'',frontmatter:{concepts:atom.concept_refs}},{sourceId:'personal'});
+  let calls=0,fail=false;
+  const chat:typeof import('../../src/core/ai/gateway.ts').chat=async()=>{
+    calls++;
+    if(fail)throw new Error('concept_output_invalid');
+    return {text:'可靠的已有综合内容。',blocks:[{type:'text',text:'可靠的已有综合内容。'}],stopReason:'end',usage:{input_tokens:100,output_tokens:50,cache_read_tokens:0,cache_creation_tokens:0},model:'anthropic:claude-sonnet-4-6',providerId:'anthropic'};
+  };
+  const opts={_atoms:entries,sourceId:'personal',_chat:chat};
+  expect((await runPhaseSynthesizeConcepts(engine,opts)).status).toBe('ok');
+  const previous=(await engine.getPage('concepts/retry-theme',{sourceId:'personal'}))!.compiled_truth;
+  entries[0]!.body='发生变更的证据';fail=true;
+  for(let i=0;i<3;i++)expect((await runPhaseSynthesizeConcepts(engine,opts)).status).toBe('warn');
+  expect((await engine.getPage('concepts/retry-theme',{sourceId:'personal'}))!.compiled_truth).toBe(previous);
+  const held=await runPhaseSynthesizeConcepts(engine,opts);expect(calls).toBe(4);expect(held.status).toBe('warn');
+  await engine.setConfig('dream.concepts.retry.other',JSON.stringify({sourceId:'default',attempts:3,hash:'other'}));
+  await resetHeldDreamKnowledge(engine,'personal');
+  expect(await engine.getConfig('dream.concepts.retry.other')).not.toBeNull();
+  fail=false;expect((await runPhaseSynthesizeConcepts(engine,opts)).status).toBe('ok');expect(calls).toBe(5);
+  entries[0]!.body='再次更新的证据';
+  expect((await runPhaseSynthesizeConcepts(engine,opts)).status).toBe('ok');expect(calls).toBe(6);
+},120000);

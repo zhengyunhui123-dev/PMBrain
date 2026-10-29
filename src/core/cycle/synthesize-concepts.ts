@@ -112,6 +112,12 @@ export async function runPhaseSynthesizeConcepts(
                 AND origin.deleted_at IS NULL AND COALESCE(origin.frontmatter->>'visibility','world')<>'private'
                 AND COALESCE(origin.frontmatter->>'private','false')<>'true'
                 AND (pages.frontmatter->>'source_hash' IS NULL OR substring(origin.content_hash from 1 for 16)=pages.frontmatter->>'source_hash')
+            ) OR EXISTS (
+              SELECT 1 FROM links l JOIN pages origin ON origin.id=l.to_page_id
+              WHERE l.from_page_id=pages.id AND l.link_type='derives_from' AND l.link_source='concept-provenance'
+                AND l.origin_field='duplicate_source' AND l.origin_page_id=origin.id AND l.context=origin.content_hash
+                AND origin.source_id=pages.source_id AND origin.deleted_at IS NULL
+                AND COALESCE(origin.frontmatter->>'visibility','world')<>'private' AND COALESCE(origin.frontmatter->>'private','false')<>'true'
             ))
             AND ($1::text IS NULL OR source_id = $1)`,
         [opts.sourceId ?? null],
@@ -224,6 +230,14 @@ export async function runPhaseSynthesizeConcepts(
     const baseline=await engine.getPage(outputSlug,{sourceId:outputSourceId});
     const membersHash=createHash('sha256').update(JSON.stringify(['dream-concept-v1',group.tier,group.atomRefs.map((ref,i)=>[ref.source_id,ref.slug,group.atomTitles[i],group.atomBodies[i]]).sort((a,b)=>JSON.stringify(a).localeCompare(JSON.stringify(b)))])).digest('hex');
     if(baseline?.frontmatter.pmbrain_concept_members_hash===membersHash&&baseline.frontmatter.pmbrain_concept_complete!==false){cachedConcepts++;continue;}
+    const retryKey=`dream.concepts.retry.${createHash('sha256').update(JSON.stringify([outputSourceId,outputSlug])).digest('hex')}`;
+    const retryHash=createHash('sha256').update(JSON.stringify([membersHash,resolvedModel.model])).digest('hex');
+    let retry:{hash?:string;attempts?:number}={};
+    try{const value:unknown=JSON.parse((await engine.getConfig(retryKey))??'{}');if(value&&typeof value==='object'&&!Array.isArray(value))retry=value as typeof retry;}catch{}
+    if((group.tier==='T1'||group.tier==='T2')&&retry.hash===retryHash&&Number(retry.attempts)>=3){
+      failures.push({concept:group.conceptSlug,error:'concept_retry_held: unchanged evidence and model failed repeatedly'});
+      continue;
+    }
     tierCounts[group.tier]++;
     let narrative: string;
     let complete=true;
@@ -259,16 +273,20 @@ export async function runPhaseSynthesizeConcepts(
           await maybeYield();
           budgetTracker.record({modelId:result.model??resolvedModel.model,inputTokens:result.usage.input_tokens,outputTokens:result.usage.output_tokens});
           estimatedSpendUsd=budgetTracker.totalSpent;
-          narrative = result.text.trim() || deterministicNarrative(group);
-          if(result.text.trim())llmConcepts++;else{complete=false;failures.push({concept:group.conceptSlug,error:'empty_concept_response'});}
+          if(result.stopReason==='length'||result.stopReason==='refusal'||result.stopReason==='content_filter')throw new Error(`concept_${result.stopReason}`);
+          if(!result.text.trim())throw new Error('empty_concept_response');
+          narrative = result.text.trim();
+          llmConcepts++;
+          if(!opts.dryRun&&retry.hash)await engine.unsetConfig(retryKey);
         } catch (err) {
           throwIfAborted(opts.signal, '[dream] synthesize_concepts');
           complete=false;
           if(err instanceof BudgetExhausted)deferredConcepts++;
-          else failures.push({
-            concept: group.conceptSlug,
-            error: err instanceof Error ? err.message : String(err),
-          });
+          else {
+            const message=err instanceof Error ? err.message : String(err);
+            failures.push({concept:group.conceptSlug,error:message});
+            if(!opts.dryRun&&/empty|truncat|length|schema|parse|invalid|refusal|content.?filter/i.test(message))await engine.setConfig(retryKey,JSON.stringify({sourceId:outputSourceId,slug:outputSlug,hash:retryHash,attempts:retry.hash===retryHash?Number(retry.attempts??0)+1:1}));
+          }
           narrative = deterministicNarrative(group);
         }
       }
@@ -276,6 +294,8 @@ export async function runPhaseSynthesizeConcepts(
       narrative = deterministicNarrative(group);
       deterministicConcepts++;
     }
+
+    if(!complete)continue;
 
     if (!opts.dryRun) {
       const section='\n\n## 知识综合\n\n';
@@ -430,7 +450,7 @@ export async function runPhaseSynthesizeConcepts(
     summary:
       `synthesize_concepts: ${conceptsWritten} concepts ` +
       `(T1=${tierCounts.T1} T2=${tierCounts.T2} T3=${tierCounts.T3})` +
-      (failures.length > 0 ? ` (${failures.length} LLM-failed → template fallback)` : ''),
+      (failures.length > 0 ? ` (${failures.length} failed; existing content preserved)` : ''),
     details: {
       ...modelDetails,
       concepts_written: conceptsWritten,

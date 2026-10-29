@@ -80,6 +80,7 @@ test('快速维护复用相同资料及备份，保留各自来源；不同内�
     const input=(ctx.data as any).ingest_context;submissions.push(input.slug);
     const entities=[['projects/星河','星河项目','project'],['companies/星河','星河公司','company'],['companies/星河团队','星河团队','organization'],['people/张三','张三','person']];
     if(input.chunkBody.includes('李四'))entities.push(['people/李四','李四','person']);
+    if(input.chunkBody.includes('新星项目'))entities.push(['projects/新星','新星项目','project'],['companies/新星','新星公司','company'],['companies/新星团队','新星团队','organization']);
     for(const [slug,title,type] of entities){
       const content=await annotateIngestContent(engine,input,slug!,`---\ntitle: ${title}\ntype: ${type}\n---\n${title}的来源资料。[Source: ${input.slug}]`);
       await engine.putPage(slug!,parseMarkdown(content,slug!),{sourceId:input.sourceId});
@@ -101,9 +102,13 @@ test('快速维护复用相同资料及备份，保留各自来源；不同内�
   expect(relations).toHaveLength(4);
   await runPhaseCaptureEntities(engine,options);expect(submissions).toHaveLength(1);
   await runPhaseCaptureEntities(engine,{...options,model:'anthropic:claude-haiku-4-5'});expect(submissions).toHaveLength(1);
-  await engine.putPage('notes/备份/new',{type:'note',title:'不同内容的备份',compiled_truth:body+' 李四担任验收负责人。',frontmatter:{}});
+  await engine.putPage('notes/备份/new',{type:'note',title:'不同内容的备份',compiled_truth:body+' 李四担任新星项目验收负责人，新星公司与新星团队负责实施。',frontmatter:{}});
   await runPhaseCaptureEntities(engine,options);expect(submissions).toHaveLength(2);
   expect((await engine.getPage('people/李四'))?.type).toBe('person');
+  for(const [slug,type] of [['projects/新星','project'],['companies/新星','company'],['companies/新星团队','organization']])expect((await engine.getPage(slug!))?.type).toBe(type);
+  const newLinks=await engine.executeRaw<{slug:string}>("SELECT DISTINCT e.slug FROM links l JOIN pages s ON s.id=l.from_page_id JOIN pages e ON e.id=l.to_page_id WHERE s.slug='notes/备份/new' AND e.slug=ANY($1::text[])",[['people/李四','projects/新星','companies/新星','companies/新星团队']]);
+  expect(newLinks.map(row=>row.slug).sort()).toEqual(['people/李四','projects/新星','companies/新星','companies/新星团队'].sort());
+  expect((await engine.executeRaw("SELECT id FROM pages WHERE type='project' AND title='星河项目'")).length).toBe(1);
 },120000);
 
 test('快速维护沿用旧版成功凭据，仅关联其中四类实体',async()=>{

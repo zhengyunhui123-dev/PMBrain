@@ -241,13 +241,18 @@ export function finishTaskProgress(view: TaskProductProgress, status: string, re
     const embed=data.phases.find((phase:any)=>phase.phase==='embed')?.details;
     add('提炼知识点',atoms?.atoms_extracted);
     add('待提炼资料',atoms?.pages_remaining);
+    if (Array.isArray(atoms?.failures)) {
+      add('提炼失败资料', atoms.failures.length);
+      next.failedUnits = Math.max(next.failedUnits ?? 0, atoms.failures.length, Number(atoms.pages_held??0));
+    }
+    add('待处理失败资料', atoms?.pages_held);
     add('综合概念',concepts?.concepts_written);
     add('AI 综合概念',concepts?.concepts_llm);
     add('证据归组',concepts?.concepts_deterministic);
     add('复用概念',concepts?.concepts_cached);
     add('待综合概念',concepts?.concepts_remaining);
     add('剩余向量分块',embed?.remainingChunks);
-    add('异常步骤', data.phases.filter((phase: any) => phase.status === 'fail').length);
+    add('异常步骤', data.phases.filter((phase: any) => phase.status === 'fail' || Number(phase.details?.pages_held??0)>0 || (Array.isArray(phase.details?.failures) && phase.details.failures.length > 0)).length);
     const sync = data.phases.find((phase: any) => phase.phase === 'sync');
     add('更新资料', sync?.details?.modified);
     const relations = data.phases.find((phase: any) => phase.phase === 'extract')?.details;
@@ -283,7 +288,7 @@ export function finishTaskProgress(view: TaskProductProgress, status: string, re
     for (const step of next.steps) {
       const matches = data.phases.filter((phase: any) => step.phases.includes(phase.phase));
       if (!matches.length) { step.status = 'skipped'; continue; }
-      step.status = matches.some((phase: any) => phase.status === 'fail') ? 'failed'
+      step.status = matches.some((phase: any) => phase.status === 'fail' || Number(phase.details?.pages_held??0)>0 || (Array.isArray(phase.details?.failures) && phase.details.failures.length > 0)) ? 'failed'
         : matches.some(phaseHasPendingWork)?'pending':matches.every((phase: any) => phase.status === 'skipped') ? 'skipped' : 'completed';
       const details=matches.map(dreamPhaseDetail).filter(Boolean);step.detail=details.length?[...new Set(details)].join('；'):undefined;
     }

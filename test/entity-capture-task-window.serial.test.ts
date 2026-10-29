@@ -11,12 +11,13 @@ import {buildGatewayConfig} from '../src/core/ai/gateway-config.ts';
 import {configPath} from '../src/core/config.ts';
 import {assertSafeE2eDatabaseUrl} from './helpers/db-guard.ts';
 import {resetPgliteState} from './helpers/reset-pglite.ts';
+import {requestImportedEntityCapture} from '../src/core/pmbrain-adapters/entity-capture-request.ts';
 
 const url=process.env.PMBRAIN_TASK_WINDOW_TEST_DATABASE_URL;
 const keys=['PMBRAIN_HOME','GBRAIN_HOME','DATABASE_URL','PMBRAIN_DATABASE_URL','GBRAIN_DATABASE_URL','PMBRAIN_EMBEDDING_MODEL','GBRAIN_EMBEDDING_MODEL','PMBRAIN_EMBEDDING_DIMENSIONS','GBRAIN_EMBEDDING_DIMENSIONS'];
 const previous=keys.map(key=>process.env[key]);
 let home:string,engine:BrainEngine,runtime:ProductTaskRuntime,server:ReturnType<typeof Bun.serve>;
-let requests=0,held=false;const releases=new Set<()=>void>();
+let requests=0,held=false;const releases=new Set<()=>void>();const prompts:string[]=[];
 beforeAll(async()=>{
   home=mkdtempSync(join(tmpdir(),'pmbrain-task-window-'));
   for(const key of keys)delete process.env[key];process.env.PMBRAIN_HOME=home;process.env.GBRAIN_HOME=home;
@@ -32,6 +33,7 @@ beforeAll(async()=>{
     if(held)await new Promise<void>(resolve=>releases.add(resolve));
     const nativeTools=(body.tools??[]).map((tool:any)=>tool.function?.name).filter((name:any)=>typeof name==='string');
     const requestText=JSON.stringify(body);
+    prompts.push(requestText);
     const nativeToolName=['brain_capture_entities','brain_complete_ingest'].find(name=>nativeTools.includes(name));
     const toolName=nativeToolName??(requestText.includes('Use only these definitions:')
       ?['brain_capture_entities','brain_complete_ingest'].find(name=>requestText.includes(name))
@@ -92,4 +94,21 @@ test('窗口中的模型请求停止后不继续领取，刷新保持停止，�
   const resumed=(await runtime.retry(run.id))!;expect(resumed.id).toBe(run.id);
   await waitFor(async()=>['completed','failed'].includes((await runtime.getRun(run.id))!.status));
   expect((await runtime.getRun(run.id))!.status).toBe('completed');
+},120000);
+
+test('产品深度整理只识别四类实体，相同正文与备份只提交一次',async()=>{
+  const body='这是隔离深度整理的项目资料，记录验收负责人和组织安排。'.repeat(4);
+  for(const slug of ['notes/deep-original','notes/备份/deep-copy']){
+    const page={type:'note' as const,title:slug,compiled_truth:body,frontmatter:{}};
+    await engine.putPage(slug,page);
+    await requestImportedEntityCapture(engine,'default',{slug,...page});
+  }
+  const before=requests;
+  const submitted=await runtime.submitDream({preset:'full',sourceId:'default'});
+  await waitFor(async()=>['completed','failed'].includes((await runtime.getRun(submitted.id))!.status));
+  const done=(await runtime.getRun(submitted.id))!;
+  expect(done.status,done.error??JSON.stringify(done.result)).toBe('completed');
+  expect(requests-before).toBe(1);
+  expect(prompts[before]).toContain('person、company、organization、project');
+  expect(prompts[before]).not.toContain('person、company、organization、project、concept');
 },120000);
