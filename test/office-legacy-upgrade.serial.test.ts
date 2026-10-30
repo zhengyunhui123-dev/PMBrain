@@ -40,12 +40,12 @@ afterAll(async()=>{
 
 async function writeWord(path:string,text:string,images=3){
   const zip=new JSZip();zip.file('word/document.xml',`<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>${text}</w:t></w:r></w:p></w:body></w:document>`);
-  for(let i=0;i<images;i++){const canvas=createCanvas(32,32),context=canvas.getContext('2d');context.fillStyle=['#ff0000','#00ff00','#0000ff'][i%3];context.fillRect(0,0,32,32);zip.file('word/media/image'+i+'.png',canvas.toBuffer('image/png'));}
+  for(let i=0;i<images;i++){const canvas=createCanvas(32,32),context=canvas.getContext('2d');context.fillStyle=['#ff0000','#00ff00','#0000ff','#ffff00'][i%4];context.fillRect(0,0,32,32);zip.file('word/media/image'+i+'.png',canvas.toBuffer('image/png'));}
   writeFileSync(path,await zip.generateAsync({type:'nodebuffer'}));
 }
-async function legacyFixture(name:string,failedStart=0,text='OriginalLegacyNativeText'){
+async function legacyFixture(name:string,failedStart=0,text='OriginalLegacyNativeText',images=3){
   const sourceId='legacy-'+name+'-'+Date.now().toString(36),dir=join(root,sourceId);mkdirSync(dir);const path=join(dir,'report.docx');
-  await engine.executeRaw('INSERT INTO sources(id,name,local_path) VALUES($1,$1,$2)',[sourceId,dir]);await writeWord(path,text);
+  await engine.executeRaw('INSERT INTO sources(id,name,local_path) VALUES($1,$1,$2)',[sourceId,dir]);await writeWord(path,text,images);
   failAt=failedStart?calls+failedStart:-1;const options={sourceId,noEmbed:true,documentOcr:true};await importOfficeFile(engine,path,'report.docx',options);failAt=-1;
   await engine.executeRaw("UPDATE pages SET frontmatter=frontmatter-'document_chunk_count'-'document_chunk_hash' WHERE source_id=$1",[sourceId]);
   await engine.executeRaw("DELETE FROM config WHERE key LIKE 'document.ocr.v1.%'");
@@ -75,11 +75,12 @@ test('旧资料缺块和同数量坏块从已存正文修补，不重新识图�
   expect((await stored(f.sourceId)).some(row=>row.chunk_text.includes('CorruptedUniqueChunkToken'))).toBe(false);expect((await stored(f.sourceId)).map(row=>row.chunk_text).join('\n')).toContain('OCR fixture evidence');
   const current=await stored(f.sourceId);await engine.executeRaw("UPDATE content_chunks SET chunk_text='SecondCorruptionToken' WHERE id=$1",[current.at(-1)!.id]);await importOfficeFile(engine,f.path,'report.docx',f.options);expect(calls).toBe(count);expect((await stored(f.sourceId)).some(row=>row.chunk_text.includes('SecondCorruptionToken'))).toBe(false);
 },60000);
-test('两张失败图片补齐一张后停止并重开，只请求剩余一张且不重复追加',async()=>{
-  const f=await legacyFixture('resume',2),controller=new AbortController(),count=calls;let interrupted=false;
-  const proxy=new Proxy(engine,{get(target,key){if(key==='transaction')return async(fn:any)=>{const value=await target.transaction(fn),page=await target.getPage('report.docx',{sourceId:f.sourceId});if(!interrupted&&Number(page!.frontmatter.document_ocr_succeeded)===2){interrupted=true;controller.abort(new Error('isolated stop'));}return value;};const value=Reflect.get(target,key);return typeof value==='function'?value.bind(target):value;}});
-  let failure:unknown;try{await importOfficeFile(proxy,f.path,'report.docx',{...f.options,runtime:new DocumentRuntime({signal:controller.signal})});}catch(error){failure=error;}expect(String(failure)).toContain('isolated stop');expect(calls-count).toBe(1);
+test('失败图片识别一批后停止并重开，复用缓存且只请求剩余一张',async()=>{
+  const f=await legacyFixture('resume',2,'OriginalLegacyNativeText',4),controller=new AbortController(),count=calls,original=await engine.getPage('report.docx',{sourceId:f.sourceId});
+  onModel=()=>{if(calls-count===2)controller.abort(new Error('isolated stop'));};
+  let failure:unknown;try{await importOfficeFile(engine,f.path,'report.docx',{...f.options,runtime:new DocumentRuntime({signal:controller.signal})});}catch(error){failure=error;}finally{onModel=undefined;}expect(String(failure)).toContain('isolated stop');expect(calls-count).toBe(2);
   const partial=await engine.getPage('report.docx',{sourceId:f.sourceId});await engine.disconnect();engine=(database?new PostgresEngine():new WorkerPgliteEngine()) as unknown as BrainEngine;await engine.connect(database?{database_url:database}:{database_path:join(root,'database')});
+  expect(partial!.compiled_truth).toBe(original!.compiled_truth);
   const before=calls;await importOfficeFile(engine,f.path,'report.docx',f.options);expect(calls-before).toBe(1);const final=await engine.getPage('report.docx',{sourceId:f.sourceId});expect(final!.compiled_truth.startsWith(partial!.compiled_truth)).toBe(true);expect((final!.frontmatter.ocr_receipt as any).status).toBe('complete');
 },90000);
 test('识图期间原文件变化拒绝追加，旧正文和向量保留',async()=>{

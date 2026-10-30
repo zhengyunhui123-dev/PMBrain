@@ -2,6 +2,7 @@ import { extname } from 'node:path';
 import {DocumentZip} from './zip-reader.ts';
 import {renderDocumentSection} from './markdown-renderer.ts';
 import type { DocumentParseOptions, StructuredDocument } from './types.ts';
+import {settleOcrRequests} from './ocr-concurrency.ts';
 
 const MIME_BY_EXTENSION: Record<string, string> = {
   '.avif': 'image/avif',
@@ -41,9 +42,15 @@ export async function appendOoxmlImageOcr(
   let textBytes=document.sections.reduce((sum,section)=>sum+Buffer.byteLength(renderDocumentSection(section))+2,0);
   zip.runtime.assertText(textBytes);
   if(!opts.ocrItems)process.stderr.write(`${JSON.stringify({ event: 'start', phase: 'import.process.ocr', done: 0, total: media.length, unit: '张图片', stage: '图片识别' })}\n`);
-  for (const [index, name] of media.entries()) {
+  for(let offset=0;offset<media.length;){
     await zip.runtime.checkpoint(true);
-    const result = await opts.ocrPage!(index + 1, await zip.buffer(name,32*1024**2), MIME_BY_EXTENSION[extname(name).toLowerCase()]);
+    const count=zip.runtime.plan.concurrency>1?2:1,names=media.slice(offset,offset+count),start=offset;offset+=names.length;
+    const images=[];
+    for(const [index,name] of names.entries())images.push({page:start+index+1,image:await zip.buffer(name,32*1024**2),mime:MIME_BY_EXTENSION[extname(name).toLowerCase()]});
+    const results=opts.ocrPage!.batch&&images.length>1?await opts.ocrPage!.batch(images):await settleOcrRequests(images.map(image=>opts.ocrPage!(image.page,image.image,image.mime)));
+    if(results.length!==images.length)throw new Error('批量识图结果数量不匹配');
+    for(const [localIndex,name] of names.entries()){
+    const index=start+localIndex,result=results[localIndex];
     model ??= result.model ?? undefined;
     if(result.recognizedAt && (!document.metadata.ocrProcessedAt || result.recognizedAt>document.metadata.ocrProcessedAt))document.metadata.ocrProcessedAt=result.recognizedAt;
     if(result.reused)reused++;
@@ -67,6 +74,7 @@ export async function appendOoxmlImageOcr(
       if (result.message) warnings.push(`${name}: ${result.message}`);
     }
     if(!opts.ocrItems)process.stderr.write(`${JSON.stringify({ event: 'tick', phase: 'import.process.ocr', done: index + 1, total: media.length, unit: '张图片', stage: '图片识别' })}\n`);
+    }
   }
   document.metadata.imageCount = Math.max(document.metadata.imageCount, media.length);
   document.metadata.ocrUsed = succeeded > 0;

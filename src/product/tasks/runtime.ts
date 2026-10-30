@@ -506,15 +506,15 @@ export class ProductTaskRuntime {
   attachForegroundCheck(check: () => boolean) { this.foregroundCheck = check; }
   updateBackgroundResources(sample: Omit<BackgroundResourceSample, 'cpuBusyRatio'>) { this.background.updateDesktopSample(sample); }
 
-  private async vectorizationDecision(maintenanceId?:number): Promise<VectorizationSchedule> {
+  private async vectorizationDecision(maintenanceId?:number,allowOcrPeers=false): Promise<VectorizationSchedule> {
     const decision = this.background.decision(this.foregroundCheck?.() === true, this.localPressure || this.externalPressure);
     if (decision.mode === 'waiting') return decision;
     const busy = await this.engine.executeRaw(`SELECT id FROM minion_jobs WHERE queue IN ($1,$2)
       AND status IN ('waiting','active','waiting-children')
       AND data->'task'->>'type' IN ('import','sync','sync-file','dream','assistant')
-      AND (data->'task'->'input'->'ocrOnly' IS NULL OR status='active')
+      AND (data->'task'->'input'->'ocrOnly' IS NULL OR (status='active' AND NOT $4::boolean))
       AND data->>'waitingForOcr' IS DISTINCT FROM 'true'
-      AND ($3::bigint IS NULL OR (id<>$3 AND (data->'task'->>'type'<>'dream' OR id<$3))) LIMIT 1`, [PRODUCT_TASK_QUEUE, SYNC_FILE_QUEUE,maintenanceId??null]);
+      AND ($3::bigint IS NULL OR (id<>$3 AND (data->'task'->>'type'<>'dream' OR id<$3))) LIMIT 1`, [PRODUCT_TASK_QUEUE, SYNC_FILE_QUEUE,maintenanceId??null,allowOcrPeers]);
     return this.background.decision(busy.length > 0, this.localPressure || this.externalPressure);
   }
 
@@ -763,7 +763,7 @@ export class ProductTaskRuntime {
     if (!record?.lock_token) throw new Error('任务执行租约无效');
     const structuredTask = record.data.task as ProductTask;
     const backgroundOcr=structuredTask.type==='import'&&!!structuredTask.input.ocrOnly;
-    if(backgroundOcr){const schedule=await this.vectorizationDecision(context.id);if(schedule.mode==='waiting')return this.deferMaintenance(record,`资料已保存，图片识别${schedule.reason}`,Math.max(1000,schedule.delayMs));}
+    if(backgroundOcr){const schedule=await this.vectorizationDecision(context.id,true);if(schedule.mode==='waiting')return this.deferMaintenance(record,`资料已保存，图片识别${schedule.reason}`,Math.max(1000,schedule.delayMs));}
     if (structuredTask.type === 'embed' && structuredTask.input.searchOptimize) {
       const state = await this.searchOptimizeView();
       if (state.items.length && (state.paused || state.schedule.mode === 'waiting')) {
@@ -966,7 +966,7 @@ export class ProductTaskRuntime {
           if(cancelRequested) throw new Error('任务已取消');
           if (message.method === 'task.searchOptimize') return this.acceptSearchOptimize(String(message.args[0] ?? 'default'), Array.isArray(message.args[1]) ? message.args[1].filter((slug): slug is string => typeof slug === 'string') : []);
           if(message.method==='task.documentResources')return this.background.resourceSample();
-          if(message.method==='task.documentOcrSchedule')return this.vectorizationDecision(context.id);
+          if(message.method==='task.documentOcrSchedule')return this.vectorizationDecision(context.id,true);
           if(message.method==='task.waitingOcr'){
             if(structuredTask.type!=='dream')throw Error('无效的整理识图等待状态');
             record.data.waitingForOcr=message.args[0]===true;

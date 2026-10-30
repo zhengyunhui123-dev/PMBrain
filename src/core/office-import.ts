@@ -9,7 +9,7 @@ import { renderStructuredDocument } from './document/markdown-renderer.ts';
 import { normalizeDocumentText } from './document/normalize.ts';
 import type { DocumentImportSummary, StructuredDocument } from './document/types.ts';
 import { parseLegacyPresentationDocument, parseLegacyWordDocument } from './document/parsers/legacy-office.ts';
-import { OCR_PROMPT_VERSION, OCR_RECEIPT_VERSION } from './ocr.ts';
+import { OCR_PROMPT_VERSION, OCR_RECEIPT_VERSION, recognizeImagesText } from './ocr.ts';
 import {createDocumentOcr} from './document/ocr-cache.ts';
 import {readDocumentChunkManifest} from './document/chunk-manifest.ts';
 import {DocumentRuntime,officeFileSizeLimit} from './document/resource-policy.ts';
@@ -201,7 +201,8 @@ export async function importOfficeFile(
     structured: opts.structured !== false,
     runtime,
     deferOcr,
-    ocrPage: opts.checkOnly?undefined:createDocumentOcr(engine,opts.sourceId??'default',async(image,mime)=>{await validate();return extractImageOcrResult(engine,image,mime,{enabled:true});},ocrEnabled),
+    ocrPage: opts.checkOnly?undefined:createDocumentOcr(engine,opts.sourceId??'default',(image,mime)=>extractImageOcrResult(engine,image,mime,{enabled:true}),ocrEnabled,
+      extname(filePath).toLowerCase()==='.pdf'?items=>recognizeImagesText(engine,items,{enabled:true,signal:runtime.signal}):undefined),
   });
   document.title = basename(relativePath, extname(relativePath));
   if (!opts.checkOnly && (ocrRequested || (document.metadata.ocrSucceeded??0)>0 || (document.metadata.ocrSkipped??0)>0)) {

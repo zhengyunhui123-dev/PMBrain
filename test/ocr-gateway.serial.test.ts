@@ -1,8 +1,10 @@
 import {afterEach,expect,test} from 'bun:test';
 import {createCanvas} from '@napi-rs/canvas';
 import {configureGateway,resetGateway,__setChatTransportForTests,generateOcrText,type ChatResult,type ChatOpts} from '../src/core/ai/gateway';
+import {generateOcrBatch} from '../src/core/pmbrain-adapters/ocr-batch';
 import {recognizeImageText} from '../src/core/ocr';
 import {ocrImageInputs} from '../src/core/ocr-images';
+import {createDocumentOcr} from '../src/core/document/ocr-cache';
 
 let server:ReturnType<typeof Bun.serve>|undefined;
 afterEach(()=>{resetGateway();server?.stop(true);});
@@ -14,6 +16,55 @@ function setup(){
 }
 const counters=new Map<string,string>();
 const engine={getConfig:async(key:string)=>counters.get(key)??null,setConfig:async(key:string,value:string)=>{counters.set(key,value);}} as any;
+
+test('多页扫描图一次请求并按原页码分别返回文字',async()=>{
+  setup();let calls=0,options:ChatOpts|undefined;
+  __setChatTransportForTests(async opts=>{calls++;options=opts;return reply('```json\n[{"id":"9","text":"第九页原文"},{"id":"7","text":"第七页原文"}]\n```');});
+  const image=createCanvas(64,64).toBuffer('image/png');
+  const result=await generateOcrBatch([{id:'7',bytes:image,mime:'image/png'},{id:'9',bytes:image,mime:'image/png'}]);
+  expect(calls).toBe(1);expect(result).toEqual(['第七页原文','第九页原文']);
+  const parts=options!.messages[0]!.content as any[];
+  expect(parts.filter(part=>part.type==='image')).toHaveLength(2);
+  expect(options!.system).toContain('Do NOT interpret');
+});
+
+test('合并识图结果缺页、重复页码或截断时不保存不完整文字',async()=>{
+  setup();const image=createCanvas(64,64).toBuffer('image/png'),items=[{id:'1',bytes:image,mime:'image/png'},{id:'2',bytes:image,mime:'image/png'}];
+  for(const text of ['[{"id":"1","text":"一"}]','[{"id":"1","text":"一"},{"id":"1","text":"二"}]','{"pages":[{"id":"1","text":"一"},{"id":"3","text":"三"}]}']){
+    __setChatTransportForTests(async()=>reply(text));
+    await expect(generateOcrBatch(items)).rejects.toThrow('识图');
+  }
+  __setChatTransportForTests(async()=>reply('partial','length'));
+  await expect(generateOcrBatch(items)).rejects.toThrow('截断');
+});
+
+test('同一批次的重复图片只识别一次，成功缓存供再次整理使用',async()=>{
+  const store=new Map<string,string>();
+  const cacheEngine={getConfig:async(key:string)=>store.get(key)??null,setConfig:async(key:string,value:string)=>{store.set(key,value);}} as any;
+  let singleCalls=0,batchCalls=0;
+  const imageA=Buffer.from('image-a'),imageB=Buffer.from('image-b');
+  const recognize=createDocumentOcr(cacheEngine,'same-source',async()=>{singleCalls++;return {status:'success',text:'single',model:'fixture'};},true,async inputs=>{
+    batchCalls++;return inputs.map(input=>({status:'success',text:`text-${input.id}`,model:'fixture'}));
+  });
+  const items=[{page:1,image:imageA,mime:'image/png'},{page:2,image:imageB,mime:'image/png'},{page:3,image:imageA,mime:'image/png'}];
+  const first=await recognize.batch!(items);
+  expect(batchCalls).toBe(1);expect(singleCalls).toBe(0);expect(first[2].text).toBe(first[0].text);expect(first[2].reused).toBe(true);
+  const again=await recognize.batch!(items);
+  expect(batchCalls).toBe(1);expect(singleCalls).toBe(0);expect(again.every(item=>item.reused)).toBe(true);
+});
+
+test('并发识图出现错误时等待另一请求结束后再退出',async()=>{
+  const store=new Map<string,string>();
+  const cacheEngine={getConfig:async(key:string)=>store.get(key)??null,setConfig:async(key:string,value:string)=>{store.set(key,value);}} as any;
+  let release!:()=>void,settled=false;const held=new Promise<void>(resolve=>{release=resolve;});
+  const recognize=createDocumentOcr(cacheEngine,'wait-inflight',async image=>{
+    if(image.toString()==='error')throw new Error('识图失败');
+    await held;settled=true;return {status:'success',text:'saved',model:'fixture'};
+  });
+  const pending=recognize.batch!([{page:1,image:Buffer.from('error'),mime:'image/png'},{page:2,image:Buffer.from('held'),mime:'image/png'}]);
+  let rejected=false;void pending.catch(()=>{rejected=true;});await Bun.sleep(10);expect(rejected).toBe(false);
+  release();await expect(pending).rejects.toThrow('识图失败');expect(settled).toBe(true);
+});
 
 test('普通图片沿用一个原始输入，经已有 Gateway 保留模型、预算和逐字标签要求',async()=>{
   setup();let options:ChatOpts|undefined;

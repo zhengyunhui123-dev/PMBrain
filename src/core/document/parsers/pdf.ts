@@ -6,6 +6,7 @@ import { markdownToSections } from './markdown-sections.ts';
 import { pdfRuntimeOptions } from '../pdf-runtime.ts';
 import {DocumentRuntime} from '../resource-policy.ts';
 import {renderDocumentSection} from '../markdown-renderer.ts';
+import {settleOcrRequests} from '../ocr-concurrency.ts';
 
 async function parseWithPdfParse(buffer: Buffer, title: string, fallback?: string,runtime=new DocumentRuntime()): Promise<StructuredDocument> {
   const { PDFParse } = await import('pdf-parse');
@@ -54,25 +55,27 @@ async function addOcrPages(
   try {
     let completed=0,textBytes=document.sections.reduce((sum,section)=>sum+Buffer.byteLength(renderDocumentSection(section))+2,0);
     runtime.assertText(textBytes);
-    for(const requestedPage of pagesNeedingOcr){
+    for(let offset=0;offset<pagesNeedingOcr.length;){
     await runtime.checkpoint(true);
-    const screenshots = await parser.getScreenshot({
-      partial: [requestedPage],
-      desiredWidth: 1800,
-      imageBuffer: true,
-    });
-    const pages = screenshots.pages.filter(screenshot => screenshot.data?.length);
+    const count=runtime.plan.concurrency>1?2:1;
+    const requested=pagesNeedingOcr.slice(offset,offset+count);offset+=requested.length;
+    const pages:Array<{page:number;image:Buffer;mime:string}>=[];
+    for(const requestedPage of requested){
+      const screenshots=await parser.getScreenshot({partial:[requestedPage],desiredWidth:1800,imageBuffer:true});
+      for(const screenshot of screenshots.pages)if(screenshot.data?.length)pages.push({page:screenshot.pageNumber,image:Buffer.from(screenshot.data),mime:'image/png'});
+    }
     if(progress&&!completed)process.stderr.write(`${JSON.stringify({ event: 'start', phase: 'import.process.ocr', done: 0, total: pagesNeedingOcr.length, unit: '页', stage: '图片识别' })}\n`);
+    const results=ocrPage.batch&&pages.length>1?await ocrPage.batch(pages):await settleOcrRequests(pages.map(page=>ocrPage(page.page,page.image,page.mime)));
+    if(results.length!==pages.length)throw new Error('批量识图结果数量不匹配');
     for (const [index, screenshot] of pages.entries()) {
-      if (!screenshot.data?.length) continue;
-      const result = await ocrPage(screenshot.pageNumber, Buffer.from(screenshot.data), 'image/png');
+      const result = results[index];
       if (result.status !== 'skipped'&&!result.reused) document.metadata.ocrAttempted = (document.metadata.ocrAttempted ?? 0) + 1;
       if(result.reused)document.metadata.ocrReused=(document.metadata.ocrReused??0)+1;
       if(result.recognizedAt && (!document.metadata.ocrProcessedAt || result.recognizedAt>document.metadata.ocrProcessedAt))document.metadata.ocrProcessedAt=result.recognizedAt;
       if (result.status === 'success') {
         const text = normalizeDocumentText(result.text);
         textBytes+=Buffer.byteLength(text)+2;runtime.assertText(textBytes);
-        if (text) document.sections.push(...markdownToSections(text, { page: screenshot.pageNumber }, `pdf-ocr-p${screenshot.pageNumber}`));
+        if (text) document.sections.push(...markdownToSections(text, { page: screenshot.page }, `pdf-ocr-p${screenshot.page}`));
         document.metadata.ocrUsed = true;
         document.metadata.ocrSucceeded = (document.metadata.ocrSucceeded ?? 0) + 1;
       } else if (result.status === 'failed') {
@@ -81,7 +84,7 @@ async function addOcrPages(
         document.metadata.ocrSkipped = (document.metadata.ocrSkipped ?? 0) + 1;
       }
       if (result.model) document.metadata.ocrProvider = result.model;
-      if (result.message) document.metadata.ocrWarnings = [...(document.metadata.ocrWarnings ?? []), `第 ${screenshot.pageNumber} 页：${result.message}`];
+      if (result.message) document.metadata.ocrWarnings = [...(document.metadata.ocrWarnings ?? []), `第 ${screenshot.page} 页：${result.message}`];
       completed++;if(progress)process.stderr.write(`${JSON.stringify({ event: 'tick', phase: 'import.process.ocr', done: completed, total: pagesNeedingOcr.length, unit: '页', stage: '图片识别' })}\n`);
     }
     }
@@ -104,7 +107,8 @@ export async function parsePdfDocument(filePath: string, opts: DocumentParseOpti
   const runtime=opts.runtime??new DocumentRuntime();await runtime.checkpoint(true);
   const buffer = readFileSync(filePath);
   const title = basename(filePath, extname(filePath));
-  if (opts.structured === false&&!opts.deferOcr) return parseWithPdfParse(buffer, title,undefined,runtime);
+  const plain=opts.structured===false&&!opts.deferOcr?await parseWithPdfParse(buffer,title,undefined,runtime):undefined;
+  if(plain&&!opts.ocrPage)return plain;
 
   let processingOcr=false;
   try {
@@ -128,11 +132,11 @@ export async function parsePdfDocument(filePath: string, opts: DocumentParseOpti
     const document: StructuredDocument = {
       title,
       format: 'pdf',
-      sections,
+      sections:plain?.sections??sections,
       metadata: {
-        parser: '@firecrawl/pdf-inspector@1.12.0',
+        parser: plain?.metadata.parser??'@firecrawl/pdf-inspector@1.12.0',
         local: true,
-        structured: true,
+        structured: !plain,
         pageCount: classification.pageCount,
         tableCount: pagesWithTables.length,
         imageCount: pagesNeedingOcr.length,

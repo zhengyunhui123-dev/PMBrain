@@ -7,7 +7,7 @@ import type {ChunkInput} from '../types.ts';
 import type {ImportResult} from '../import-file.ts';
 import {chunkText} from '../chunkers/recursive.ts';
 import {resolveMaxChunkTokens} from '../embedding-input-limit.ts';
-import {OCR_PROMPT_VERSION,OCR_RECEIPT_VERSION,type OcrReceipt} from '../ocr.ts';
+import {OCR_PROMPT_VERSION,OCR_RECEIPT_VERSION,recognizeImagesText,type OcrReceipt,type OcrImageResult} from '../ocr.ts';
 import {extractImageOcrResult} from '../import-file.ts';
 import {createDocumentOcr} from './ocr-cache.ts';
 import {DocumentRuntime} from './resource-policy.ts';
@@ -17,7 +17,7 @@ import {readDocumentChunkManifest} from './chunk-manifest.ts';
 import {appendOoxmlImageOcr} from './ooxml-image-ocr.ts';
 import {retryPdfOcrPages} from './parsers/pdf.ts';
 import {renderStructuredDocument} from './markdown-renderer.ts';
-import type {DocumentImportSummary,StructuredDocument} from './types.ts';
+import type {DocumentImportSummary,StructuredDocument,OcrPageHandler} from './types.ts';
 import {requestImportedEntityCapture} from '../pmbrain-adapters/entity-capture-request.ts';
 
 export interface LegacyOfficeCandidate {id:number;slug:string;frontmatter:Record<string,any>;chunker_version:number;body_hash:string}
@@ -92,30 +92,39 @@ export async function importLegacyOffice(engine:BrainEngine,candidate:LegacyOffi
   const directory=mkdtempSync(join(tmpdir(),'pmbrain-legacy-office-')),snapshotPath=join(directory,basename(filePath));
   try{
     const snapshot=await snapshotDocument(filePath,snapshotPath,runtime);if(snapshot.hash!==rawHash)throw new Error('资料在导入期间已修改，请重新导入');
-    const recognize=createDocumentOcr(engine,sourceId,async(image,mime)=>{await snapshot.validate();await opts.validate();return extractImageOcrResult(engine,image,mime,{enabled:true});});
-    let completed=0;process.stderr.write(`${JSON.stringify({event:'start',phase:'import.process.ocr',done:0,total:items.size,unit:pdf?'页':'张图片',stage:'补齐未完成的图片文字'})}\n`);
-    const total=items.size;
-    for(const key of [...items.keys()]){
-      await runtime.checkpoint(true);const format=pdf?'pdf':extname(filePath).slice(1)==='xlsm'?'xlsx':extname(filePath).slice(1);
-      let document:StructuredDocument={title:page.title,format:format as StructuredDocument['format'],sections:[],metadata:{parser:String(page.frontmatter.document_parser),local:true,structured:true,tableCount:0,imageCount:0,ocrUsed:false}};
-      document=pdf?await retryPdfOcrPages(snapshotPath,[Number(key)],{runtime,ocrPage:recognize}):await appendOoxmlImageOcr(snapshotPath,document,{runtime,ocrPage:recognize,ocrItems:[key]});
-      attempted+=document.metadata.ocrAttempted??0;reused+=document.metadata.ocrReused??0;
-      if((document.metadata.ocrSucceeded??0)>0){
-        const text=renderStructuredDocument(document),newBody:string=text?page.compiled_truth+'\n\n'+text:page.compiled_truth;
-        runtime.assertText(Buffer.byteLength(newBody));const remaining=[...items].filter(([name])=>name!==key);
-        const previousReceipt=page.frontmatter.ocr_receipt as OcrReceipt;
-        const newReceipt={...previousReceipt,attempted:Math.min(Number(previousReceipt.candidates)||Infinity,Number(previousReceipt.attempted??0)+1),succeeded:Number(previousReceipt.succeeded??0)+1,failed:remaining.length,failedItems:remaining.map(([,warning])=>warning),reason:remaining[0]?.[1],status:remaining.length?'partial':'complete',processedAt:new Date().toISOString()};
-        const nextFm:Record<string,any>={...page.frontmatter,ocr_receipt:newReceipt,document_ocr_used:true,document_ocr_attempted:newReceipt.attempted,document_ocr_succeeded:newReceipt.succeeded,document_ocr_failed:remaining.length,document_ocr_skipped:0,...(page.frontmatter.document_ocr_deferred?{document_ocr_deferred:remaining.length>0}:{})};
-        const added=chunkText(text,{maxTokens:resolveMaxChunkTokens()}).map(child=>({chunk_index:nextIndex++,chunk_text:`Parent document: ${page!.title}\nSection: 图片文字补充\nLocator: ${pdf?'第 '+key+' 页':key}\n\n${child.text}`,chunk_source:'office_child' as const}));
-        await merge(added,[],nextFm,newBody,async()=>{await snapshot.validate();await opts.validate();});created+=added.length;items.delete(key);
-      }else{
-        const warning=document.metadata.ocrWarnings?.[0];if(warning)items.set(key,warning);
-        const previous=page.frontmatter.ocr_receipt as OcrReceipt,attempted=Math.min(Number(previous.candidates)||Infinity,Number(previous.attempted??0)+1);
-        const nextFm={...page.frontmatter,document_ocr_attempted:attempted,document_ocr_failed:items.size,document_ocr_skipped:0,ocr_receipt:{...previous,attempted,failedItems:[...items.values()],failed:items.size,reason:[...items.values()][0],processedAt:new Date().toISOString(),status:'partial'}};
-        await merge([],[],nextFm,page.compiled_truth,async()=>{await snapshot.validate();await opts.validate();});
-      }
-      completed++;process.stderr.write(`${JSON.stringify({event:'tick',phase:'import.process.ocr',done:completed,total,unit:pdf?'页':'张图片',stage:'补齐未完成的图片文字'})}\n`);
+    const recognize=createDocumentOcr(engine,sourceId,async(image,mime)=>extractImageOcrResult(engine,image,mime,{enabled:true}),true,
+      pdf?async batch=>recognizeImagesText(engine,batch,{enabled:true,signal:runtime.signal}):undefined);
+    let completed=0,succeeded=0,textBytes=Buffer.byteLength(page.compiled_truth);process.stderr.write(`${JSON.stringify({event:'start',phase:'import.process.ocr',done:0,total:items.size,unit:pdf?'页':'张图片',stage:'补齐未完成的图片文字'})}\n`);
+    const total=items.size,keys=[...items.keys()],texts:string[]=[],added:ChunkInput[]=[];
+    if(!pdf)keys.sort();
+    const format=pdf?'pdf':extname(filePath).slice(1)==='xlsm'?'xlsx':extname(filePath).slice(1),observed=new Map<string,OcrImageResult>();
+    const record=(index:number,result:OcrImageResult)=>{
+      const key=pdf?String(index):keys[index-1];if(!key)throw new Error('识图结果位置无效');
+      observed.set(key,result);completed++;process.stderr.write(`${JSON.stringify({event:'tick',phase:'import.process.ocr',done:completed,total,unit:pdf?'页':'张图片',stage:'补齐未完成的图片文字'})}\n`);
+    };
+    const capture:OcrPageHandler=async(index,image,mime)=>{const result=await recognize(index,image,mime);record(index,result);return result;};
+    capture.batch=async inputs=>{const results=await recognize.batch!(inputs);inputs.forEach((item,index)=>record(item.page,results[index]));return results;};
+    let document:StructuredDocument={title:page.title,format:format as StructuredDocument['format'],sections:[],metadata:{parser:String(page.frontmatter.document_parser),local:true,structured:true,tableCount:0,imageCount:0,ocrUsed:false}};
+    document=pdf?await retryPdfOcrPages(snapshotPath,keys.map(Number),{runtime,ocrPage:capture}):await appendOoxmlImageOcr(snapshotPath,document,{runtime,ocrPage:capture,ocrItems:keys});
+    attempted+=document.metadata.ocrAttempted??0;reused+=document.metadata.ocrReused??0;
+    for(const [index,key] of keys.entries()){
+      const result=observed.get(key);
+      if(!result)throw new Error(`未取得${pdf?'第 '+key+' 页':key}的识图结果`);
+      if(result.status==='success'){
+        const sections=document.sections.filter(section=>pdf?section.locator?.page===Number(key):section.id===`${format}-ocr-${index+1}`);
+        const text=renderStructuredDocument({...document,sections});
+        if(text){
+          textBytes+=Buffer.byteLength(text)+2;runtime.assertText(textBytes);texts.push(text);
+          for(const child of chunkText(text,{maxTokens:resolveMaxChunkTokens()}))added.push({chunk_index:nextIndex++,chunk_text:`Parent document: ${page.title}\nSection: 图片文字补充\nLocator: ${pdf?'第 '+key+' 页':key}\n\n${child.text}`,chunk_source:'office_child'});
+        }
+        succeeded++;items.delete(key);
+      }else if(result.message)items.set(key,`${pdf?'第 '+key+' 页':key}: ${result.message}`);
     }
+    const newBody=texts.length?page.compiled_truth+'\n\n'+texts.join('\n\n'):page.compiled_truth;
+    const previous=page.frontmatter.ocr_receipt as OcrReceipt,attemptedCount=Math.min(Number(previous.candidates)||Infinity,Number(previous.attempted??0)+completed);
+    const nextReceipt={...previous,attempted:attemptedCount,succeeded:Number(previous.succeeded??0)+succeeded,failed:items.size,failedItems:[...items.values()],reason:[...items.values()][0],processedAt:new Date().toISOString(),status:items.size?'partial':'complete'};
+    const nextFm={...page.frontmatter,ocr_receipt:nextReceipt,document_ocr_used:page.frontmatter.document_ocr_used===true||succeeded>0,document_ocr_attempted:attemptedCount,document_ocr_succeeded:nextReceipt.succeeded,document_ocr_failed:items.size,document_ocr_skipped:0,...(page.frontmatter.document_ocr_deferred?{document_ocr_deferred:items.size>0}:{})};
+    await merge(added,[],nextFm,newBody,()=>snapshot.validate());created+=added.length;
   }finally{if(!resolve(directory).startsWith(resolve(tmpdir())+sep)||!basename(directory).startsWith('pmbrain-legacy-office-'))throw new Error('旧资料临时目录校验失败');rmSync(directory,{recursive:true,force:true,maxRetries:3,retryDelay:50});}
   return {slug:candidate.slug,status:items.size?'partial':created?'imported':'skipped',chunks:created,embeddingPending:(state?.pending??0)>0,...(items.size?{error:'图片识别仍有未完成项，已有正文保留：'+[...items.values()].join('；')}:{ }),documentSummary:summary(page.frontmatter,attempted,Number(fm.document_ocr_succeeded??0)+reused)};
 }

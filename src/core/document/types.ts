@@ -63,12 +63,17 @@ export interface StructuredDocument {
   metadata: DocumentMetadata;
 }
 
+export interface OcrPageInput {page:number;image:Buffer;mime:string}
+export type OcrPageHandler=((page:number,image:Buffer,mime:string)=>Promise<OcrImageResult>) & {
+  batch?:(items:OcrPageInput[])=>Promise<OcrImageResult[]>;
+};
+
 export interface DocumentParseOptions {
   deferOcr?:boolean;
   ocrItems?: string[];
   runtime?:import('./resource-policy.ts').DocumentRuntime;
   structured?: boolean;
-  ocrPage?: (page: number, image: Buffer, mime: string) => Promise<OcrImageResult>;
+  ocrPage?: OcrPageHandler;
 }
 
 export interface DocumentImportSummary {

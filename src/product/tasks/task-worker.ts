@@ -482,7 +482,7 @@ async function executeTask(task: ProductTask, kind: BrainEngine['kind']) {
         if(force||Date.now()-this.checked>1000){
           this.checked=Date.now();const schedule=await rpc('task.documentOcrSchedule',[]) as VectorizationSchedule;
           if(schedule.mode==='waiting')throw new DocumentOcrDeferred(schedule.reason);
-          await validateDeferredDocument(engine,input.path,sourceId,expected,this);
+          await validateDeferredDocument(engine,input.path,sourceId,expected,this,false);
         }
         await super.checkpoint(force);
       }
@@ -490,6 +490,7 @@ async function executeTask(task: ProductTask, kind: BrainEngine['kind']) {
     const work=async()=>{
     send({type:'progress',phases:['ocr'],event:{phase:'ocr',event:'start',stage:'后台补齐图片文字',file:expected.relativePath}});
     await runtime.checkpoint(true);
+    await validateDeferredDocument(engine,input.path,sourceId,expected,runtime);
     const imported=expected.image?await (await import('../../core/import-file')).importImageFile(engine,input.path,expected.relativePath,{sourceId,noEmbed:true,forceOcr:true,runtime,storagePath:expected.ownedSnapshot?input.path:undefined,validate:target=>validateDeferredDocument(target,input.path,sourceId,expected,runtime)}):await (await import('../../core/office-import')).importOfficeFile(engine,input.path,expected.relativePath,{sourceId,noEmbed:true,documentOcr:true,runtime});
     if(imported.status==='partial'||imported.status==='error'||imported.error||Number(imported.documentSummary?.ocrFailed)>0||Number(imported.documentSummary?.ocrSkipped)>0)throw new Error(imported.error??imported.documentSummary?.ocrWarnings.join('；')??'图片识别尚未完成，已保存的内容保留');
     const output:Record<string,unknown>={status:'completed',imported:imported.status==='imported'?1:0,skipped:imported.status==='skipped'?1:0,errors:0,ocrPending:0};

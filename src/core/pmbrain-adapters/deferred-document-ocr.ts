@@ -48,10 +48,10 @@ export async function queueDocumentOcr(engine:BrainEngine,filePath:string,relati
   });
 }
 
-export async function validateDeferredDocument(engine:BrainEngine,path:string,sourceId:string,input:DeferredDocumentOcr,runtime:DocumentRuntime){
+export async function validateDeferredDocument(engine:BrainEngine,path:string,sourceId:string,input:DeferredDocumentOcr,runtime:DocumentRuntime,verifyFile=true){
   const [page]=await engine.executeRaw<{hash:string;incarnation:string;local_path:string|null}>(`SELECT p.frontmatter->>'raw_sha256' hash,s.incarnation::text incarnation,s.local_path FROM pages p JOIN sources s ON s.id=p.source_id WHERE p.slug=$1 AND p.source_id=$2 AND NOT s.archived AND p.deleted_at IS NULL`,[input.slug,sourceId]);
   if(!page||page.hash!==input.hash||page.incarnation!==input.sourceIncarnation||page.local_path!==input.sourceRoot)throw Error('资料或 Source 版本已改变，旧后台识图任务未覆盖内容');
-  if((await lstat(path)).isSymbolicLink()||await documentFileHash(path,runtime)!==input.hash)throw Error('原始资料已改变，旧后台识图任务未覆盖内容');
+  if(verifyFile&&((await lstat(path)).isSymbolicLink()||await documentFileHash(path,runtime)!==input.hash))throw Error('原始资料已改变，旧后台识图任务未覆盖内容');
 }
 
 export async function cleanupDeferredDocument(path:string,input:DeferredDocumentOcr){

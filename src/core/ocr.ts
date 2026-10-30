@@ -71,9 +71,49 @@ export function shouldRefreshOcrReceipt(
 
 async function bump(engine: BrainEngine, key: string): Promise<void> {
   try {
+    if(typeof engine.executeRaw==='function'){
+      await engine.executeRaw(`INSERT INTO config(key,value) VALUES($1,'1') ON CONFLICT(key) DO UPDATE
+        SET value=(CASE WHEN config.value ~ '^[0-9]+$' THEN config.value::numeric ELSE 0 END+1)::text`,[key]);
+      return;
+    }
     const current = Number.parseInt((await engine.getConfig(key)) ?? '0', 10);
     await engine.setConfig(key, String((Number.isFinite(current) ? current : 0) + 1));
   } catch {
+  }
+}
+
+export async function recognizeImagesText(
+  engine:BrainEngine,
+  images:Array<{id:string;bytes:Buffer;mime:string}>,
+  opts:{enabled?:boolean;signal?:AbortSignal}={},
+):Promise<OcrImageResult[]>{
+  if(!images.length)return [];
+  if(images.length===1)return [await recognizeImageText(engine,images[0].bytes,images[0].mime,opts)];
+  const gateway=await import('./ai/gateway.ts');
+  if(!(opts.enabled??gateway.isOcrEnabled()))return images.map(()=>({status:'skipped',text:'',model:null,code:'disabled',message:'图片识别未启用'}));
+  let model:string;
+  try{model=gateway.getImageOcrModel();}catch{return images.map(()=>({status:'skipped',text:'',model:null,code:'model_unconfigured',message:'未配置普通模型或图片/OCR模型'}));}
+  if(gateway.getVisionCapability(model)==='unsupported'){
+    for(const _ of images)await bump(engine,'ocr_failed_no_vision');
+    return images.map(()=>({status:'skipped',text:'',model,code:'model_no_vision',message:`模型 ${model} 不支持图片输入`}));
+  }
+  if(!gateway.isAvailable('chat',model)){
+    for(const _ of images)await bump(engine,'ocr_failed_no_key');
+    return images.map(()=>({status:'skipped',text:'',model,code:'model_unavailable',message:`模型 ${model} 当前不可用，请检查 API Key 或本地服务`}));
+  }
+  for(const _ of images)await bump(engine,'ocr_attempted');
+  try{
+    const texts=await (await import('./pmbrain-adapters/ocr-batch.ts')).generateOcrBatch(images,opts.signal);
+    const results:OcrImageResult[]=[];
+    for(const text of texts){
+      await bump(engine,'ocr_succeeded');
+      results.push(text?{status:'success',text,model}:{status:'success',text:'',model,code:'no_text',message:'图片中未识别到文字'});
+    }
+    return results;
+  }catch(error){
+    for(const _ of images)await bump(engine,'ocr_failed_other');
+    const message=ocrRequestError(error);
+    return images.map(()=>({status:'failed',text:'',model,code:'request_failed',message}));
   }
 }
 

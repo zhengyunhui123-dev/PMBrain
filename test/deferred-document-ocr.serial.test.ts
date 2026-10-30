@@ -1,5 +1,5 @@
 import {beforeAll,afterAll,test,expect} from 'bun:test';
-import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync,unlinkSync,existsSync} from 'node:fs';
+import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,statSync,utimesSync,rmSync,unlinkSync,existsSync} from 'node:fs';
 import {join,resolve,sep} from 'node:path';
 import {tmpdir} from 'node:os';
 import {createHash} from 'node:crypto';
@@ -17,13 +17,13 @@ import {reloadLiveGateway} from '../src/core/ai/reload-live-gateway';
 import {resetGateway} from '../src/core/ai/gateway';
 import {readContentChunksEmbeddingDim} from '../src/core/embedding-dim-check';
 import {selectEntityCaptureCandidates} from '../src/core/cycle/capture-entities';
-let root:string,dir:string,engine:BrainEngine,runtime:ProductTaskRuntime,server:ReturnType<typeof Bun.serve>,cpu=0.95,calls=0,failAt=-1;
+let root:string,dir:string,engine:BrainEngine,runtime:ProductTaskRuntime,server:ReturnType<typeof Bun.serve>,cpu=0.95,calls=0,failAt=-1,batchMissing=false;
 let dimensions=1280,embeddingCalls=0,captureCalls=0,holdOcr:Promise<void>|undefined;const events:string[]=[],captureSources:string[]=[];
 const database=process.env.PMBRAIN_DOCUMENT_OCR_TEST_DATABASE_URL;
 const keys=['PMBRAIN_HOME','GBRAIN_HOME','DATABASE_URL','GBRAIN_DATABASE_URL','PMBRAIN_DATABASE_URL','PMBRAIN_EMBEDDING_MODEL','GBRAIN_EMBEDDING_MODEL','PMBRAIN_EMBEDDING_DIMENSIONS','GBRAIN_EMBEDDING_DIMENSIONS'];const saved=Object.fromEntries(keys.map(key=>[key,process.env[key]]));
 beforeAll(async()=>{
   root=mkdtempSync(join(tmpdir(),'pmbrain-deferred-ocr-'));dir=join(root,'materials');mkdirSync(dir);mkdirSync(join(root,'.pmbrain'));for(const key of keys)delete process.env[key];process.env.PMBRAIN_HOME=root;process.env.GBRAIN_HOME=root;
-  server=Bun.serve({hostname:'127.0.0.1',port:0,async fetch(request){const body=await request.json() as any;if(new URL(request.url).pathname.endsWith('/embeddings')){embeddingCalls++;events.push('embed');const inputs=Array.isArray(body.input)?body.input:[body.input];return Response.json({data:inputs.map((_:unknown,index:number)=>({index,embedding:Array.from({length:dimensions},(_,i)=>i===0?1:0)})),model:'deferred-embed',usage:{prompt_tokens:inputs.length,total_tokens:inputs.length}});}if(!JSON.stringify(body).includes('data:image/')){captureCalls++;captureSources.push(JSON.stringify(body));events.push('capture');if(JSON.stringify(body).includes('chain.docx'))events.push('chain_capture');return Response.json({choices:[{message:{role:'assistant',content:JSON.stringify({entities:[],relations:[],no_entities:true})},finish_reason:'stop'}],usage:{prompt_tokens:1,completion_tokens:1}});}calls++;events.push('ocr');if(holdOcr)await holdOcr;if(calls===failAt)return Response.json({error:{message:'fixture OCR rejected'}},{status:400});return Response.json({choices:[{message:{role:'assistant',content:'DeferredEvidence '+calls},finish_reason:'stop'}],usage:{prompt_tokens:1,completion_tokens:1}});}});
+  server=Bun.serve({hostname:'127.0.0.1',port:0,async fetch(request){const body=await request.json() as any;if(new URL(request.url).pathname.endsWith('/embeddings')){embeddingCalls++;events.push('embed');const inputs=Array.isArray(body.input)?body.input:[body.input];return Response.json({data:inputs.map((_:unknown,index:number)=>({index,embedding:Array.from({length:dimensions},(_,i)=>i===0?1:0)})),model:'deferred-embed',usage:{prompt_tokens:inputs.length,total_tokens:inputs.length}});}if(!JSON.stringify(body).includes('data:image/')){captureCalls++;captureSources.push(JSON.stringify(body));events.push('capture');if(JSON.stringify(body).includes('chain.docx'))events.push('chain_capture');return Response.json({choices:[{message:{role:'assistant',content:JSON.stringify({entities:[],relations:[],no_entities:true})},finish_reason:'stop'}],usage:{prompt_tokens:1,completion_tokens:1}});}const call=++calls;events.push('ocr');if(holdOcr)await holdOcr;if(call===failAt)return Response.json({error:{message:'fixture OCR rejected'}},{status:400});const parts=(body.messages??[]).flatMap((message:any)=>Array.isArray(message.content)?message.content:[]),ids=parts.flatMap((part:any)=>typeof part.text==='string'&&/^Image id: /.test(part.text)?[part.text.match(/^Image id: ([^.]+)\./)?.[1]]:[]);const content=ids.length?JSON.stringify((batchMissing?ids.slice(0,1):ids).map((id:string)=>({id,text:`DeferredBatchEvidence ${id}`}))):'DeferredEvidence '+call;return Response.json({choices:[{message:{role:'assistant',content},finish_reason:'stop'}],usage:{prompt_tokens:1,completion_tokens:1}});}});
   if(database)assertSafeE2eDatabaseUrl(database);
   writeFileSync(configPath(),JSON.stringify({engine:database?'postgres':'pglite',...(database?{database_url:database}:{database_path:join(root,'database')}),custom_openai_api_key:'isolated-only',models:{default:'custom-openai:isolated-office-ocr'},provider_base_urls:{'custom-openai':server.url.origin+'/v1'},model_usage:{generative_enabled:true,embedding_enabled:false}}));
   engine=database?new PostgresEngine():new WorkerPgliteEngine() as unknown as BrainEngine;await engine.connect(database?{database_url:database}:{database_path:join(root,'database')});await engine.initSchema();const [existing]=await engine.executeRaw<{n:number}>('SELECT count(*)::int n FROM pages');if(existing.n)throw Error('后台识图回归需要全新的隔离测试库，拒绝覆盖已有资料');await engine.executeRaw("UPDATE sources SET local_path=$1 WHERE id='default'",[dir]);await engine.setConfig('dream.entity_capture.enabled','false');await engine.setConfig('dream.knowledge.enabled','false');await reloadLiveGateway(engine);await start();
@@ -33,6 +33,23 @@ async function word(name:string,text='Native text stays available'){
   const path=join(dir,name+'.docx'),zip=new JSZip();zip.file('word/document.xml',`<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>${text}</w:t></w:r></w:p></w:body></w:document>`);
   for(let index=0;index<3;index++){const canvas=createCanvas(40,40),ctx=canvas.getContext('2d');ctx.fillStyle='#'+createHash('sha256').update(name+index).digest('hex').slice(0,6);ctx.fillRect(0,0,40,40);zip.file('word/media/image'+index+'.png',canvas.toBuffer('image/png'));}writeFileSync(path,await zip.generateAsync({type:'nodebuffer'}));return path;
 }
+function scannedPdf(name:string,pageCount=2){
+  const path=join(dir,name+'.pdf'),images=Array.from({length:pageCount},(_,index)=>{const canvas=createCanvas(128,128),ctx=canvas.getContext('2d');ctx.fillStyle='#'+createHash('sha256').update(name+index).digest('hex').slice(0,6);ctx.fillRect(0,0,128,128);return canvas.toBuffer('image/jpeg');});
+  const streams=images.map((_,index)=>`q 500 0 0 500 40 120 cm /Im${index+1} Do Q`),imageBase=3+pageCount*2;
+  const objects:Buffer[]=[Buffer.from('<< /Type /Catalog /Pages 2 0 R >>'),Buffer.from(`<< /Type /Pages /Kids [${images.map((_,index)=>`${3+index*2} 0 R`).join(' ')}] /Count ${pageCount} >>`)];
+  for(let i=0;i<pageCount;i++){objects.push(Buffer.from(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /XObject << /Im${i+1} ${imageBase+i} 0 R >> >> /Contents ${4+i*2} 0 R >>`));objects.push(Buffer.from(`<< /Length ${Buffer.byteLength(streams[i])} >>\nstream\n${streams[i]}\nendstream`));}
+  for(const image of images)objects.push(Buffer.concat([Buffer.from(`<< /Type /XObject /Subtype /Image /Width 128 /Height 128 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${image.length} >>\nstream\n`),image,Buffer.from('\nendstream')]));
+  const parts=[Buffer.from('%PDF-1.4\n')],offsets:number[]=[];let length=parts[0].length;
+  objects.forEach((object,index)=>{offsets.push(length);const part=Buffer.concat([Buffer.from(`${index+1} 0 obj\n`),object,Buffer.from('\nendobj\n')]);parts.push(part);length+=part.length;});
+  parts.push(Buffer.from(`xref\n0 ${objects.length+1}\n0000000000 65535 f \n${offsets.map(n=>`${String(n).padStart(10,'0')} 00000 n \n`).join('')}trailer\n<< /Size ${objects.length+1} /Root 1 0 R >>\nstartxref\n${length}\n%%EOF\n`));writeFileSync(path,Buffer.concat(parts));return path;
+}
+function textPdf(name:string){
+  const path=join(dir,name+'.pdf'),stream='BT /F1 14 Tf 40 760 Td (Native searchable PDF text) Tj ET';
+  const objects=['<< /Type /Catalog /Pages 2 0 R >>','<< /Type /Pages /Kids [3 0 R] /Count 1 >>','<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>',`<< /Length ${Buffer.byteLength(stream)} >>\nstream\n${stream}\nendstream`,'<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>'];
+  const parts=[Buffer.from('%PDF-1.4\n')],offsets:number[]=[];let length=parts[0].length;
+  objects.forEach((object,index)=>{offsets.push(length);const part=Buffer.from(`${index+1} 0 obj\n${object}\nendobj\n`);parts.push(part);length+=part.length;});
+  parts.push(Buffer.from(`xref\n0 ${objects.length+1}\n0000000000 65535 f \n${offsets.map(n=>`${String(n).padStart(10,'0')} 00000 n \n`).join('')}trailer\n<< /Size ${objects.length+1} /Root 1 0 R >>\nstartxref\n${length}\n%%EOF\n`));writeFileSync(path,Buffer.concat(parts));return path;
+}
 async function start(){runtime=new ProductTaskRuntime(engine,{background:{sample:()=>({cpuBusyRatio:cpu,bytes:1024**3,availableBytes:12*1024**3,totalBytes:16*1024**3,systemIdleSeconds:100})}});await runtime.start();}
 async function vectorConfiguration(){
   dimensions=(await readContentChunksEmbeddingDim(engine)).dims!;const config=JSON.parse(readFileSync(configPath(),'utf8'));config.embedding_model='custom-openai:deferred-embed';config.embedding_dimensions=dimensions;config.model_usage.embedding_enabled=true;writeFileSync(configPath(),JSON.stringify(config));await reloadLiveGateway(engine);
@@ -40,6 +57,67 @@ async function vectorConfiguration(){
 }
 async function finish(id:number){const until=Date.now()+60000;let last:any;while(Date.now()<until){last=await runtime.getRun('task-'+id);if(last&&!['running','queued'].includes(last.status))return last;await Bun.sleep(60);}throw Error('OCR task timeout '+JSON.stringify({run:last,rows:await engine.executeRaw('SELECT id,name,queue,status,attempts_started,progress,error_text FROM minion_jobs')}));}
 const options={sourceId:'default',noEmbed:true,documentOcr:true,deferDocumentOcr:true};
+
+test('可直接读取的 PDF 保存文字，不创建识图任务',async()=>{
+  const path=textPdf('native-text'),before=calls,original=readFileSync(path),result=await importOfficeFile(engine,path,'native-text.pdf',options as any);
+  expect(result.ocrPending??0).toBe(0);expect(result.ocrTaskId).toBeUndefined();expect(calls).toBe(before);
+  expect((await engine.getPage(result.slug))!.compiled_truth).toContain('Native searchable PDF text');expect(readFileSync(path)).toEqual(original);
+},120000);
+
+test('后台扫描 PDF 把两页合并请求，分别保存页码和内容',async()=>{
+  cpu=0.95;const path=scannedPdf('batched-pages'),before=calls;
+  const initial=await importOfficeFile(engine,path,'batched-pages.pdf',options as any);
+  expect(initial.ocrPending).toBe(2);expect(calls).toBe(before);
+  cpu=0.1;const done=await finish(initial.ocrTaskId!);
+  expect(done.status,JSON.stringify(done)).toBe('completed');expect(calls-before).toBe(1);
+  const page=(await engine.getPage(initial.slug))!;
+  expect(page.compiled_truth).toContain('DeferredBatchEvidence 1');expect(page.compiled_truth).toContain('DeferredBatchEvidence 2');
+  expect((page.frontmatter.ocr_receipt as any).status).toBe('complete');
+},120000);
+
+test('四页扫描 PDF 分两次请求，各页内容按原页码保存',async()=>{
+  cpu=0.95;const path=scannedPdf('four-pages',4),before=calls,initial=await importOfficeFile(engine,path,'four-pages.pdf',options as any);
+  expect(initial.ocrPending).toBe(4);cpu=0.1;expect((await finish(initial.ocrTaskId!)).status).toBe('completed');expect(calls-before).toBe(2);
+  const rows=await engine.executeRaw<{chunk_text:string}>('SELECT c.chunk_text FROM content_chunks c JOIN pages p ON p.id=c.page_id WHERE p.slug=$1 AND p.source_id=$2',[initial.slug,'default']);
+  for(let page=1;page<=4;page++)expect(rows.some(row=>row.chunk_text.includes(`Locator: 第 ${page} 页`)&&row.chunk_text.includes(`DeferredBatchEvidence ${(page-1)%2+1}`))).toBe(true);
+},120000);
+
+test('多页返回缺页时保留原文和待处理状态，继续后可正确补齐',async()=>{
+  cpu=0.95;const path=scannedPdf('batch-missing'),before=calls,initial=await importOfficeFile(engine,path,'batch-missing.pdf',options as any);
+  const original=(await engine.getPage(initial.slug))!.compiled_truth;batchMissing=true;cpu=0.1;
+  try{
+    const failed=await finish(initial.ocrTaskId!);expect(failed.status).toBe('failed');expect(failed.error).toContain('识图');
+    expect((await engine.getPage(initial.slug))!.compiled_truth).toBe(original);
+    batchMissing=false;await runtime.retry('task-'+initial.ocrTaskId);
+    expect((await finish(initial.ocrTaskId!)).status).toBe('completed');expect(calls-before).toBe(2);
+    const page=(await engine.getPage(initial.slug))!;expect(page.compiled_truth).toContain('DeferredBatchEvidence 1');expect(page.compiled_truth).toContain('DeferredBatchEvidence 2');
+  }finally{batchMissing=false;}
+},120000);
+
+test('扫描 PDF 识图时原文件变化，旧结果不写回知识库',async()=>{
+  cpu=0.95;const path=scannedPdf('batch-changed'),initial=await importOfficeFile(engine,path,'batch-changed.pdf',options as any),original=(await engine.getPage(initial.slug))!.compiled_truth;
+  let release!:()=>void;holdOcr=new Promise<void>(resolve=>{release=resolve;});const before=calls;cpu=0.1;
+  try{
+    const until=Date.now()+60000;while(calls===before&&Date.now()<until)await Bun.sleep(60);expect(calls).toBe(before+1);
+    const stat=statSync(path),bytes=readFileSync(path);bytes[bytes.length-2]^=1;writeFileSync(path,bytes);utimesSync(path,stat.atime,stat.mtime);expect(statSync(path).size).toBe(stat.size);
+  }finally{holdOcr=undefined;release();}
+  expect((await finish(initial.ocrTaskId!)).status).toBe('failed');expect((await engine.getPage(initial.slug))!.compiled_truth).toBe(original);
+},120000);
+
+test('两份独立图片可同时识图，互相不当作前台任务阻塞',async()=>{
+  cpu=0.95;const jobs:number[]=[];
+  for(const [index,color] of ['#aa3322','#2244aa'].entries()){
+    const path=join(dir,`parallel-image-${index}.png`),canvas=createCanvas(40,40),ctx=canvas.getContext('2d');ctx.fillStyle=color;ctx.fillRect(0,0,40,40);writeFileSync(path,canvas.toBuffer('image/png'));
+    const result=await importImageFile(engine,path,`parallel-image-${index}.png`,{sourceId:'default',noEmbed:true,forceOcr:true,deferDocumentOcr:true});
+    jobs.push(result.ocrTaskId!);
+  }
+  let release!:()=>void;holdOcr=new Promise<void>(resolve=>{release=resolve;});const before=calls;cpu=0.1;
+  try{
+    const until=Date.now()+45000;while(calls-before<2&&Date.now()<until)await Bun.sleep(60);
+    expect(calls-before,JSON.stringify(await Promise.all(jobs.map(id=>runtime.getRun('task-'+id))))).toBe(2);
+  }finally{holdOcr=undefined;release();}
+  for(const id of jobs)expect((await finish(id)).status).toBe('completed');
+},120000);
 
 test('普通导入和后台识图不自动启动实体整理，明确整理仍可处理资料',async()=>{
   cpu=0.95;const folder=join(root,'import-no-capture');mkdirSync(folder);
@@ -142,7 +220,7 @@ test('产品导入先完成、慢识图不阻塞下一份资料，全部识图�
   const task=await runtime.submitImport({path,sourceId:'default',documentOcr:true,noEmbed:false}),saved=await finish(Number(task.id.slice(5)));expect(saved.status,JSON.stringify(saved)).toBe('completed');expect((saved.result as any).ocrPending).toBe(3);expect(calls).toBe(before);expect(embeddingCalls).toBe(vectorBefore);
   let release!:()=>void;holdOcr=new Promise<void>(done=>{release=done;});cpu=0.1;
   try{
-    const until=Date.now()+60000;while(calls===before&&Date.now()<until)await Bun.sleep(60);expect(calls).toBe(before+1);await runtime.adjustResourcePressure(true);
+    const until=Date.now()+60000;while(calls===before&&Date.now()<until)await Bun.sleep(60);expect(calls-before).toBeGreaterThanOrEqual(1);expect(calls-before).toBeLessThanOrEqual(2);await runtime.adjustResourcePressure(true);
     const second=join(dir,'while-ocr.md');writeFileSync(second,'# Available now\n\n慢识图期间新增资料仍可先保存。');const next=await runtime.submitImport({path:second,sourceId:'default',noEmbed:true,documentOcr:false});expect((await finish(Number(next.id.slice(5)))).status).toBe('completed');expect((await engine.getPage('while-ocr'))!.compiled_truth).toContain('慢识图期间');expect(embeddingCalls).toBe(vectorBefore);
   }finally{holdOcr=undefined;release();await runtime.adjustResourcePressure(false);}
   const [page]=await engine.executeRaw<{id:number;job:number}>("SELECT id,(frontmatter->>'document_ocr_task_id')::int job FROM pages WHERE slug='pipeline.docx' AND source_id='default'");expect((await finish(page.job)).status).toBe('completed');
