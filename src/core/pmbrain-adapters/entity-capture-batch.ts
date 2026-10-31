@@ -5,6 +5,7 @@ import { UnrecoverableError } from '../minions/types.ts';
 import type { EntityIngestContext } from './entity-ingest-workflow.ts';
 import type { CaptureReceipt } from './entity-capture-receipts.ts';
 import { withCaptureWrite } from './entity-capture-window.ts';
+import { sourceTimelineDates } from './entity-capture-plan.ts';
 
 type Step = { output: Record<string, unknown>; proof: NonNullable<CaptureReceipt['capture_proof']> };
 type State = { version: 1; payload_hash: string; completed: Record<string, Step> };
@@ -14,14 +15,16 @@ const stable = (value: unknown): unknown => Array.isArray(value) ? value.map(sta
 export function captureBatchTool(put: ToolDef, context: EntityIngestContext, checks: {
   required: (engine: BrainEngine, jobId: number) => Promise<string[]>;
   validate: (engine: BrainEngine, text: string, required: string[]) => Promise<void>;
-}): ToolDef {
+}, timeline?:ToolDef): ToolDef {
+  const maxEntities=context.single_pass?128:32;
   return {
     name: 'brain_capture_entities',
-    description: '一次提交本段值得记录实体的事实增量及证据关系，每次最多32个实体。entities 每项提供准确 slug 和含 YAML title/type、逐条 Source 引用的 Markdown content；程序保留旧事实并逐项原子保存。reused_entities 列出只复用而无新增事实的实体。尚有其他实体时设置 has_more:true 并继续提交；达到32项时程序也会要求继续或用 complete_ingest 确认全部完成。全部完成后程序验证关系并直接结束；有日期的时间线可在本工具后调用原有时间线工具，最后 complete_ingest。',
+    description: `一次提交本段值得记录实体的事实增量及证据关系，每次最多${maxEntities}个实体。entities 每项提供准确 slug 和含 YAML title/type、逐条 Source 引用的 Markdown content；程序保留旧事实并逐项原子保存。reused_entities 列出只复用而无新增事实的实体。尚有其他实体时设置 has_more:true；程序验证关系并记录完成情况。`,
     input_schema: { type:'object',additionalProperties:false,properties:{
-      entities:{type:'array',maxItems:32,items:{type:'object',additionalProperties:false,properties:{slug:{type:'string'},content:{type:'string',maxLength:65536}},required:['slug','content']}},
-      reused_entities:{type:'array',maxItems:64,items:{type:'string'}},
+      entities:{type:'array',maxItems:maxEntities,items:{type:'object',additionalProperties:false,properties:{slug:{type:'string'},content:{type:'string',maxLength:65536}},required:['slug','content']}},
+      reused_entities:{type:'array',maxItems:context.single_pass?128:64,items:{type:'string'}},
       relations:{type:'array',maxItems:128,items:{type:'object',properties:{from:{type:'string'},to:{type:'string'},link_type:{type:'string'},evidence:{type:'string'}},required:['from','to','link_type','evidence']}},
+      ...(context.single_pass?{timeline_entries:{type:'array',maxItems:128,items:{type:'object',properties:{slug:{type:'string'},date:{type:'string'},summary:{type:'string'},detail:{type:'string'}},required:['slug','date','summary']}}}:{}),
       no_entities:{type:'boolean'},
       has_more:{type:'boolean'},
     },required:['entities','relations']},
@@ -29,14 +32,19 @@ export function captureBatchTool(put: ToolDef, context: EntityIngestContext, che
     async execute(raw,ctx){
       ctx.signal?.throwIfAborted();
       if(!ctx.toolUseId)throw new UnrecoverableError('ingest batch requires a durable tool execution identity');
-      const input=raw as {entities?:Array<{slug:string;content:string}>;reused_entities?:string[];relations?:unknown[];no_entities?:boolean;has_more?:boolean};
-      if(!input||!Array.isArray(input.entities)||input.entities.length>32||!Array.isArray(input.relations)||input.relations.length>128
+      const input=raw as {entities?:Array<{slug:string;content:string}>;reused_entities?:string[];relations?:unknown[];no_entities?:boolean;has_more?:boolean;timeline_entries?:Array<{slug:string;date:string;summary:string;detail?:string;source?:string}>};
+      if(!input||!Array.isArray(input.entities)||input.entities.length>maxEntities||!Array.isArray(input.relations)||input.relations.length>128
         ||input.entities.some(entity=>!entity||typeof entity.slug!=='string'||typeof entity.content!=='string'||entity.content.length>65536)
         ||Buffer.byteLength(JSON.stringify(input),'utf8')>1024*1024)throw new UnrecoverableError('ingest batch input exceeds its bounded schema');
+      if(context.single_pass&&Object.keys(input).some(key=>!['entities','reused_entities','relations','timeline_entries','no_entities','has_more'].includes(key)))throw new UnrecoverableError('ingest batch unknown fields');
       const identity=(reference:string)=>reference.includes(':')?reference:`${context.sourceId}:${reference}`;
       if(new Set(input.entities.map(entity=>identity(entity.slug))).size!==input.entities.length)throw new UnrecoverableError('ingest batch requires one fact delta per entity');
-      if(input.reused_entities!==undefined&&(!Array.isArray(input.reused_entities)||input.reused_entities.length>64||input.reused_entities.some(reference=>typeof reference!=='string')))throw new UnrecoverableError('ingest batch reused identities are invalid');
-      if(input.has_more!==undefined&&typeof input.has_more!=='boolean'||input.has_more&&input.no_entities)throw new UnrecoverableError('ingest batch completion flag is invalid');
+      if(input.reused_entities!==undefined&&(!Array.isArray(input.reused_entities)||input.reused_entities.length>(context.single_pass?128:64)||input.reused_entities.some(reference=>typeof reference!=='string')))throw new UnrecoverableError('ingest batch reused identities are invalid');
+      if(input.has_more!==undefined&&typeof input.has_more!=='boolean'||input.no_entities!==undefined&&typeof input.no_entities!=='boolean'||input.has_more&&input.no_entities)throw new UnrecoverableError('ingest batch completion flag is invalid');
+      if(input.no_entities&&(input.entities.length||input.reused_entities?.length||input.relations.length||input.timeline_entries?.length))throw new UnrecoverableError('ingest no_entities conflicts with proposed entities');
+      if(input.timeline_entries!==undefined&&(!context.single_pass||!Array.isArray(input.timeline_entries)||input.timeline_entries.length>128||input.timeline_entries.some(entry=>!entry||typeof entry.slug!=='string'||typeof entry.date!=='string'||typeof entry.summary!=='string'||entry.detail!==undefined&&typeof entry.detail!=='string')))throw new UnrecoverableError('ingest timeline entries are invalid');
+      if(input.timeline_entries?.length&&!timeline)throw new UnrecoverableError('ingest timeline has no exact date in the source');
+      if(input.timeline_entries?.some(entry=>!sourceTimelineDates(context.chunkBody).includes(entry.date)||!entry.summary.trim()))throw new UnrecoverableError('ingest timeline date or summary has no exact source evidence');
       const hash=createHash('sha256').update(JSON.stringify(stable(input))).digest('hex');
       const [row]=await ctx.engine.executeRaw<{output:unknown}>(`SELECT output FROM subagent_tool_executions
         WHERE job_id=$1 AND gbrain_tool_use_id::text=$2 AND status='pending'`,[ctx.jobId,ctx.toolUseId]);
@@ -70,6 +78,30 @@ export function captureBatchTool(put: ToolDef, context: EntityIngestContext, che
         const output=await put.execute(entity,{...ctx,persistCommit:record});
         if(!state.completed[String(index)])await ctx.engine.transaction(tx=>record(tx,output));
       }
+      for(const [index,entry] of (input.timeline_entries??[]).entries()){
+        ctx.signal?.throwIfAborted();
+        const key=`timeline:${index}`;
+        const stored=state.completed[key];
+        if(stored){
+          const reference=String(stored.output.slug),colon=reference.indexOf(':');
+          const sourceId=colon<0?context.sourceId:reference.slice(0,colon),slug=colon<0?reference:reference.slice(colon+1);
+          const reused=await withCaptureWrite(ctx.engine,ctx.signal,()=>reuseCaptureReceipt(ctx.engine,context,{capture_proof:stored.proof,ingest_entities:[{sourceId,slug}]}));
+          if(!reused)throw new UnrecoverableError('ingest revision conflict; an already committed timeline entity changed');
+          continue;
+        }
+        const record=async(tx:BrainEngine,value:unknown)=>{
+          const output=value as Record<string,unknown>,reference=String(output.slug??entry.slug),colon=reference.indexOf(':');
+          const sourceId=colon<0?context.sourceId:reference.slice(0,colon),slug=colon<0?reference:reference.slice(colon+1);
+          const step:Step={output:{...output,slug:`${sourceId}:${slug}`},proof:await captureReceiptProof(tx,context,[{sourceId,slug}])};
+          const updated=await tx.executeRaw(`UPDATE subagent_tool_executions SET output=jsonb_build_object('version',1,'payload_hash',$3::text,
+            'completed',COALESCE(output->'completed','{}'::jsonb)||$4::text::jsonb) WHERE job_id=$1 AND gbrain_tool_use_id::text=$2
+            AND status='pending' AND (output IS NULL OR output->>'payload_hash'=$3) RETURNING id`,[ctx.jobId,ctx.toolUseId,hash,JSON.stringify({[key]:step})]);
+          if(updated.length!==1)throw new UnrecoverableError('ingest batch commit receipt lost its execution identity');
+          state.completed[key]=step;
+        };
+        const output=await timeline!.execute({...entry,source:context.slug},{...ctx,persistCommit:record});
+        if(!state.completed[key])await ctx.engine.transaction(tx=>record(tx,output));
+      }
       const required=await checks.required(ctx.engine,ctx.jobId);
       const entities=[...new Set([...required,...Object.values(state.completed).map(step=>String(step.output.slug)),...(input.reused_entities??[])])];
       if(input.no_entities&&entities.length)throw new UnrecoverableError('ingest no_entities conflicts with committed entities');
@@ -77,7 +109,7 @@ export function captureBatchTool(put: ToolDef, context: EntityIngestContext, che
       const relations=[...new Map([...prior.flatMap(row=>{const output=typeof row.output==='string'?JSON.parse(row.output):row.output as {receipt?:string};return output?.receipt?JSON.parse(output.receipt).relations??[]:[];}),...input.relations].map(relation=>[JSON.stringify(stable(relation)),relation])).values()];
       const receipt=JSON.stringify({entities,relations,...(input.no_entities?{no_entities:true}:{})});
       await checks.validate(ctx.engine,receipt,required);
-      if(input.has_more||input.entities.length===32)return {...state,status:'partial',receipt,instruction:'本批已保存。继续提交本段剩余实体；全部处理完后使用 complete_ingest 验收完整清单。'};
+      if(input.has_more||input.entities.length===maxEntities)return {...state,status:'partial',receipt,instruction:'本批已保存。继续提交本段剩余实体；全部处理完后使用 complete_ingest 验收完整清单。'};
       return {...state,status:'ready',receipt};
     },
   };

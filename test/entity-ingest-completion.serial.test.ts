@@ -42,12 +42,29 @@ test('截断恢复扣除持久用量并预留最终回执，最终回执可使�
  expect(await checkIngestCallBudget(engine,job!.id,data,'',[],[],true,20,true)).toBe(20);
  expect(await checkIngestCallBudget(engine,job!.id,{...data,usage_limits:{...data.usage_limits,output:18}},'',[],[],false,20,true)).toBe(0);
 });
-async function run(replies:(ChatResult|Error)[],direct=false,maxTurns=6,seed?:string,wireModel?:string,ingestContext:EntityIngestContext=context,attempt=0){
- const data={prompt:'识别实体，先落库再返回实体回执。',model:wireModel??(direct?'anthropic:claude-sonnet-4-6':'custom-openai:Qwen3.6-35B-A3B'),source_id:'default',max_turns:maxTurns,model_output_limit:64000,ingest_context:ingestContext};
+
+test('已定价模型缺少部分用量时停止下一轮，无价格限制时继续',async()=>{
+ const data={prompt:'实体验收',model:'custom-openai:Qwen3.6-35B-A3B',model_output_limit:10,usage_limits:{input:100000,output:100,cost_cny:1,input_price:1,output_price:1}};
+ const [job]=await engine.executeRaw<{id:number}>("INSERT INTO minion_jobs(name,status,data) VALUES('subagent','active',$1::jsonb) RETURNING id",[JSON.stringify(data)]);
+ await engine.executeRaw("INSERT INTO subagent_messages(job_id,message_idx,role,content_blocks,tokens_in,tokens_out) VALUES($1,0,'assistant','[]'::jsonb,NULL,5)",[job!.id]);
+ const failure=await expectRejection(checkIngestCallBudget(engine,job!.id,data,'',[],[],false,10));
+ expect(failure.message).toContain('ingest_budget_cost');
+ expect(await checkIngestCallBudget(engine,job!.id,data,'',[],[],false,10,true)).toBe(0);
+ expect(await checkIngestCallBudget(engine,job!.id,{...data,usage_limits:{...data.usage_limits,cost_cny:null}},'',[],[],false,10)).toBe(10);
+ await engine.executeRaw("UPDATE subagent_messages SET tokens_in=0,tokens_out=0 WHERE job_id=$1",[job!.id]);
+ expect(await checkIngestCallBudget(engine,job!.id,data,'',[],[],false,10)).toBe(10);
+});
+async function run(replies:(ChatResult|Error)[],direct=false,maxTurns=6,seed?:string,wireModel?:string,ingestContext:EntityIngestContext=context,attempt=0,priced=false,extraTools:ToolDef[]=[],replay?:{input:unknown;pending:boolean}){
+ const data={prompt:'识别实体，先落库再返回实体回执。',model:wireModel??(direct?'anthropic:claude-sonnet-4-6':'custom-openai:Qwen3.6-35B-A3B'),source_id:'default',max_turns:maxTurns,model_output_limit:64000,ingest_context:ingestContext,...(priced?{usage_limits:{input:1000000,output:1000000,cost_cny:10,input_price:1,output_price:1}}:{})};
  const [job]=await engine.executeRaw<{id:number}>("INSERT INTO minion_jobs(name,status,data) VALUES('subagent','active',$1::jsonb) RETURNING id",[JSON.stringify(data)]);
  if(seed!==undefined){
   await engine.executeRaw("INSERT INTO subagent_messages(job_id,message_idx,role,content_blocks) VALUES($1,0,'user',$2::jsonb)",[job!.id,JSON.stringify([{type:'text',text:data.prompt}])]);
   await engine.executeRaw("INSERT INTO subagent_messages(job_id,message_idx,role,content_blocks,tokens_in,tokens_out) VALUES($1,1,'assistant',$2::jsonb,10,5)",[job!.id,JSON.stringify([{type:'text',text:seed}])]);
+ }
+ if(replay){
+  await engine.executeRaw("INSERT INTO subagent_messages(job_id,message_idx,role,content_blocks) VALUES($1,0,'user',$2::jsonb)",[job!.id,JSON.stringify([{type:'text',text:data.prompt}])]);
+  await engine.executeRaw("INSERT INTO subagent_messages(job_id,message_idx,role,content_blocks,tokens_in,tokens_out) VALUES($1,1,'assistant',$2::jsonb,10,5)",[job!.id,JSON.stringify([{type:'tool-call',toolCallId:'json-0-0',toolName:'brain_capture_entities',input:replay.input}])]);
+  if(replay.pending)await engine.executeRaw("INSERT INTO subagent_tool_executions(job_id,message_idx,tool_use_id,tool_name,input,status,schema_version,ordinal,gbrain_tool_use_id) VALUES($1,1,'json-0-0','brain_capture_entities',$2::jsonb,'pending',2,0,$3::uuid)",[job!.id,JSON.stringify(replay.input),randomUUID()]);
  }
  const calls:any[]=[];
  const next=(request:unknown)=>{calls.push(request);const value=replies.shift();if(!value)throw new Error('unexpected extra model call');if(value instanceof Error)throw value;return value;};
@@ -55,9 +72,19 @@ async function run(replies:(ChatResult|Error)[],direct=false,maxTurns=6,seed?:st
  const client:MessagesClient={async create(request){const value=next(request);return {id:'message-'+calls.length,type:'message',role:'assistant',model:data.model,stop_reason:value.stopReason==='tool_calls'?'tool_use':'end_turn',stop_sequence:null,content:value.blocks.map(block=>block.type==='tool-call'?{type:'tool_use',id:block.toolCallId,name:block.toolName,input:block.input}:{type:'text',text:(block as any).text}),usage:{input_tokens:10,output_tokens:5}} as any;}};
  const progress:Record<string,unknown>[]=[];
  const ctx={id:job!.id,name:'subagent',data,attempts_made:attempt,signal:new AbortController().signal,shutdownSignal:new AbortController().signal,updateProgress:async(value:Record<string,unknown>)=>{progress.push(value);},updateTokens:async()=>{},log:async()=>{},isActive:async()=>true,readInbox:async()=>[]} as MinionJobContext;
- const handler=makeSubagentHandler({engine,config:{engine:url?'postgres':'pglite'},toolRegistry:tools,...(direct?{client}:{})});
+ const handler=makeSubagentHandler({engine,config:{engine:url?'postgres':'pglite'},toolRegistry:[...tools,...extraTools],...(direct?{client}:{})});
  return {calls,progress,jobId:job!.id,result:handler(ctx),resume:async()=>{const [stored]=await engine.executeRaw<{data:typeof data|string}>('SELECT data FROM minion_jobs WHERE id=$1',[job!.id]);return handler({...ctx,data:typeof stored!.data==='string'?JSON.parse(stored!.data):stored!.data});}};
 }
+
+test('部分用量缺失在多轮实体识别和重新启动后都不会继续付费请求',async()=>{
+ const first=response('',true);first.usage={...first.usage,input_tokens:0,input_missing:true};
+ const execution=await run([first,response(receipt)],false,6,undefined,undefined,context,0,true);
+ const failure=await expectRejection(execution.result);expect(failure.message).toContain('ingest_budget_cost');
+ expect(execution.calls).toHaveLength(1);
+ const [stored]=await engine.executeRaw<{tokens_in:number|null;tokens_out:number}>("SELECT tokens_in,tokens_out FROM subagent_messages WHERE job_id=$1 AND role='assistant'",[execution.jobId]);
+ expect(stored?.tokens_in).toBeNull();expect(stored?.tokens_out).toBe(5);
+ const resumed=await expectRejection(execution.resume());expect(resumed.message).toContain('ingest_budget_cost');expect(execution.calls).toHaveLength(1);
+});
 
 test('实际工具循环报告模型轮次、等待和重试，证书错误保留原文',async()=>{
  const success=await run([response('',true),response(receipt)],false,6,undefined,undefined,context,1);
@@ -111,6 +138,69 @@ test('批量提取使用同一个持久工具调用提交事实增量，成功�
   expect(Object.keys((typeof stored!.output==='string'?JSON.parse(stored!.output):stored!.output).completed)).toEqual(['0']);
   expect((await execution.resume()).ingest_verified).toBe(true);
   expect(execution.calls).toHaveLength(1);
+});
+
+test('一次 JSON 提取由程序保存实体并验收，模型不接收工具且恢复不重复请求',async()=>{
+ const output=JSON.stringify({entities:[{slug,content}],relations:[],reused_entities:[],timeline_entries:[]});
+ const execution=await run([response(output)],false,6,undefined,undefined,{...context,compact_contract:true,batch_capture:true,single_pass:true} as EntityIngestContext);
+ const result=await execution.result;expect(result.ingest_verified).toBe(true);expect(execution.calls).toHaveLength(1);
+ expect((execution.calls[0] as {tools?:unknown}).tools).toBeUndefined();
+ expect((execution.calls[0] as {allowFallback?:boolean}).allowFallback).toBe(false);expect((execution.calls[0] as {maxRetries?:number}).maxRetries).toBe(0);
+ expect((await execution.resume()).ingest_verified).toBe(true);expect(execution.calls).toHaveLength(1);
+});
+
+test('一次 JSON 提取格式错误时保留失败，不反复请求模型',async()=>{
+ const execution=await run([response('这不是有效的实体 JSON')],false,6,undefined,undefined,{...context,compact_contract:true,batch_capture:true,single_pass:true} as EntityIngestContext);
+ await expectRejection(execution.result);expect(execution.calls).toHaveLength(1);
+});
+
+test('一次 JSON 提取遇到工具参数错误不暗中重试模型',async()=>{
+ const rejected=Object.assign(new Error('tools are not supported'),{status:400});
+ const execution=await run([rejected,response(JSON.stringify({entities:[],relations:[],no_entities:true}))],false,6,undefined,undefined,{...context,compact_contract:true,batch_capture:true,single_pass:true} as EntityIngestContext);
+ const error=await expectRejection(execution.result);expect(error.message).toContain('tools are not supported');expect(execution.calls).toHaveLength(1);
+});
+
+test('一次 JSON 提取包含无法处理的内容时拒绝保存，不假装完成',async()=>{
+ const output=JSON.stringify({entities:[{slug,content}],relations:[],timeline:[{date:'2026-10-30',summary:'遗漏的时间线'}]});
+ const execution=await run([response(output)],false,6,undefined,undefined,{...context,compact_contract:true,batch_capture:true,single_pass:true} as EntityIngestContext);
+ const error=await expectRejection(execution.result);expect(error.message).toContain('ingest batch unknown fields');
+ expect(execution.calls).toHaveLength(1);expect(await engine.getPage(slug)).toBeNull();
+});
+
+test('一次 JSON 提取遇到不支持的事实时保留具体错误和已保存资料',async()=>{
+ const output=JSON.stringify({entities:[{slug,content:'---\ntitle: 三纪早会体系\ntype: concept\n---\n没有来源的记录。'}],relations:[]});
+ const execution=await run([response(output)],false,6,undefined,undefined,{...context,compact_contract:true,batch_capture:true,single_pass:true} as EntityIngestContext);
+ const error=await expectRejection(execution.result);expect(error.message).toContain('ingest provenance missing');expect(execution.calls).toHaveLength(1);
+ expect(await engine.getPage(slug)).toBeNull();expect((await engine.getPage(context.slug))?.compiled_truth).toBe(context.body);
+});
+
+test('一次 JSON 提取遇到同名身份不明的人不会猜测合并或新建',async()=>{
+ const body='张三参与了这次工作安排。';await engine.putPage(context.slug,{type:'note',title:'原始记录',compiled_truth:body,frontmatter:{}});
+ for(const target of ['people/existing-a','people/existing-b'])await engine.putPage(target,{type:'person',title:'张三',compiled_truth:'已有人工资料。',frontmatter:{}});
+ const output=JSON.stringify({entities:[{slug:'people/new-name',content:'---\ntitle: 张三\ntype: person\n---\n张三参与工作安排。[Source: notes/meeting]'}],relations:[]});
+ const execution=await run([response(output)],false,6,undefined,undefined,{...context,body,chunkBody:body,compact_contract:true,batch_capture:true,single_pass:true,quickEntitiesOnly:true} as EntityIngestContext);
+ const error=await expectRejection(execution.result);expect(error.message).toContain('ingest reuse existing entity');expect(execution.calls).toHaveLength(1);
+ expect(await engine.getPage('people/new-name')).toBeNull();
+});
+
+for(const pending of [false,true])test(`一次 JSON 提取在${pending?'待保存':'保存前'}中断后继续，不重新调用模型`,async()=>{
+ const input={entities:[{slug,content}],relations:[],timeline_entries:[]};
+ const execution=await run([],false,6,undefined,undefined,{...context,compact_contract:true,batch_capture:true,single_pass:true} as EntityIngestContext,0,false,[],{input,pending});
+ expect((await execution.result).ingest_verified).toBe(true);expect(execution.calls).toHaveLength(0);expect(await engine.getPage(slug)).not.toBeNull();
+});
+
+test('一次 JSON 提取保存有原文日期的时间线，重放不重复写入',async()=>{
+ const body=context.body+' 2026-10-30 团队开始使用三纪早会体系。';
+ await engine.putPage(context.slug,{type:'note',title:'原始记录',compiled_truth:body,frontmatter:{}});
+ const timeline:ToolDef={name:'brain_add_timeline_entry',description:'timeline',input_schema:{type:'object'},idempotent:true,async execute(raw,ctx){
+  const input=raw as {slug:string;date:string;summary:string;source:string},target=input.slug.replace(/^default:/,'');await ctx.engine.addTimelineEntry(target,{date:input.date,summary:input.summary,detail:'',source:input.source},{sourceId:'default'});return {status:'ok'};
+ }};
+ const output=JSON.stringify({entities:[{slug,content}],relations:[],timeline_entries:[{slug,date:'2026-10-30',summary:'团队开始使用三纪早会体系',source:context.slug}]});
+ const execution=await run([response(output)],false,6,undefined,undefined,{...context,body,chunkBody:body,compact_contract:true,batch_capture:true,single_pass:true} as EntityIngestContext,0,false,[timeline]);
+ expect((await execution.result).ingest_verified).toBe(true);expect(execution.calls).toHaveLength(1);
+ const timelineRows=()=>engine.executeRaw<{date:string}>("SELECT t.date::text date FROM timeline_entries t JOIN pages p ON p.id=t.page_id WHERE p.slug=$1",[slug]);
+ expect(await timelineRows()).toEqual([{date:'2026-10-30'}]);
+ expect((await execution.resume()).ingest_verified).toBe(true);expect(await timelineRows()).toEqual([{date:'2026-10-30'}]);
 });
 
 test('批量第二项中断后从同一凭据继续，第一项事实不会重复写入', async () => {
@@ -300,4 +390,15 @@ test('兼容接口在有效回执已持久化后退出，恢复只验收数据�
  const result=await attempt.result;expect(result.ingest_verified).toBe(true);expect(result.turns_count).toBe(1);
  expect(result.tokens).toMatchObject({in:10,out:5});expect(attempt.calls).toHaveLength(0);
  expect(await engine.executeRaw('SELECT id FROM links')).toHaveLength(2);
+});
+
+test('已保存的有效回执恢复时只核验一次关系',async()=>{
+ await engine.putPage(slug,{type:'concept',title:'三纪早会体系',compiled_truth:'真实概念。',frontmatter:{}});
+ const original=engine.addLinksBatch,descriptor=Object.getOwnPropertyDescriptor(engine,'addLinksBatch');
+ let writes=0;
+ (engine as any).addLinksBatch=async function(this:BrainEngine,...args:Parameters<BrainEngine['addLinksBatch']>){writes++;return original.apply(this,args);};
+ try{
+  const attempt=await run([],false,6,receipt);
+  expect((await attempt.result).ingest_verified).toBe(true);expect(attempt.calls).toHaveLength(0);expect(writes).toBe(1);
+ }finally{if(descriptor)Object.defineProperty(engine,'addLinksBatch',descriptor);else delete (engine as any).addLinksBatch;}
 });

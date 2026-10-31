@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { BrainEngine, LinkBatchInput } from '../engine.ts';
 import type { ToolDef } from '../minions/types.ts';
-import { makeIndexedLinkResolver, loadLinkPageMetadata } from '../link-reconciliation.ts';
+import { makeIndexedLinkResolver, loadLinkPageMetadata, type LinkPageMetadata } from '../link-reconciliation.ts';
 import { extractPageLinks, loadExtractionPack, inferLinkType } from '../link-extraction.ts';
 import { inferLinkTypeFromPack } from '../schema-pack/link-inference.ts';
 import { lineGrammarOptions } from '../line-grammar.ts';
@@ -28,6 +28,7 @@ export interface EntityIngestContext {
   turn_entity_refs?:string[];
   compact_contract?:boolean;
   batch_capture?:boolean;
+  single_pass?:boolean;
   quickEntitiesOnly?:boolean;
   pageId?:number|string;
   sourceIncarnation?:string;
@@ -195,7 +196,10 @@ export async function validateIngestWrite(engine:BrainEngine,context:EntityInges
     if(!evidence)throw new UnrecoverableError(`ingest entity evidence missing: ${slug}; title '${title}' or an established alias is not present in this source chunk. Keep the supported identity or omit this unsupported capture; do not invent an alias. Do not repeat this unchanged write.`);
     if(!content.includes('[Source:')||!content.includes(context.slug))throw new UnrecoverableError(`ingest provenance missing: ${slug}`);
     if(!['person','company','organization','entity','project','concept'].includes(String(input.type??metadata.type??existing?.type??parsed.type)))throw new UnrecoverableError(`ingest invalid entity type: ${slug}`);
-    const pages=await loadLinkPageMetadata(engine);
+    const pages=await engine.executeRaw<LinkPageMetadata>(`SELECT p.slug,p.source_id,p.type,p.title,p.knowledge_revision::text AS knowledge_revision,
+      COALESCE((SELECT jsonb_agg(COALESCE(a.alias_text,a.alias_norm)) FROM page_aliases a WHERE a.slug=p.slug AND a.source_id=p.source_id),p.frontmatter->'aliases') AS aliases
+      FROM pages p WHERE p.deleted_at IS NULL AND p.source_id=ANY($1::text[]) AND p.type=ANY($2::text[]) ORDER BY p.source_id,p.slug`,
+      [[...new Set([context.sourceId,'default'])],['person','company','organization','entity','project','concept']]);
     const compatibleType=(type:string)=>!context.quickEntitiesOnly||type===entityType||['company','organization'].includes(type)&&['company','organization'].includes(entityType);
     const matching=pages.filter(p=>['person','company','organization','entity','project','concept'].includes(p.type)&&compatibleType(p.type)&&[p.title,...(Array.isArray(p.aliases)?p.aliases:[])].some(name=>typeof name==='string'&&identityName(name)===identityName(title))&&[context.sourceId,'default'].includes(p.source_id));
     const local=matching.filter(p=>p.source_id===context.sourceId);
@@ -354,14 +358,17 @@ export function entityIngestTools(tools:ToolDef[],context:EntityIngestContext):T
   return [...registry.filter(tool=>!['brain_put_page','brain_add_link'].includes(tool.name)),captureBatchTool(put,context,{
     required:(engine,jobId)=>ingestRequiredWrites(engine,{ingest_context:context},jobId),
     validate:(engine,text,required)=>checkReceiptTargets(engine,context,text,required),
-  })];
+  },wrapped.find(tool=>tool.name==='brain_add_timeline_entry'))];
 }
 
 export async function captureToolCompletion(blocks: readonly ChatBlock[]): Promise<string | null> {
   if (blocks.some(block => block.type === 'tool-result' && block.isError)) return null;
   const last = blocks.at(-1);
-  if (last?.type !== 'tool-result' || !['brain_complete_ingest','brain_capture_entities'].includes(last.toolName) || !last.output || typeof last.output !== 'object') return null;
-  const result = last.output as { status?: string; receipt?: unknown };
+  if (last?.type !== 'tool-result' || !['brain_complete_ingest','brain_capture_entities'].includes(last.toolName) || !last.output) return null;
+  let output=last.output;
+  if(typeof output==='string'){try{output=JSON.parse(output);}catch{return null;}}
+  if(!output||typeof output!=='object')return null;
+  const result = output as { status?: string; receipt?: unknown };
   return result.status === 'ready' && typeof result.receipt === 'string' ? result.receipt : null;
 }
 
@@ -525,8 +532,13 @@ export async function checkIngestCallBudget(engine:BrainEngine,jobId:number,data
     AND tool_name IN ('brain_put_page','brain_add_link','brain_add_timeline_entry','brain_capture_entities') GROUP BY tool_name,input HAVING count(*)>=2 LIMIT 1`,[jobId]);
   if(repeated.length)throw new UnrecoverableError(`ingest repeated failed write: ${repeated[0]!.tool_name}; stop and correct the recorded failure`);
   const limits=data.usage_limits;
-  const [used]=await engine.executeRaw<{input:number;output:number}>(`SELECT COALESCE(sum(tokens_in),0)::int input,COALESCE(sum(tokens_out),0)::int output FROM subagent_messages WHERE job_id=$1`,[jobId]);
+  const [used]=await engine.executeRaw<{input:number;output:number;missing:number}>(`SELECT COALESCE(sum(tokens_in),0)::int input,COALESCE(sum(tokens_out),0)::int output,
+    COALESCE(max(CASE WHEN role='assistant' AND (tokens_in IS NULL OR tokens_out IS NULL) THEN 1 ELSE 0 END),0)::int missing FROM subagent_messages WHERE job_id=$1`,[jobId]);
   const input=used?.input??0,output=used?.output??0;
+  if(used?.missing&&limits.cost_cny!=null&&((limits.input_price??0)>0||(limits.output_price??0)>0)){
+    if(recovery)return 0;
+    throw new UnrecoverableError('ingest_budget_cost: provider usage unavailable; unfinished document is resumable');
+  }
   const [prior]=await engine.executeRaw<{tokens_in:number;added_bytes:number}>(`SELECT m.tokens_in,
     (SELECT COALESCE(sum(octet_length(n.content_blocks::text)),0)::int FROM subagent_messages n WHERE n.job_id=m.job_id AND n.message_idx>=m.message_idx) added_bytes
     FROM subagent_messages m WHERE m.job_id=$1 AND m.tokens_in IS NOT NULL ORDER BY m.message_idx DESC LIMIT 1`,[jobId]);

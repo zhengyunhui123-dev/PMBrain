@@ -332,8 +332,9 @@ export function makeSubagentHandler(deps: SubagentDeps) {
     }
 
     // Token rollup.
-    const tokenTotals = { in: 0, out: 0, cache_read: 0, cache_create: 0 };
+    const tokenTotals: SubagentResult['tokens'] = { in: 0, out: 0, cache_read: 0, cache_create: 0, missing: false };
     for (const m of priorMessages) {
+      if(m.role==='assistant'&&(m.tokens_in===null||m.tokens_out===null))tokenTotals.missing=true;
       if (m.tokens_in) tokenTotals.in += m.tokens_in;
       if (m.tokens_out) tokenTotals.out += m.tokens_out;
       if (m.tokens_cache_read) tokenTotals.cache_read += m.tokens_cache_read;
@@ -559,6 +560,7 @@ export function makeSubagentHandler(deps: SubagentDeps) {
       const ms = Date.now() - t0;
       const inTokens = assistantMsg.usage?.input_tokens ?? 0;
       const outTokens = assistantMsg.usage?.output_tokens ?? 0;
+      if(assistantMsg.usage?.input_tokens==null||assistantMsg.usage?.output_tokens==null)tokenTotals.missing=true;
       const cacheRead = (assistantMsg.usage as any)?.cache_read_input_tokens ?? 0;
       const cacheCreate = (assistantMsg.usage as any)?.cache_creation_input_tokens ?? 0;
 
@@ -591,8 +593,8 @@ export function makeSubagentHandler(deps: SubagentDeps) {
         message_idx: assistantIdx,
         role: 'assistant',
         content_blocks: blocks,
-        tokens_in: inTokens,
-        tokens_out: outTokens,
+        tokens_in: assistantMsg.usage?.input_tokens??null,
+        tokens_out: assistantMsg.usage?.output_tokens??null,
         tokens_cache_read: cacheRead,
         tokens_cache_create: cacheCreate,
         model,
@@ -826,28 +828,21 @@ async function runSubagentViaGateway(args: GatewayRunArgs): Promise<SubagentResu
       const text = blocks.filter((block): block is {type:'text';text:string} => block.type === 'text').map(block => block.text).join('\n');
       const turns = priorMessages.filter(message => message.role === 'assistant'&&!message.content_blocks.some(block=>(block as any).truncated)).length;
       const correction = await validateIngestCompletion(engine,data,text,ctx.id,turns < maxTurns);
-      if (!correction) return verifyIngestResult(engine,data,{
+      if (!correction) return {
         result:text,turns_count:turns,stop_reason:'end_turn',tokens:{
           in:priorMessages.reduce((sum,message)=>sum+(message.tokens_in??0),0),
           out:priorMessages.reduce((sum,message)=>sum+(message.tokens_out??0),0),
           cache_read:priorMessages.reduce((sum,message)=>sum+(message.tokens_cache_read??0),0),
           cache_create:priorMessages.reduce((sum,message)=>sum+(message.tokens_cache_create??0),0),
+          missing:priorMessages.some(message=>message.role==='assistant'&&(message.tokens_in===null||message.tokens_out===null)),
         },
-      },ctx.id);
+      };
       const feedback: PersistedMessage = {message_idx:priorMessages.length,role:'user',content_blocks:[{type:'text',text:correction}],tokens_in:null,tokens_out:null,tokens_cache_read:null,tokens_cache_create:null,model:null};
       await persistMessage(engine,ctx.id,feedback);
       priorMessages.push(feedback);
     }
   }
-  const priorTools = await loadPriorToolsV2(engine, ctx.id);
-  const priorToolsByStableKey = new Map<string, { status: 'pending' | 'complete' | 'failed'; output?: unknown; error?: string }>();
-  for (const row of priorTools) {
-    priorToolsByStableKey.set(row.stableKey, {
-      status: row.status,
-      output: row.output,
-      error: row.error ?? undefined,
-    });
-  }
+  let priorTools = await loadPriorToolsV2(engine, ctx.id);
 
   // Convert prior Anthropic-shape messages → ChatMessage with ChatBlock content.
   // v1 rows store Anthropic content blocks ({type:'tool_use'|'tool_result'|...});
@@ -856,6 +851,39 @@ async function runSubagentViaGateway(args: GatewayRunArgs): Promise<SubagentResu
     role: m.role as 'user' | 'assistant',
     content: adaptContentBlocksToChatBlocks(m.content_blocks),
   }));
+  if(data.ingest_context?.single_pass){
+    const last=priorChatMessages.at(-1),messageIdx=priorMessages.at(-1)?.message_idx;
+    const calls=last?.role==='assistant'&&Array.isArray(last.content)?last.content.filter((block):block is Extract<ChatBlock,{type:'tool-call'}>=>block.type==='tool-call'):[];
+    if(messageIdx!==undefined&&calls.length===1&&calls[0]!.toolName==='brain_capture_entities'){
+      const call=calls[0]!;
+      let prior=priorTools.find(row=>row.messageIdx===messageIdx&&row.toolUseId===call.toolCallId&&row.toolName===call.toolName);
+      if(!prior){
+        const candidateId=randomUUIDv7();
+        await engine.executeRaw(`INSERT INTO subagent_tool_executions
+          (job_id,message_idx,tool_use_id,tool_name,input,status,schema_version,ordinal,gbrain_tool_use_id,provider_id)
+          VALUES($1,$2,$3,$4,$5::jsonb,'pending',2,0,$6,$7)
+          ON CONFLICT (job_id,message_idx,ordinal) DO NOTHING`,[ctx.id,messageIdx,call.toolCallId,call.toolName,JSON.stringify(call.input??null),candidateId,recipeIdFromModel(model)]);
+        priorTools=await loadPriorToolsV2(engine,ctx.id);
+        prior=priorTools.find(row=>row.messageIdx===messageIdx&&row.toolUseId===call.toolCallId&&row.toolName===call.toolName);
+      }
+      if(prior?.status==='pending'){
+        const signal=AbortSignal.any([ctx.signal,ctx.shutdownSignal]);
+        signal.throwIfAborted();
+        const handler=toolHandlers.get(call.toolName);
+        if(!handler)throw new UnrecoverableError('ingest batch tool is unavailable during recovery');
+        try{
+          const output=await handler.execute(call.input,signal,{toolCallId:call.toolCallId,gbrainToolUseId:prior.stableKey});
+          await engine.executeRaw("UPDATE subagent_tool_executions SET status='complete',output=$1::jsonb,ended_at=now() WHERE gbrain_tool_use_id::text=$2 AND status='pending'",[JSON.stringify(output??null),prior.stableKey]);
+        }catch(error){
+          if(!signal.aborted)await engine.executeRaw("UPDATE subagent_tool_executions SET status='failed',error=$1,ended_at=now() WHERE gbrain_tool_use_id::text=$2 AND status='pending'",[error instanceof Error?error.message:String(error),prior.stableKey]);
+          throw error;
+        }
+        priorTools=await loadPriorToolsV2(engine,ctx.id);
+      }
+    }
+  }
+  const priorToolsByStableKey = new Map<string, { status: 'pending' | 'complete' | 'failed'; output?: unknown; error?: string }>();
+  for (const row of priorTools) priorToolsByStableKey.set(row.stableKey,{status:row.status,output:row.output,error:row.error??undefined});
   await appendCompletedToolResultsOnReplay({
     engine,
     jobId: ctx.id,
@@ -919,28 +947,37 @@ async function runSubagentViaGateway(args: GatewayRunArgs): Promise<SubagentResu
 
   // Run the loop.
   let result: Awaited<ReturnType<typeof gatewayToolLoop>>;
+  const singlePass=!!data.ingest_context?.single_pass;
   try {
     result = await gatewayToolLoop({
     model,
+    ...(singlePass?{allowFallback:false,maxRetries:0}:{}),
     system: systemPrompt,
     initialMessages,
-    tools: chatTools,
+    tools: singlePass?chatTools.filter(tool=>tool.name==='brain_capture_entities'):chatTools,
     toolHandlers,
     toolConcurrency: data.ingest_context ? 2 : undefined,
     parallelReadOnlyTools: !!data.ingest_context,
-    maxTurns,
+    maxTurns:singlePass?1:maxTurns,
     maxTokens: Math.min(defaultMaxOutputTokens(model),data.usage_limits?.output??Infinity),
     modelOutputLimit:data.model_output_limit,
     turnTimeoutMs:data.ingest_context?data.turn_timeout_ms??300_000:undefined,
     lengthRetryLimit:data.ingest_context?({messages,maxTokens,finalTurn})=>checkIngestCallBudget(engine,ctx.id,data,systemPrompt,messages,finalTurn?[]:chatTools,!!finalTurn,maxTokens,true):undefined,
-    retryLength:!!data.ingest_context,
-    jsonToolCalls:!!data.ingest_context&&(data.ingest_json_tools===true||classifyCapabilities(model)==='unusable:no_tools'),
+    retryLength:!!data.ingest_context&&!singlePass,
+    jsonToolCalls:singlePass||!!data.ingest_context&&(data.ingest_json_tools===true||classifyCapabilities(model)==='unusable:no_tools'),
+    ...(singlePass?{jsonDirectTool:'brain_capture_entities',jsonToolPrompt:'只输出一个 JSON 对象，包含 entities、reused_entities、relations 和 timeline_entries；entities 每项包含 slug 与完整 YAML frontmatter 的新增事实 content。已有实体无新增事实放入 reused_entities；没有实体时 entities 和 relations 为空且 no_entities 为 true。不要请求工具、不要输出说明。程序会检查来源、身份和关系并保存。'}:{}),
     disableReasoning:!!data.ingest_context,
-    finalizeOnLastTurn:!!data.ingest_context,
-    prepareFinalMessages:data.ingest_context?async()=>[{role:'user',content:await ingestFinalPrompt(engine,ctx.id,data)}]:undefined,
-    shouldFinalize:data.ingest_context?messages=>finalizeBeforeIngestBudget(engine,ctx.id,data,systemPrompt,messages,chatTools):undefined,
+    finalizeOnLastTurn:!!data.ingest_context&&!singlePass,
+    prepareFinalMessages:data.ingest_context&&!singlePass?async()=>[{role:'user',content:await ingestFinalPrompt(engine,ctx.id,data)}]:undefined,
+    shouldFinalize:data.ingest_context&&!singlePass?messages=>finalizeBeforeIngestBudget(engine,ctx.id,data,systemPrompt,messages,chatTools):undefined,
     validateCompletion:data.ingest_context?(text,canContinue)=>validateIngestCompletion(engine,data,text,ctx.id,canContinue):undefined,
-    completionFromTools: data.ingest_context?.compact_contract ? captureToolCompletion : undefined,
+    completionFromTools: data.ingest_context?.compact_contract ? singlePass?async blocks=>{
+      const failed=blocks.find(block=>block.type==='tool-result'&&block.isError);
+      if(failed&&failed.type==='tool-result')throw new UnrecoverableError(`ingest invalid output: ${typeof failed.output==='string'?failed.output:JSON.stringify(failed.output)}`);
+      const completed=await captureToolCompletion(blocks);
+      if(completed===null)throw new UnrecoverableError('ingest_output_truncated: entity JSON was incomplete; unfinished chunk is resumable');
+      return completed;
+    }:captureToolCompletion : undefined,
     beforeModelCall: async ({messages,finalTurn,maxTokens})=>{await checkIngestCallBudget(engine,ctx.id,data,systemPrompt,messages,finalTurn?[]:chatTools,!!finalTurn,maxTokens);},
     reportLengthStop: !!data.ingest_context,
     abortSignal: AbortSignal.any([ctx.signal,ctx.shutdownSignal]),
@@ -967,8 +1004,8 @@ async function runSubagentViaGateway(args: GatewayRunArgs): Promise<SubagentResu
         message_idx: messageIdx,
         role: 'assistant',
         content_blocks: blocks as unknown as ContentBlock[],
-        tokens_in: usage.input_tokens,
-        tokens_out: usage.output_tokens,
+        tokens_in: usage.input_missing?null:usage.input_tokens,
+        tokens_out: usage.output_missing?null:usage.output_tokens,
         tokens_cache_read: usage.cache_read_tokens,
         tokens_cache_create: usage.cache_creation_tokens,
         model: modelStr,
@@ -1036,7 +1073,7 @@ async function runSubagentViaGateway(args: GatewayRunArgs): Promise<SubagentResu
     });
   } catch (error) {
     if(data.ingest_context&&(ctx.signal.aborted||ctx.shutdownSignal.aborted))throw new UnrecoverableError(`ingest_provider_${ctx.shutdownSignal.aborted?'service_shutdown':ingestAbortKind(ctx.signal)}: ${error instanceof Error?error.message:String(error)}`);
-    if(data.ingest_context&&!data.ingest_json_tools&&isToolCallingRejection(error)){
+    if(data.ingest_context&&!singlePass&&!data.ingest_json_tools&&isToolCallingRejection(error)){
       await engine.executeRaw("UPDATE minion_jobs SET data=(CASE WHEN jsonb_typeof(data)='string' THEN (data #>> '{}')::jsonb ELSE data END)||'{\"ingest_json_tools\":true}'::jsonb WHERE id=$1",[ctx.id]);
       return runSubagentViaGateway({...args,data:{...data,ingest_json_tools:true}});
     }
@@ -1090,6 +1127,7 @@ async function runSubagentViaGateway(args: GatewayRunArgs): Promise<SubagentResu
       out: priorMessages.reduce((sum, message) => sum + (message.tokens_out ?? 0), 0) + result.totalUsage.output_tokens,
       cache_read: priorMessages.reduce((sum, message) => sum + (message.tokens_cache_read ?? 0), 0) + result.totalUsage.cache_read_tokens,
       cache_create: priorMessages.reduce((sum, message) => sum + (message.tokens_cache_create ?? 0), 0) + result.totalUsage.cache_creation_tokens,
+      missing:Boolean(result.totalUsage.input_missing||result.totalUsage.output_missing||priorMessages.some(message=>message.role==='assistant'&&(message.tokens_in===null||message.tokens_out===null))),
     },
   };
 }
@@ -1534,7 +1572,7 @@ async function tryRunOneshot(opts: {
         result: `oneshot recovery: ${committed.length} committed write(s)`,
         turns_count: 1,
         stop_reason: 'end_turn',
-        tokens: { in: 0, out: 0, cache_read: 0, cache_create: 0 },
+        tokens: { in: 0, out: 0, cache_read: 0, cache_create: 0, missing: true },
         synth_mode_used: 'oneshot',
         written_slugs: slugs,
       },
@@ -1563,6 +1601,7 @@ async function tryRunOneshot(opts: {
       out: response.usage.output_tokens,
       cache_read: response.usage.cache_read_tokens,
       cache_create: response.usage.cache_creation_tokens,
+      missing:Boolean(response.usage.input_missing||response.usage.output_missing),
     };
     if (pages.length === 0) {
       return {

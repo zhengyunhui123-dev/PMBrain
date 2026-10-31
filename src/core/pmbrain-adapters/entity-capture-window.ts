@@ -1,4 +1,5 @@
 const MAX_WINDOW_BYTES=32*1024**2;
+export const MAX_CAPTURE_CONCURRENCY=4;
 const writers=new WeakMap<object,Promise<void>>();
 
 export class EntityCaptureWindowDeferred extends Error {
@@ -25,7 +26,7 @@ export class CaptureAdmission {
     });
   }
   private flush(){
-    const limit=Math.max(1,Math.min(2,Math.floor(this.getConcurrency())||1));
+    const limit=Math.max(1,Math.min(MAX_CAPTURE_CONCURRENCY,Math.floor(this.getConcurrency())||1));
     while(this.active<limit&&this.waiting.length)this.waiting.shift()!.run();
   }
 }
@@ -40,12 +41,12 @@ export async function withCaptureWrite<T>(engine:object,signal:AbortSignal|undef
 }
 
 export async function runCaptureWindow<T>(items:T[],work:(item:T,slot:number)=>Promise<void>,options:{getConcurrency:()=>number;sizeOf:(item:T)=>number;shouldStop:()=>boolean;signal?:AbortSignal}):Promise<void>{
-  const active=new Set<Promise<void>>(),slots=[0,1];
+  const active=new Set<Promise<void>>(),slots=Array.from({length:MAX_CAPTURE_CONCURRENCY},(_,index)=>index);
   let cursor=0,bytes=0,failure:unknown;
   while(cursor<items.length||active.size){
     if(options.signal?.aborted)failure??=options.signal.reason??new Error('实体识别已停止');
     if(!failure&&!options.shouldStop()){
-      const limit=Math.max(1,Math.min(2,Math.floor(options.getConcurrency())||1));
+      const limit=Math.max(1,Math.min(MAX_CAPTURE_CONCURRENCY,Math.floor(options.getConcurrency())||1));
       while(cursor<items.length&&active.size<limit&&!options.shouldStop()&&!options.signal?.aborted){
         const item=items[cursor]!,size=options.sizeOf(item);
         if(!Number.isFinite(size)||size<0||size>MAX_WINDOW_BYTES){failure=new Error('资源保护：实体识别单份资料超过 32MB 活动输入上限，原文和任务已保留');break;}

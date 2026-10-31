@@ -37,6 +37,26 @@ export interface ModelSyncResult { models: ServiceModel[]; warnings: string[] }
 export function serviceConnection(service: ModelService, kind: 'chat' | 'embedding' = 'chat') {
   return service.connections?.[kind] ?? { baseUrl: service.baseUrl, apiKey: service.apiKey };
 }
+export function isLocalModelService(service: ModelService, kind: 'chat' | 'embedding' = 'chat'): boolean {
+  if (['ollama','llama-server','service-lmstudio'].includes(service.provider.toLowerCase())) return true;
+  if(service.provider!=='custom-openai'&&!isCustomProvider(service))return false;
+  try { return ['localhost','127.0.0.1','::1','[::1]'].includes(new URL(serviceConnection(service,kind).baseUrl).hostname.toLowerCase()); }
+  catch { return false; }
+}
+export function findConfiguredServiceModel(modelId: string, services: ModelService[] = []): {service:ModelService;model:ServiceModel}|undefined {
+  const id=modelId.trim().toLowerCase();
+  for(const service of services){
+    if(!service.enabled)continue;
+    const model=service.models.find(model=>serviceModelValue(service,model).toLowerCase()===id||`${service.provider}:${model.id}`.toLowerCase()===id);
+    if(model)return {service,model};
+  }
+}
+export function isLocalConfiguredModel(modelId: string, services: ModelService[] = [], kind: 'chat' | 'embedding' = 'chat'): boolean {
+  const id=modelId.trim().toLowerCase();
+  if (['ollama','llama-server','service-lmstudio'].includes(id.split(/[:/]/)[0]!)) return true;
+  const configured=findConfiguredServiceModel(id,services);
+  return !!configured&&isLocalModelService(configured.service,kind);
+}
 export interface ModelServicesState { services: ModelService[]; revision: string }
 export function mergeServiceModels(existing: ServiceModel[], incoming: ServiceModel[]): ServiceModel[] {
   const models = new Map(existing.map(model => [model.id, model]));

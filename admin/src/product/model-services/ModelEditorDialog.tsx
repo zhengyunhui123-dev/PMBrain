@@ -2,7 +2,7 @@ import { X } from "lucide-react";
 import {useEffect,useState} from 'react';
 import {api} from '../../api';
 import {modelBilling,DEFAULT_USD_TO_CNY} from '../../../../shared/model-billing';
-import { type ModelCapability, type ServiceModel } from "../../../../shared/model-services";
+import { isLocalModelService, type ModelCapability, type ServiceModel } from "../../../../shared/model-services";
 
 import { capabilityItems } from "./support";
 import type { ModelServicesController } from "./useModelServices";
@@ -136,7 +136,7 @@ export function ModelEditorDialog({ model }: { model: ModelServicesController })
                   </label>
                 ))}
               </div>
-              <p className="model-hint">{editor.pricingSource==='manual'?'使用人工单价，同步模型会保留。':billing?.source.startsWith('https://mimo.mi.com')||editor.pricingUrl?.startsWith('https://mimo.mi.com')?'使用小米官方人民币按量价格，同步模型时更新。':editor.pricingSource==='official'?'使用已核对的官方参考价，美元报价按整理设置汇率折算。':editor.pricingSource==='provider'?'使用服务商模型接口返回的价格。':billing?'美元报价已按整理设置中的汇率折算为人民币。':'尚无可核对的价格，请同步模型或填写单价；有费用上限的整理不会跳过价格检查。'}{editor.pricingUpdatedAt?` 更新于 ${new Date(editor.pricingUpdatedAt).toLocaleDateString()}`:''}</p>
+              <p className="model-hint">{isLocalModelService(service,editor.kind==='embedding'?'embedding':'chat')?'本地模型不受费用上限限制。':!billing?'未设置完整价格时不限制该模型的费用，实际费用无法核算。':editor.pricingSource==='manual'?'使用人工单价，同步模型会保留。':billing.source.startsWith('https://mimo.mi.com')||editor.pricingUrl?.startsWith('https://mimo.mi.com')?'使用小米官方人民币按量价格，同步模型时更新。':editor.pricingSource==='official'?'使用已核对的官方参考价，美元报价按整理设置汇率折算。':editor.pricingSource==='provider'?'使用服务商模型接口返回的价格。':'美元报价已按整理设置中的汇率折算为人民币。'}{editor.pricingUpdatedAt?` 更新于 ${new Date(editor.pricingUpdatedAt).toLocaleDateString()}`:''}</p>
               <label>
                 上下文长度（Token）
                 <input

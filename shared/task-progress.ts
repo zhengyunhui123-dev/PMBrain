@@ -48,7 +48,7 @@ export interface SyncFileActivity {
 
 export interface TaskProductProgress {
   background?: Pick<import('./background-vectorization.js').VectorizationSchedule, 'mode' | 'reason'>;
-  budget?:{capCny:number;spentCny:number;reservedCny:number;usdToCny:number;calls:number;reason?:string;historicalCostUnknown?:boolean;revision?:number};
+  budget?:{capCny:number;spentCny:number;reservedCny:number;usdToCny:number;calls:number;reason?:string;historicalCostUnknown?:boolean;unpricedCostUnknown?:boolean;revision?:number};
   heartbeatAt?: string;
   lastProgressAt?: string;
   failedUnits?: number;

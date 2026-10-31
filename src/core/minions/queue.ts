@@ -838,7 +838,7 @@ export class MinionQueue {
    * expires between handleStalled and handleTimeouts may miss this tick
    * but will be caught the next one (after re-claim). Never double-handled.
    */
-  async handleTimeouts(): Promise<MinionJob[]> {
+  async handleTimeouts(queue?: string): Promise<MinionJob[]> {
     return this.engine.transaction(async (tx) => {
       const rows = await tx.executeRaw<Record<string, unknown>>(
         `UPDATE minion_jobs SET
@@ -853,7 +853,9 @@ export class MinionQueue {
            AND timeout_at IS NOT NULL
            AND timeout_at < now()
            AND lock_until > now()
-         RETURNING *`
+           ${queue === undefined ? '' : 'AND queue = $1'}
+         RETURNING *`,
+        queue === undefined ? [] : [queue],
       );
 
       // v0.15: emit child_done(outcome='timeout') for every timed-out job that
@@ -912,7 +914,7 @@ export class MinionQueue {
    *   timeout_ms set   -> timeout_ms * 2
    *   timeout_ms null  -> 2 * lockDurationMs * max_stalled
    */
-  async handleWallClockTimeouts(lockDurationMs: number): Promise<MinionJob[]> {
+  async handleWallClockTimeouts(lockDurationMs: number, queue?: string): Promise<MinionJob[]> {
     return this.engine.transaction(async (tx) => {
       const rows = await tx.executeRaw<Record<string, unknown>>(
         `UPDATE minion_jobs SET
@@ -930,8 +932,9 @@ export class MinionQueue {
                WHEN timeout_ms IS NOT NULL THEN timeout_ms * 2
                ELSE $1::double precision * 2 * GREATEST(max_stalled, 1)
              END
+           ${queue === undefined ? '' : 'AND queue = $2'}
          RETURNING *`,
-        [lockDurationMs]
+        queue === undefined ? [lockDurationMs] : [lockDurationMs, queue]
       );
 
       const parentIds = new Set<number>();
@@ -1286,12 +1289,14 @@ export class MinionQueue {
   }
 
   /** Promote delayed jobs whose delay_until has passed. Returns promoted jobs. */
-  async promoteDelayed(): Promise<MinionJob[]> {
+  async promoteDelayed(queue?: string): Promise<MinionJob[]> {
     const rows = await this.engine.executeRaw<Record<string, unknown>>(
       `UPDATE minion_jobs SET status = 'waiting', delay_until = NULL,
         lock_token = NULL, lock_until = NULL, updated_at = now()
        WHERE status = 'delayed' AND delay_until <= now()
-       RETURNING *`
+       ${queue === undefined ? '' : 'AND queue = $1'}
+       RETURNING *`,
+      queue === undefined ? [] : [queue],
     );
     return rows.map(rowToMinionJob);
   }

@@ -66,7 +66,7 @@ function toRun(job: MinionJob, stopping = false): ConsoleRun {
   if (searchOptimize && status === 'running' && job.data.searchOptimizePause === 'manual') {
     adapter.view.stage = '正在暂停，当前批次保存后停止';
   }
-  if(job.data.taskBudget){const {reservations,pendingPricing,...budget}=job.data.taskBudget as TaskBudgetState;adapter.view.budget=budget;}
+  if(job.data.taskBudget){const {reservations,pendingPricing,exemptReservations,...budget}=job.data.taskBudget as TaskBudgetState;adapter.view.budget=budget;}
   if (task?.type === 'import') adapter.view.material = { ...adapter.view.material,
     name: (task.input.ocrOnly?.relativePath??task.input.path).split(/[\\/]/).filter(Boolean).at(-1) ?? task.input.path,
     sourceId: task.input.sourceId ?? 'default', directory: task.input.directory === true,
@@ -1044,7 +1044,7 @@ export class ProductTaskRuntime {
           }
           if(message.method==='task.budget'){
             const reply=await handleTaskBudget(this.engine,context.id,record.lock_token!,message.args[0] as TaskBudgetRequest);
-            if(structuredTask.type==='dream'){record.data.taskBudget=reply.state;const {reservations,pendingPricing,...budget}=reply.state;adapter.view.budget=budget;}
+            if(structuredTask.type==='dream'){record.data.taskBudget=reply.state;const {reservations,pendingPricing,exemptReservations,...budget}=reply.state;adapter.view.budget=budget;}
             return reply;
           }
           if (message.method === 'task.maintenanceCheckpoint') {

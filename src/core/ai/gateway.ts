@@ -2423,6 +2423,8 @@ export interface ChatResult {
     output_tokens: number;
     cache_read_tokens: number;
     cache_creation_tokens: number;
+    input_missing?: boolean;
+    output_missing?: boolean;
   };
   /** "provider:modelId" string of the model that actually answered. */
   model: string;
@@ -3043,7 +3045,9 @@ async function chatOnce(opts: ChatOpts): Promise<ChatResult> {
     const outTok = Number(usage.outputTokens ?? usage.completionTokens ?? 0);
     const cacheReadTokens=Number(usage.inputTokenDetails?.cacheReadTokens??usage.cachedInputTokens??anthropicCache.cacheReadInputTokens??anthropicCache.cache_read_input_tokens??0);
     const cacheWriteTokens=Number(usage.inputTokenDetails?.cacheWriteTokens??anthropicCache.cacheCreationInputTokens??anthropicCache.cache_creation_input_tokens??0);
-    _recordBudget(`${recipe.id}:${modelId}`, inTok, outTok,cacheReadTokens,cacheWriteTokens,!Number.isFinite(usage.inputTokens??usage.promptTokens)||!Number.isFinite(usage.outputTokens??usage.completionTokens));
+    const inputMissing=!Number.isFinite(usage.inputTokens??usage.promptTokens);
+    const outputMissing=!Number.isFinite(usage.outputTokens??usage.completionTokens);
+    _recordBudget(`${recipe.id}:${modelId}`, inTok, outTok,cacheReadTokens,cacheWriteTokens,inputMissing||outputMissing);
 
     const chatResult: ChatResult = {
       text: blocks.filter(b => b.type === 'text').map(b => (b as { type: 'text'; text: string }).text).join(''),
@@ -3054,6 +3058,8 @@ async function chatOnce(opts: ChatOpts): Promise<ChatResult> {
         output_tokens: outTok,
         cache_read_tokens: cacheReadTokens,
         cache_creation_tokens: cacheWriteTokens,
+        ...(inputMissing?{input_missing:true}:{}),
+        ...(outputMissing?{output_missing:true}:{}),
       },
       model: `${recipe.id}:${modelId}`,
       providerId: recipe.id,
@@ -3154,6 +3160,8 @@ export async function chat(opts: ChatOpts): Promise<ChatResult> {
           output_tokens:result.usage.output_tokens+retried.usage.output_tokens,
           cache_read_tokens:result.usage.cache_read_tokens+retried.usage.cache_read_tokens,
           cache_creation_tokens:result.usage.cache_creation_tokens+retried.usage.cache_creation_tokens,
+          ...(result.usage.input_missing||retried.usage.input_missing?{input_missing:true}:{}),
+          ...(result.usage.output_missing||retried.usage.output_missing?{output_missing:true}:{}),
         }};
       }
       const shouldFallback = result.stopReason === 'refusal' || result.stopReason === 'content_filter';
@@ -3203,6 +3211,8 @@ export interface ToolLoopReplayState {
 }
 
 export interface ToolLoopOpts {
+  allowFallback?: boolean;
+  maxRetries?: number;
   toolChoice?: ChatOpts['toolChoice'];
   requestPolicy?: ChatRequestPolicy;
   onRequestEvent?: (event:ChatRequestEvent)=>void;
@@ -3218,6 +3228,7 @@ export interface ToolLoopOpts {
   jsonToolCalls?: boolean;
   jsonToolFallback?: boolean;
   jsonToolPrompt?: string;
+  jsonDirectTool?: string;
   jsonFinalAnswer?: boolean;
   parseToolText?: (text:string)=>{text:string;toolCalls:Array<{toolName:string;input:Record<string,unknown>}>};
   toolTextPreview?: (text:string)=>string;
@@ -3391,11 +3402,13 @@ export async function toolLoop(opts: ToolLoopOpts): Promise<ToolLoopResult> {
       let rawText='',visibleText='';
       const invoke=()=>chat({
         model: opts.model,
+        ...(opts.allowFallback===undefined?{}:{allowFallback:opts.allowFallback}),
+        ...(opts.maxRetries===undefined?{}:{maxRetries:opts.maxRetries}),
         system: (finalTurn?`${callSystem}\n${opts.finalPrompt??'This is the reserved final verification turn. Return the requested JSON receipt of persisted entities and evidence-backed relations. Tools are unavailable; do not claim unwritten targets.'}`:callSystem)+(jsonToolCalls?`\n${opts.jsonToolPrompt??'Native tools are unavailable. To request an operation return JSON only: {"tool_calls":[{"name":"allowed tool name","arguments":{}}]}. Otherwise return the required final JSON receipt.'}${finalTurn?'':`\nUse only these definitions: ${JSON.stringify(opts.tools)}`}`:''),
         messages:jsonToolCalls?callMessages.map(message=>({role:message.role,content:typeof message.content==='string'?message.content:JSON.stringify(message.content)})):callMessages,
         tools: finalTurn||jsonToolCalls?undefined:opts.tools,
         ...(finalTurn||jsonToolCalls||!callToolChoice?{}:{toolChoice:callToolChoice}),
-        responseSchema:jsonToolCalls?{name:'entity_response',schema:{type:'object',additionalProperties:true}}:undefined,
+        responseSchema:jsonToolCalls&&!opts.jsonDirectTool?{name:'entity_response',schema:{type:'object',additionalProperties:true}}:undefined,
         maxTokens:callMaxTokens,
         contextWindow:callContextWindow,
         fitRequest:opts.fitRequest,
@@ -3429,7 +3442,10 @@ export async function toolLoop(opts: ToolLoopOpts): Promise<ToolLoopResult> {
         }
         if(jsonToolCalls){
           const parsed=parseLlmJson<{tool_calls?:Array<{name:string;arguments:unknown}>;answer?:string}>(chatResult.text);
-          if(!finalTurn&&Array.isArray(parsed?.tool_calls)&&parsed.tool_calls.length>0&&!parsed.tool_calls.some(call=>!call||typeof call.name!=='string'||!opts.toolHandlers.has(call.name)||!call.arguments||typeof call.arguments!=='object'||Array.isArray(call.arguments))){
+          if(opts.jsonDirectTool&&!finalTurn){
+            if(!parsed||!Array.isArray((parsed as any).entities)||!Array.isArray((parsed as any).relations)||!opts.toolHandlers.has(opts.jsonDirectTool))throw new Error('ingest_provider_parse: 模型没有返回完整的实体和关系 JSON');
+            chatResult={...chatResult,stopReason:'tool_calls',blocks:[{type:'tool-call',toolCallId:`json-${turnIdx}-0`,toolName:opts.jsonDirectTool,input:parsed}]};
+          }else if(!finalTurn&&Array.isArray(parsed?.tool_calls)&&parsed.tool_calls.length>0&&!parsed.tool_calls.some(call=>!call||typeof call.name!=='string'||!opts.toolHandlers.has(call.name)||!call.arguments||typeof call.arguments!=='object'||Array.isArray(call.arguments))){
             chatResult={...chatResult,stopReason:'tool_calls',blocks:parsed.tool_calls.map((call,index)=>({type:'tool-call' as const,toolCallId:`json-${turnIdx}-${index}`,toolName:call.name,input:call.arguments}))};
           }else if(opts.jsonFinalAnswer){
             if(typeof parsed?.answer!=='string'||!parsed.answer.trim())throw new Error('模型 JSON 回答或工具请求无效，原始资料和对话已保留。');
@@ -3450,6 +3466,8 @@ export async function toolLoop(opts: ToolLoopOpts): Promise<ToolLoopResult> {
     totalUsage.output_tokens += chatResult.usage.output_tokens;
     totalUsage.cache_read_tokens += chatResult.usage.cache_read_tokens;
     totalUsage.cache_creation_tokens += chatResult.usage.cache_creation_tokens;
+    if(chatResult.usage.input_missing)totalUsage.input_missing=true;
+    if(chatResult.usage.output_missing)totalUsage.output_missing=true;
 
     // D11 step 1: persist assistant turn BEFORE any tool dispatch.
     const assistantMessageIdx = messageIdx++;

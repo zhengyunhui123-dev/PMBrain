@@ -634,6 +634,7 @@ export interface SubagentResult {
     out: number;
     cache_read: number;
     cache_create: number;
+    missing?: boolean;
   };
   synth_mode_used?: 'oneshot' | 'agentic_fallback' | 'agentic';
   fallback_reason?: string;

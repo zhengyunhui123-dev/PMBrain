@@ -9,12 +9,13 @@ import { runCycle, type CyclePhase } from '../../core/cycle.ts';
 import { resolveDreamPresetPhases, resolveDreamRelationOptions, resolveBrainDir } from '../../commands/dream.ts';
 import { runQuickMaintenance, combineQuickMaintenanceReports, resolveQuickMaintenancePhases } from '../../core/quick-maintenance.ts';
 import { ALL_PHASES } from '../../core/cycle.ts';
-import { chooseCaptureModel, configuredCnyPrices, storedPrice } from '../../core/cycle/capture-entities.ts';
+import { chooseCaptureModel, configuredCnyPrices } from '../../core/cycle/capture-entities.ts';
 import { readEntityCaptureCostCap } from '../../core/cycle/entity-capture-budget.ts';
 import {runWithDreamBudget,checkDreamBudget} from './dream-budget';
 import {openTaskBudget,type TaskBudgetReply} from './task-budget';
 import {withTaskBudgetTracker} from '../../core/ai/gateway';
 import {DEFAULT_USD_TO_CNY} from '../../../shared/model-billing';
+import {isLocalConfiguredModel} from '../../../shared/model-services';
 import { splitProviderModelId } from '../../core/model-id.ts';
 import { maintenanceFailure } from './maintenance-orchestration.ts';
 import { fetchSource, loadAllSources, parseSourceConfig } from '../../core/sources-load.ts';
@@ -198,14 +199,17 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
     }
     if (captureModel?.ok) {
       if (input.preset!=='quick'||captureEntitySlugs?.length) {
-        const [usage] = await engine.executeRaw<{ input: string; output: string }>(`SELECT COALESCE(sum(tokens_input),0) AS input,COALESCE(sum(tokens_output),0) AS output FROM minion_jobs WHERE private_queue_owner_job_id=$1 AND data ? 'ingest_context'`, [ownerJobId]);
+        const [usage] = await engine.executeRaw<{ input: string; output: string; unconfirmed: string }>(`SELECT COALESCE(sum(tokens_input),0) AS input,COALESCE(sum(tokens_output),0) AS output,
+          COALESCE(sum(CASE WHEN data->>'capture_cost_ceiling_cny' IS NOT NULL AND (result->'tokens'->>'missing'='true' OR (result IS NULL AND EXISTS (SELECT 1 FROM subagent_messages m WHERE m.job_id=minion_jobs.id AND m.role='assistant' AND (m.tokens_in IS NULL OR m.tokens_out IS NULL))) OR ((COALESCE(tokens_input,0)=0 AND COALESCE(tokens_output,0)=0) AND result->'tokens'->>'missing' IS DISTINCT FROM 'false'))
+            THEN GREATEST(0,(data->>'capture_cost_ceiling_cny')::numeric-(COALESCE(tokens_input,0)*COALESCE((data->'usage_limits'->>'input_price')::numeric,0)+COALESCE(tokens_output,0)*COALESCE((data->'usage_limits'->>'output_price')::numeric,0))/1000000) ELSE 0 END),0) AS unconfirmed
+          FROM minion_jobs WHERE private_queue_owner_job_id=$1 AND data ? 'ingest_context'`, [ownerJobId]);
         const inputTokens = Number(usage?.input ?? 0), outputTokens = Number(usage?.output ?? 0);
         const cardPrices = configuredCnyPrices(captureModel.model, splitProviderModelId(captureModel.model).provider,Number(await engine.getConfig('pricing.usd_to_cny')??DEFAULT_USD_TO_CNY));
-        const inputPrice = storedPrice(await engine.getConfig('dream.entity_capture.price.input_cny_per_million')) ?? cardPrices.input;
-        const outputPrice = storedPrice(await engine.getConfig('dream.entity_capture.price.output_cny_per_million')) ?? cardPrices.output;
+        const inputPrice = cardPrices.input;
+        const outputPrice = cardPrices.output;
         const costCap = readEntityCaptureCostCap(await engine.getConfig('dream.entity_capture.cost_cap_cny'));
         captureEntityBudget = {
-          costCapCny: costCap === null || inputPrice === null || outputPrice === null ? costCap : Math.max(0, costCap - (inputTokens * inputPrice + outputTokens * outputPrice) / 1_000_000),
+          costCapCny: costCap === null || inputPrice === null || outputPrice === null ? costCap : Math.max(0, costCap - Number(usage?.unconfirmed??0) - (inputTokens * inputPrice + outputTokens * outputPrice) / 1_000_000),
         };
       }
     }
@@ -268,7 +272,7 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
     afterSync: input.preset === 'quick' && !input.dryRun ? (sourceId: string, root: string, result: import('../../commands/sync.ts').SyncResult) => rpc('task.gitCommit', [sourceId, root, result]) : undefined,
     dryRun: input.dryRun, sourceId,
     captureEntitySlugs:input.slugs,
-    captureEntitiesConcurrency:()=>constrained||engine.kind==='pglite'?1:2,
+    captureEntitiesConcurrency:()=>constrained||engine.kind==='pglite'&&captureModel?.ok&&isLocalConfiguredModel(captureModel.model,loadConfig()?.desktop?.model_services??[])?1:4,
     privateQueueOwnerJobId: ownerJobId,
     signal: abort.signal,
     includeOffice: true,

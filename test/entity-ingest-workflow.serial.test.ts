@@ -30,6 +30,26 @@ test('快速维护只允许四类实体，同时仍可为新对象建页',async(
   await expectRejection(validateIngestWrite(engine,input,'put_page',{slug:'concepts/晨会方法',content:'---\ntitle: 晨会方法\ntype: concept\n---\n晨会方法。[Source: 申报.xlsx]'}),'type');
 });
 
+test('实体查重只读取相关来源的实体，仍拒绝同名重复并允许其他来源独立对象',async()=>{
+  for(let i=0;i<30;i++)await page(`notes/irrelevant-${i}`,'note',`普通资料${i}`,'普通资料正文。');
+  await page('companies/other-source','company','独立公司','其他来源的对象。','other');
+  const original=engine.executeRaw;
+  const descriptor=Object.getOwnPropertyDescriptor(engine,'executeRaw');
+  let inspected=-1;
+  (engine as any).executeRaw=async(sql:string,params?:unknown[])=>{
+    const rows=await original.call(engine,sql,params);
+    if(sql.includes('jsonb_agg')&&sql.includes('page_aliases'))inspected=rows.length;
+    return rows;
+  };
+  try{
+    const body='独立公司开始参与本地项目。';
+    await validateIngestWrite(engine,{...context,body,chunkBody:body,quickEntitiesOnly:true},'put_page',{slug:'companies/local-company',content:'---\ntitle: 独立公司\ntype: company\n---\n独立公司参与项目。[Source: 申报.xlsx]'});
+    expect(inspected).toBeGreaterThanOrEqual(0);expect(inspected).toBeLessThanOrEqual(3);
+    const existing='四川省商务厅继续负责项目。';
+    await expectRejection(validateIngestWrite(engine,{...context,body:existing,chunkBody:existing,quickEntitiesOnly:true},'put_page',{slug:'companies/duplicate',content:'---\ntitle: 四川省商务厅\ntype: organization\n---\n四川省商务厅负责项目。[Source: 申报.xlsx]'}),'existing');
+  }finally{if(descriptor)Object.defineProperty(engine,'executeRaw',descriptor);else delete (engine as any).executeRaw;}
+});
+
 test('快速维护不把同名概念或公司当成项目，仍可创建有证据的新项目',async()=>{
   await page('concepts/晨光','concept','晨光平台','原有概念。');
   await page('companies/晨光','company','晨光平台','同名公司。');

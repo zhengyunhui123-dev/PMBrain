@@ -11,7 +11,6 @@ export async function runWithDreamBudget(input:DreamTaskInput,run:()=>Promise<Re
  const started=Date.now();
  return withTaskBudgetTracker(tracker,async()=>{
   try{
-   if(tracker.value.spentCny+tracker.value.reservedCny>=tracker.value.capCny)throw new BudgetExhausted(taskBudgetMessage('cost'),{reason:'cost',spent:tracker.totalSpent,cap:tracker.cap});
    const result=await run();
    return {...result,budget:tracker.value};
   }catch(error){

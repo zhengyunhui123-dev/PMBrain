@@ -2145,7 +2145,7 @@ export class PGLiteEngine implements BrainEngine {
         `WITH chunk_text_candidates AS MATERIALIZED (
            SELECT DISTINCT ON (p.id) cc.id AS chunk_id
            FROM content_chunks cc
-           JOIN pages p ON p.id = cc.page_id
+           JOIN LATERAL (SELECT * FROM pages WHERE id = cc.page_id OFFSET 0) p ON true
            JOIN sources s ON s.id = p.source_id
            WHERE cc.chunk_text ILIKE ANY($1::text[]) ${detailFilter}${extraFilter} ${hardExcludeClause} ${visibilityClause}
              AND cc.modality = 'text'
@@ -2158,8 +2158,8 @@ export class PGLiteEngine implements BrainEngine {
          ),
          compiled_truth_candidates AS MATERIALIZED (
            SELECT DISTINCT ON (p.id) cc.id AS chunk_id
-           FROM pages p
-           JOIN compiled_truth_pages body_match ON body_match.id=p.id
+           FROM compiled_truth_pages body_match
+           JOIN LATERAL (SELECT * FROM pages WHERE id = body_match.id OFFSET 0) p ON true
            JOIN content_chunks cc ON cc.page_id = p.id
            JOIN sources s ON s.id = p.source_id
            WHERE true ${detailFilter}${extraFilter} ${hardExcludeClause} ${visibilityClause}

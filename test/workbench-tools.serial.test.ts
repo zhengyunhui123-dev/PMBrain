@@ -398,3 +398,19 @@ test('isolated PGLite reads the exact Source when pages share a slug and leaves 
     expect(await engine.executeRaw('SELECT * FROM pages ORDER BY id')).toEqual(before);
   } finally { await engine.disconnect(); }
 });
+
+test('知识助手通过真实 PGLite 搜索日期资料并完成回答', async () => {
+  const engine = new PGLiteEngine();
+  await engine.connect({}); await engine.initSchema();
+  try {
+    await engine.putPage('projects/date-fixture', { title: '合成项目', type: 'project', compiled_truth: '合成项目 10月26日完成验收', frontmatter: {} });
+    await engine.upsertChunks('projects/date-fixture', [{ chunk_index: 0, chunk_text: '合成项目 10月26日完成验收', chunk_source: 'compiled_truth' }]);
+    let turns = 0; const events: WorkbenchToolCall[] = [];
+    __setChatTransportForTests(async () => ++turns === 1 ? call('knowledge_search', { query: '合成项目 10月26日' }) : text('10月26日完成验收 [1]'));
+    const answer = knowledgeWorkbenchAnswer(engine);
+    const result = await answer({ messages: [{ ...question, text: '合成项目 10月26日完成了什么？' }], model: 'service-test:chat', knowledge: true, signal: new AbortController().signal, progress: () => {}, onTool: item => events.push(item) });
+    expect(result.text).toContain('完成验收');
+    expect(result.citations.some(item => item.slug === 'projects/date-fixture')).toBe(true);
+    expect(events.some(item => item.name === 'knowledge_search' && item.status === 'complete')).toBe(true);
+  } finally { await engine.disconnect(); }
+}, 60_000);

@@ -70,6 +70,48 @@ test('一个窗口最多提交一个分块，后续窗口复用凭据直到完�
   expect((await engine.executeRaw('SELECT id FROM minion_jobs'))).toHaveLength(3);
 },120000);
 
+test('不同版本资料的相同分块复用回执，只识别各自变化的部分',async()=>{
+  await resetPgliteState(engine as PGLiteEngine);await engine.setConfig('version','135');
+  const shared=Array.from({length:8000},(_,index)=>String(index%10)).join('');
+  const first='notes/version-original',second='notes/备份/version-copy';
+  await engine.putPage(first,{type:'note',title:'原资料',compiled_truth:shared+'原版本保留的独立尾段。'.repeat(12),frontmatter:{}});
+  await engine.putPage(second,{type:'note',title:'另一版本',compiled_truth:shared+'备份新增的独立尾段。'.repeat(12),frontmatter:{}});
+  const calls:Array<{slug:string;body:string}>=[];
+  const handler:NonNullable<CaptureEntitiesOpts['handler']>=async ctx=>{
+    const input=(ctx.data as any).ingest_context;calls.push({slug:input.slug,body:input.chunkBody});
+    return {ingest_verified:true,ingest_entities:[],result:JSON.stringify({entities:[],relations:[],no_entities:true}),tokens:{in:1,out:1},stop_reason:'end_turn'};
+  };
+  const options={sourceId:'default',quickEntitiesOnly:true,model:'anthropic:claude-sonnet-4-6',handler,budget:{costCapCny:null,ollama:true}};
+  const original=await runPhaseCaptureEntities(engine,{...options,slugs:[first]});expect(original.details.pages_remaining).toBe(0);expect(calls).toHaveLength(2);
+  const backup=await runPhaseCaptureEntities(engine,{...options,slugs:[second]});expect(backup.details.pages_remaining).toBe(0);
+  expect(calls.filter(call=>call.slug===second)).toHaveLength(1);expect(calls.at(-1)!.body).toContain('备份新增');
+},120000);
+
+test('不同版本同时维护时，相同分块只识别一次并保留两份来源',async()=>{
+  await resetPgliteState(engine as PGLiteEngine);await engine.setConfig('version','135');
+  const fact='张三负责星河项目的验收工作。';
+  const shared=(fact+'项目进展记录。'.repeat(1200)).slice(0,8000).padEnd(8000,'甲');
+  const slugs=['notes/shared-original','notes/备份/shared-copy'];
+  await engine.putPage(slugs[0],{type:'note',title:'原资料',compiled_truth:shared+'原版本尾段。'.repeat(20),frontmatter:{}});
+  await engine.putPage(slugs[1],{type:'note',title:'另一版本',compiled_truth:shared+'备份版本尾段。'.repeat(20),frontmatter:{}});
+  const calls:Array<{slug:string;body:string}>=[];
+  const handler:NonNullable<CaptureEntitiesOpts['handler']>=async ctx=>{
+    const input=(ctx.data as any).ingest_context;calls.push({slug:input.slug,body:input.chunkBody});
+    if(!input.chunkBody.includes('星河项目'))return {ingest_verified:true,ingest_entities:[],result:JSON.stringify({entities:[],relations:[],no_entities:true}),tokens:{in:1,out:1},stop_reason:'end_turn'};
+    await Bun.sleep(150);
+    const content=await annotateIngestContent(engine,input,'projects/星河',`---\ntitle: 星河项目\ntype: project\n---\n${fact} [Source: ${input.slug}]`);
+    await engine.putPage('projects/星河',parseMarkdown(content,'projects/星河'),{sourceId:input.sourceId});
+    const result=JSON.stringify({entities:['projects/星河'],relations:[]}),verified=await finalizeEntityIngest(engine,input,result);
+    return {ingest_verified:true,ingest_entities:verified.entities,result,tokens:{in:1,out:1},stop_reason:'end_turn'};
+  };
+  const result=await runPhaseCaptureEntities(engine,{sourceId:'default',quickEntitiesOnly:true,getConcurrency:()=>4,model:'anthropic:claude-sonnet-4-6',handler,budget:{costCapCny:null,ollama:true}});
+  expect(result.details.pages_remaining).toBe(0);expect(calls.filter(call=>call.body.includes('星河项目'))).toHaveLength(1);expect(calls).toHaveLength(3);
+  const page=(await engine.getPage('projects/星河'))!,provenance=page.frontmatter.pmbrain_ingest_provenance as Array<{slug:string}>;
+  expect(provenance.map(row=>row.slug).sort()).toEqual([...slugs].sort());
+  const links=await engine.executeRaw<{slug:string}>("SELECT DISTINCT s.slug FROM links l JOIN pages s ON s.id=l.from_page_id JOIN pages e ON e.id=l.to_page_id WHERE e.slug='projects/星河' AND s.slug=ANY($1::text[])",[slugs]);
+  expect(links.map(row=>row.slug).sort()).toEqual([...slugs].sort());
+},120000);
+
 test('快速维护复用相同资料及备份，保留各自来源；不同内容仍识别',async()=>{
   await resetPgliteState(engine as PGLiteEngine);await engine.setConfig('version','135');
   const body='张三负责星河项目的交付工作，星河项目由星河公司实施。星河团队负责协调。';

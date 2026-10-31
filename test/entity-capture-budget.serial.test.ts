@@ -129,7 +129,101 @@ test('模型回执已验收但关联检查中断时，继续只补关联检查�
   }
 },60000);
 
+test('实体预算足够两份资料的最大费用时允许并发',async()=>{
+  await engine.setConfig('dream.entity_capture.document_max_input_tokens','1000');await engine.setConfig('dream.entity_capture.document_max_output_tokens','100');
+  for(const name of ['a','b'])await note(`notes/paid-parallel-${name}`,`这份隔离资料 ${name} 有不同的项目安排和负责人。`);
+  let active=0,peak=0,calls=0,release!:()=>void;const both=new Promise<void>(resolve=>{release=resolve;});
+  const result=await runPhaseCaptureEntities(engine,{sourceId:'vault',getConcurrency:()=>2,budget:{costCapCny:2.5,inputPriceCnyPerMillion:1000,outputPriceCnyPerMillion:1000},handler:async()=>{
+    calls++;active++;peak=Math.max(peak,active);if(active===2)release();await Promise.race([both,Bun.sleep(500)]);active--;
+    return {ingest_verified:true,stop_reason:'end_turn',tokens:{in:100,out:10}};
+  }});
+  expect(calls).toBe(2);expect(peak).toBe(2);expect(result.details.pages_remaining).toBe(0);expect(Number(result.details.cost_cny)).toBeCloseTo(0.22,6);
+},60000);
+
+test('一份长资料的不同分块可同时识别，完成后各自保存凭据',async()=>{
+  const body=Array.from({length:4500},(_,index)=>`${String(index).padStart(5,'0')}项隔离工作记录。`).join('');
+  await note('notes/parallel-long',body);
+  let active=0,peak=0,calls=0,release!:()=>void;const all=new Promise<void>(resolve=>{release=resolve;});
+  const result=await runPhaseCaptureEntities(engine,{sourceId:'vault',slugs:['notes/parallel-long'],getConcurrency:()=>4,budget:{costCapCny:null},handler:async()=>{
+    calls++;active++;peak=Math.max(peak,active);if(active===4)release();await Promise.race([all,Bun.sleep(700)]);active--;
+    return {ingest_verified:true,ingest_entities:[],result:JSON.stringify({entities:[],relations:[],no_entities:true}),tokens:{in:1,out:1},stop_reason:'end_turn'};
+  }});
+  expect(calls).toBeGreaterThanOrEqual(4);expect(peak).toBe(4);expect(result.details.pages_remaining).toBe(0);
+  expect(Number(result.details.chunks_processed)).toBe(calls);
+},60000);
+
+test('请求四路时，按预算最多只放行两路且保留全部结果',async()=>{
+  await engine.setConfig('dream.entity_capture.document_max_input_tokens','1000');await engine.setConfig('dream.entity_capture.document_max_output_tokens','100');
+  for(const name of ['a','b','c','d'])await note(`notes/budget-four-${name}`,`预算并发隔离资料 ${name}，包含不同的验收安排。`);
+  let active=0,peak=0,calls=0,release!:()=>void;const both=new Promise<void>(resolve=>{release=resolve;});
+  const result=await runPhaseCaptureEntities(engine,{sourceId:'vault',getConcurrency:()=>4,budget:{costCapCny:2.5,inputPriceCnyPerMillion:1000,outputPriceCnyPerMillion:1000},handler:async()=>{
+    calls++;active++;peak=Math.max(peak,active);if(active===2)release();await Promise.race([both,Bun.sleep(700)]);active--;
+    return {ingest_verified:true,stop_reason:'end_turn',tokens:{in:100,out:10}};
+  }});
+  expect(calls).toBe(4);expect(peak).toBe(2);expect(result.details.pages_remaining).toBe(0);expect(Number(result.details.cost_cny)).toBeCloseTo(0.44,6);
+},60000);
+
+test('实体预算不足以覆盖两个最大费用时退回单路且继续完成',async()=>{
+  await engine.setConfig('dream.entity_capture.document_max_input_tokens','1000');await engine.setConfig('dream.entity_capture.document_max_output_tokens','100');
+  for(const name of ['a','b'])await note(`notes/paid-serial-${name}`,`隔离资料 ${name} 验证预算不足并发时仍会继续识别。`);
+  let active=0,peak=0,calls=0;
+  const result=await runPhaseCaptureEntities(engine,{sourceId:'vault',getConcurrency:()=>2,budget:{costCapCny:1.5,inputPriceCnyPerMillion:1000,outputPriceCnyPerMillion:1000},handler:async()=>{
+    calls++;active++;peak=Math.max(peak,active);await Bun.sleep(50);active--;
+    return {ingest_verified:true,stop_reason:'end_turn',tokens:{in:100,out:10}};
+  }});
+  expect(calls).toBe(2);expect(peak).toBe(1);expect(result.details.pages_remaining).toBe(0);expect(Number(result.details.cost_cny)).toBeCloseTo(0.22,6);
+},60000);
+
+test('本地模型与未设置价格模型不设置实体费用上限',async()=>{
+  for(const [name,options] of [
+    ['local',{ollama:true,inputPriceCnyPerMillion:1000,outputPriceCnyPerMillion:1000}],
+    ['unpriced',{ollama:false,inputPriceCnyPerMillion:null,outputPriceCnyPerMillion:null}],
+  ] as const){
+    const slug=`notes/no-cost-limit-${name}`;await note(slug,`隔离资料 ${name} 验证本地和未定价模型的费用规则。`);
+    let limit:unknown='not-called';const result=await runPhaseCaptureEntities(engine,{sourceId:'vault',slugs:[slug],budget:{costCapCny:1,...options},handler:async ctx=>{
+      limit=(ctx.data as any).usage_limits.cost_cny;return {ingest_verified:true,stop_reason:'end_turn',tokens:{in:100,out:10}};
+    }});
+    expect(limit).toBeNull();expect(result.details.cost_cap_cny).toBeNull();expect(result.details.pages_remaining).toBe(0);
+    if(name==='unpriced')expect(result.details.cost_cny).toBeNull();
+  }
+},60000);
+
+test('模型设置未定价时不套用历史通用单价',async()=>{
+  await note('notes/no-model-price','隔离资料用于验证旧通用价格不会替代模型设置。');
+  await engine.setConfig('dream.entity_capture.price.input_cny_per_million','1000');await engine.setConfig('dream.entity_capture.price.output_cny_per_million','1000');
+  let limit:unknown='not-called';
+  const result=await runPhaseCaptureEntities(engine,{sourceId:'vault',model:'custom-openai:unpriced',budget:{costCapCny:1},handler:async ctx=>{
+    limit=(ctx.data as any).usage_limits.cost_cny;return {ingest_verified:true,stop_reason:'end_turn',tokens:{in:100,out:10}};
+  }});
+  expect(limit).toBeNull();expect(result.details.cost_cap_cny).toBeNull();expect(result.details.cost_cny).toBeNull();
+},60000);
+
+test('模型未返回用量时保留最坏费用预留，不能把它当成免费继续领取',async()=>{
+  await engine.setConfig('dream.entity_capture.document_max_input_tokens','1000');await engine.setConfig('dream.entity_capture.document_max_output_tokens','100');
+  for(const name of ['a','b','c','d'])await note(`notes/unknown-usage-${name}`,`隔离资料 ${name} 验证未知用量时的预算预留。`);
+  let calls=0,active=0,peak=0,release!:()=>void;const both=new Promise<void>(resolve=>{release=resolve;});
+  const result=await runPhaseCaptureEntities(engine,{sourceId:'vault',getConcurrency:()=>2,budget:{costCapCny:2.3,inputPriceCnyPerMillion:1000,outputPriceCnyPerMillion:1000},handler:async()=>{
+    calls++;active++;peak=Math.max(peak,active);if(active===2)release();await Promise.race([both,Bun.sleep(500)]);active--;
+    return {ingest_verified:true,stop_reason:'end_turn'};
+  }});
+  expect(peak).toBe(2);expect(calls).toBe(3);expect(result.details.stop_reason).toBe('cost');expect(result.details.usage_missing).toBe(true);
+  const rows=await engine.executeRaw<{ceiling:string}>("SELECT data->>'capture_cost_ceiling_cny' AS ceiling FROM minion_jobs WHERE data ? 'ingest_context'");
+  expect(rows.reduce((sum,row)=>sum+Number(row.ceiling??0),0)).toBeCloseTo(2.3,6);
+},60000);
+
+test('已保存部分用量但子任务中断时，仍将缺失用量计入费用预留',async()=>{
+  await engine.setConfig('dream.entity_capture.document_max_input_tokens','1000');await engine.setConfig('dream.entity_capture.document_max_output_tokens','100');
+  await note('notes/partial-usage','隔离资料用于验证用量部分缺失时的费用预留。');
+  const result=await runPhaseCaptureEntities(engine,{sourceId:'vault',slugs:['notes/partial-usage'],budget:{costCapCny:1.1,inputPriceCnyPerMillion:1000,outputPriceCnyPerMillion:1000},handler:async ctx=>{
+    await ctx.updateTokens({input:0,output:5});
+    await engine.executeRaw("INSERT INTO subagent_messages(job_id,message_idx,role,content_blocks,tokens_in,tokens_out) VALUES($1,0,'assistant','[]'::jsonb,NULL,5)",[ctx.id]);
+    throw new UnrecoverableError('ingest_budget_cost: provider usage unavailable');
+  }});
+  expect(result.details.stop_reason).toBe('cost');expect(result.details.usage_missing).toBe(true);expect(result.details.cost_cny).toBeNull();
+},60000);
+
 test('两个分块同时等待模型，同一实体补写单提交且两份事实均保留',async()=>{
+  await engine.setConfig('dream.entity_capture.document_max_input_tokens','1000');await engine.setConfig('dream.entity_capture.document_max_output_tokens','100');
   await note('notes/window-a','张三负责项目甲的验收工作，需要保留完整事实。');
   await note('notes/window-b','张三负责项目乙的交付工作，需要保留完整事实。');
   let active=0,peak=0,writing=0,peakWriting=0;
@@ -140,7 +234,7 @@ test('两个分块同时等待模型，同一实体补写单提交且两份事�
       const parsed=parseMarkdown(input.content,'people/张三');await ctx.engine.putPage('people/张三',parsed,{sourceId:'vault'});return {status:'ok',slug:'people/张三'};
     }finally{writing--;}
   }};
-  const result=await runPhaseCaptureEntities(engine,{sourceId:'vault',getConcurrency:()=>2,budget:{costCapCny:null},handler:async ctx=>{
+  const result=await runPhaseCaptureEntities(engine,{sourceId:'vault',getConcurrency:()=>2,budget:{costCapCny:2.5,inputPriceCnyPerMillion:1000,outputPriceCnyPerMillion:1000},handler:async ctx=>{
     active++;peak=Math.max(peak,active);if(active===2)release();
     await Promise.race([both,Bun.sleep(150)]);active--;
     const context=(ctx.data as any).ingest_context;
@@ -416,6 +510,39 @@ test('分块 Token 耗尽只跳过当前资料，后续资料仍完成',async()=
   expect(limited.details.budget_stop).toBeNull();
 },60000);
 
+test('单个分块等待超时后继续其他资料，恢复时只重试未完成资料',async()=>{
+  await note('notes/timeout-first','这是可能超时的隔离资料，包含完整工作记录。');
+  await note('notes/timeout-next','这是后续正常处理的隔离资料，包含不同的工作记录。');
+  const calls:string[]=[];let fail=true;
+  const options={sourceId:'vault',getConcurrency:()=>1,budget:{costCapCny:null},handler:async(ctx:MinionJobContext)=>{
+    const slug=(ctx.data as any).ingest_context.slug;calls.push(slug);
+    if(slug==='notes/timeout-first'&&fail)throw new UnrecoverableError('ingest_provider_timeout: isolated timeout');
+    return {ingest_verified:true,stop_reason:'end_turn',tokens:{in:1,out:1}};
+  }};
+  const first=await runPhaseCaptureEntities(engine,options);
+  expect(calls).toEqual(['notes/timeout-first','notes/timeout-next']);expect(first.details.pages_failed).toBe(1);expect(first.details.pages_remaining).toBe(1);
+  fail=false;const second=await runPhaseCaptureEntities(engine,options);
+  expect(second.details.pages_remaining).toBe(0);expect(calls.filter(slug=>slug==='notes/timeout-next')).toHaveLength(1);
+},60000);
+
+test('长资料中的单个分块超时后继续其余分块，恢复时只重试超时分块',async()=>{
+  const body=Array.from({length:2000},(_,i)=>`第${i}条独立工作记录包含需要识别的项目内容。`).join('');
+  await note('notes/long-timeout',body);
+  const chunks=splitEntityCaptureCandidate({slug:'notes/long-timeout',sourceId:'vault',title:'notes/long-timeout',body});
+  expect(chunks.length).toBeGreaterThan(2);
+  const calls:string[]=[];let fail=true;
+  const options={sourceId:'vault',getConcurrency:()=>1,budget:{costCapCny:null},handler:async(ctx:MinionJobContext)=>{
+    const chunk=(ctx.data as any).ingest_context.chunkBody as string;calls.push(chunk);
+    if(chunk===chunks[0]!.chunkBody&&fail)throw new UnrecoverableError('ingest_provider_timeout: isolated timeout');
+    return {ingest_verified:true,stop_reason:'end_turn',tokens:{in:1,out:1}};
+  }};
+  const first=await runPhaseCaptureEntities(engine,options);
+  expect(calls).toHaveLength(chunks.length);expect(first.details.pages_failed).toBe(1);expect(first.details.pages_remaining).toBe(1);
+  fail=false;const second=await runPhaseCaptureEntities(engine,options);
+  expect(second.details.pages_remaining).toBe(0);expect(calls).toHaveLength(chunks.length+1);
+  expect(calls.filter(chunk=>chunk===chunks[0]!.chunkBody)).toHaveLength(2);
+},60000);
+
 test('长资料每块独立获得调用和 Token 额度，完成后不重复识别',async()=>{
   const body='长文分块中的实体识别应保留完成断点。'.repeat(1000);
   await note('notes/document-turns',body);
@@ -490,7 +617,7 @@ test('费用到上限后停止新的模型请求，已完成结果保留，任�
   expect(Number(people[0]?.n)).toBe(1);
 }, 60_000);
 
-test('Ollama 不记人民币，未知价格或缺用量继续处理，旧累计配置和调用参数不再限制', async () => {
+test('本地和未定价模型不受费用限制，已定价模型缺用量时保留费用预留', async () => {
   for (const slug of ['notes/a', 'notes/b', 'notes/c']) {
     await note(slug, `${slug} 的正文足够参与实体识别。`);
   }
@@ -563,11 +690,11 @@ test('Ollama 不记人民币，未知价格或缺用量继续处理，旧累计�
       return { ingest_verified:true, tokens: { missing: true } };
     },
   });
-  expect(blind.status).toBe('ok');
-  expect(blindCalls).toBe(3);
-  expect(blind.details.budget_stop).toBeNull();
-  expect(blind.details.stop_reason).toBe('completed');
-  expect(blind.details.pages_remaining).toBe(0);
+  expect(blind.status).toBe('warn');
+  expect(blindCalls).toBe(1);
+  expect(blind.details.budget_stop).toBe('cost');
+  expect(blind.details.stop_reason).toBe('cost');
+  expect(blind.details.pages_remaining).toBe(2);
   expect(blind.details.input_tokens).toBe(0);
   expect(blind.details.cost_cny).toBeNull();
   expect(blind.details.usage_missing).toBe(true);

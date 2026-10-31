@@ -30,10 +30,10 @@ export async function runSubagentsInline(
 ): Promise<void> {
   while (true) {
     throwIfAborted(signal, '[dream] inline drain');
-    await queue.promoteDelayed();
-    await queue.handleStalled();
-    await queue.handleTimeouts();
-    await queue.handleWallClockTimeouts(lockMs);
+    await queue.promoteDelayed(queueName);
+    await queue.handleStalled([], queueName);
+    await queue.handleTimeouts(queueName);
+    await queue.handleWallClockTimeouts(lockMs, queueName);
 
     const lockToken = randomUUID();
     const job = await queue.claim(lockToken, lockMs, queueName, ['subagent']);

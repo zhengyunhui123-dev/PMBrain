@@ -51,7 +51,7 @@ export async function captureReceiptProof(engine:BrainEngine,context:EntityInges
 
 export async function reuseCaptureReceipt(engine:BrainEngine,context:EntityIngestContext,receipt:CaptureReceipt,duplicateOf?:EntityIngestContext):Promise<{entities:EntityReference[];links:number;rebound:boolean;unresolved?:unknown[]}|null>{
   if(!Array.isArray(receipt.capture_proof))return null;
-  if(duplicateOf&&(typeof receipt.result!=='string'||duplicateOf.sourceId!==context.sourceId||duplicateOf.body!==context.body||duplicateOf.chunkBody!==context.chunkBody))return null;
+  if(duplicateOf&&(typeof receipt.result!=='string'||duplicateOf.sourceId!==context.sourceId||duplicateOf.chunkBody!==context.chunkBody))return null;
   try{
     return await engine.transaction(async tx=>{
       let rebound=false;
@@ -61,7 +61,7 @@ export async function reuseCaptureReceipt(engine:BrainEngine,context:EntityInges
       if(duplicateOf){
         const [original]=await tx.executeRaw<{id:number;body:string;incarnation:string}>(`SELECT p.id,p.compiled_truth AS body,s.incarnation::text incarnation
           FROM pages p JOIN sources s ON s.id=p.source_id WHERE p.slug=$1 AND p.source_id=$2 AND p.deleted_at IS NULL AND NOT s.archived FOR SHARE OF p,s`,[duplicateOf.slug,duplicateOf.sourceId]);
-        if(!original||original.id!==duplicateOf.pageId||original.body!==context.body||original.incarnation!==duplicateOf.sourceIncarnation)throw new UnrecoverableError('cached original document changed');
+        if(!original||original.id!==duplicateOf.pageId||original.body!==duplicateOf.body||original.incarnation!==duplicateOf.sourceIncarnation)throw new UnrecoverableError('cached original document changed');
       }
       for(const proof of receipt.capture_proof!){
         if(![context.sourceId,'default'].includes(proof.sourceId))throw new Error('实体识别回执越过 Source 边界');

@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from 'bun:test';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import type { BrainEngine } from '../src/core/engine.ts';
@@ -152,11 +152,13 @@ test('后台任务单资料八轮耗尽仍处理后续资料，原任务继续�
 },180000);
 
 test('显式实体摄入保留费用上限，继续原任务不重复已完成资料',async()=>{
+  const path=configPath(),originalConfig=readFileSync(path,'utf8'),config=JSON.parse(originalConfig);
+  config.desktop.model_services=[{id:'fixture',provider:'custom-openai',name:'隔离远程',baseUrl:'https://fixture.invalid/v1',apiKey:'isolated-only',enabled:true,models:[{id:'isolated-capture',name:'isolated-capture',kind:'chat',group:'fixture',capabilities:[],inputPriceCny:10,outputPriceCny:10}]}];
+  writeFileSync(path,JSON.stringify(config));
+  try{
   for(const slug of ['first','second'])await engine.putPage(slug,{title:slug,type:'note',compiled_truth:`${slug} 是费用测试原文。`,timeline:'',frontmatter:{}},{sourceId:'default'});
   usageInput=60000;
   await engine.setConfig('dream.entity_capture.cost_cap_cny','0.5');
-  await engine.setConfig('dream.entity_capture.price.input_cny_per_million','10');
-  await engine.setConfig('dream.entity_capture.price.output_cny_per_million','10');
   const task=await runtime.submitDream({phase:'capture_entities',sourceId:'default',slugs:['first','second']});
   await finished(task.id);expect(calls).toBe(1);
   await runtime.retry(task.id);await finished(task.id);expect(calls).toBe(1);
@@ -164,6 +166,7 @@ test('显式实体摄入保留费用上限，继续原任务不重复已完成�
   await runtime.retry(task.id);expect((await finished(task.id)).status).toBe('completed');expect(calls).toBe(2);
   expect((await engine.getPage('first'))?.compiled_truth).toContain('费用测试原文');
   expect((await engine.getPage('second'))?.compiled_truth).toContain('费用测试原文');
+  }finally{writeFileSync(path,originalConfig);}
 },90000);
 
 test('显式实体任务停止并重启后仍能原任务继续，不派生自动整理',async()=>{

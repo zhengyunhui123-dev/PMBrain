@@ -376,7 +376,7 @@ export function finishTaskProgress(view: TaskProductProgress, status: string, re
     }
   }
   if(next.budget)applyTaskBudget(next,next.budget);
-  if(next.budget?.historicalCostUnknown)next.detail='旧版任务此前的总费用无法完整核算；此处总预算从升级后的首次继续起累计，旧版历史费用未计入。';
+  if(next.budget?.historicalCostUnknown||next.budget?.unpricedCostUnknown)next.detail=[next.budget.historicalCostUnknown?'旧版任务此前的总费用无法完整核算；旧版历史费用未计入。':null,next.budget.unpricedCostUnknown?'部分模型未设置价格，相关费用无法核算且不受费用上限限制。':null].filter(Boolean).join(' ');
   if(next.budget?.reason&&['failed','cancelled'].includes(status)){next.stage=next.budget.reason==='no_pricing'?'缺少模型价格，待继续':'费用预算不足，待继续';next.errorReason=next.budget.reason==='no_pricing'?'请同步模型价格或填写单价后继续；已完成成果保留。':'请提高整次费用上限后继续；同一任务的累计费用不会清零。';next.errorCode='budget_stop';}
   else if(status==='cancelled')next.errorCode='user_cancel';
   else { const identity=classifyProductError(next.errorReason??error??''); if(identity.code!=='unknown')next.errorCode=identity.code; }

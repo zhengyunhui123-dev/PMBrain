@@ -1,6 +1,6 @@
 import type {BrainEngine} from '../../core/engine.ts';
 import type {PhaseResult} from '../../core/cycle.ts';
-import {runEmbedCore} from '../../commands/embed.ts';
+import {EmbedPreflightSession,runEmbedCore} from '../../commands/embed.ts';
 import type {VectorizationSchedule} from '../../../shared/background-vectorization';
 import {setTimeout as waitForBatch} from 'node:timers/promises';
 
@@ -16,6 +16,7 @@ export function mergeEmbeddingWindow(previous:PhaseResult|undefined,current:Phas
 
 export async function runMaintenanceVectorization(engine:BrainEngine,sourceId:string|undefined,state:()=>Promise<MaintenanceVectorizationState>,options:{pageLimit?:number;signal?:AbortSignal;onProgress?:(schedule:VectorizationSchedule,slug:string,done:number,total:number)=>void}={}):Promise<PhaseResult>{
   const started=Date.now();
+  const preflightSession=new EmbedPreflightSession();
   const details:Record<string,unknown>={embedded:0,pages_embedded_count:0,committedBatches:0};
   let schedule:VectorizationSchedule|undefined,lastBatchAt=0;
   const paused=async()=>{
@@ -30,22 +31,26 @@ export async function runMaintenanceVectorization(engine:BrainEngine,sourceId:st
     if(deferred){details.vectorizationDeferred=true;details.waitReason=schedule?.reason;}
     return {phase:'embed',status:deferred||Number(details.remainingChunks)>0?'warn':'ok',duration_ms:Date.now()-started,summary:deferred?'向量化等待继续，已完成的部分已保存':`已保存 ${details.embedded} 个向量`,details};
   };
+  let afterPageId=0,processedSinceSweep=false;
   for(;;){
     options.signal?.throwIfAborted();
-    let afterPageId=0,next:Awaited<ReturnType<BrainEngine['listStaleChunks']>>[number]|undefined;
+    let next:Awaited<ReturnType<BrainEngine['listStaleChunks']>>[number]|undefined;
     for(;;){
       [next]=await engine.listStaleChunks({batchSize:1,afterPageId,afterChunkIndex:2147483647,...(sourceId?{sourceId}:{})});
       if(!next)break;
       const [waiting]=await engine.executeRaw("SELECT 1 FROM pages WHERE id=$1 AND frontmatter->>'document_ocr_deferred'='true'",[next.page_id]);
       if(!waiting)break;afterPageId=next.page_id;
     }
-    if(!next)return finish();
+    if(!next){
+      if(processedSinceSweep){afterPageId=0;processedSinceSweep=false;continue;}
+      return finish();
+    }
     if(options.pageLimit&&Number(details.pages_embedded_count)>=options.pageLimit)return finish();
     if(await paused()||Date.now()-started>=60000)return finish(true);
     const result=await runEmbedCore(engine,{
       slugs:[next.slug],sourceId:next.source_id,batchSize:32,
-      getBatchSize:()=>schedule?.batchSize||4,writeBatchSize:engine.kind==='pglite'?1:4,
-      quiet:true,signal:options.signal,
+      getBatchSize:()=>schedule?.batchSize||4,get writeBatchSize(){return engine.kind==='pglite'&&schedule?.mode!=='full'?1:4;},
+      quiet:true,signal:options.signal,preflightSession,
       pauseCheck:async()=>{
         const delay=(schedule?.delayMs??0)-(Date.now()-lastBatchAt);
         if(delay>0)await waitForBatch(delay,undefined,{signal:options.signal});
@@ -60,5 +65,6 @@ export async function runMaintenanceVectorization(engine:BrainEngine,sourceId:st
     if(result.incomplete)return finish(true);
     if(result.embedded===0)throw new Error(`资料 ${next.slug} 的待向量化分块未能推进`);
     details.pages_embedded_count=Number(details.pages_embedded_count)+1;
+    afterPageId=next.page_id;processedSinceSweep=true;
   }
 }

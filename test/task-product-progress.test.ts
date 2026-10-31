@@ -6,6 +6,12 @@ import type {ConsoleRun} from '../shared/contracts/common.ts';
 import type { MaintenanceCheckpoint } from '../src/product/tasks/types.ts';
 
 describe('任务的产品进度', () => {
+  test('未定价模型的任务说明实际费用未知，已核算费用仍单独保留',()=>{
+    const adapter=new TaskProgressAdapter('dream_quick');
+    const view=finishTaskProgress(adapter.view,'completed',{budget:{capCny:5,spentCny:0.2,reservedCny:0,usdToCny:7,calls:2,unpricedCostUnknown:true}},null);
+    expect(view.detail).toContain('部分模型未设置价格');expect(view.detail).toContain('不受费用上限限制');
+    expect(view.metrics).toContainEqual({label:'已核算费用（元）',value:0.2});
+  });
   test('资料已保存就显示导入成功，待识图和识图失败在详情中保留',()=>{
     const adapter=new TaskProgressAdapter('import_path'),result={imported:1,skipped:0,errors:0,ocrPending:3};
     const pending={id:'task-1',kind:'import_path',status:'completed',result,product:finishTaskProgress(adapter.view,'completed',result,null)} as ConsoleRun;

@@ -68,11 +68,11 @@ test('累计 Token 超过历史额度也不停止，明确的费用上限仍然�
   expect(captureBudgetStop({...legacy,costCny:5})).toBe('cost');
 });
 
-test('预算接口用空值明确表示累计 Token 不限制，未知价格不再声称按 Token 限制',()=>{
+test('未知价格的模型不受费用上限限制，未知用量的收费模型保留上限',()=>{
   expect(EntityCaptureBudgetResponseSchema.parse({costCapCny:null,maxInputTokens:null,maxOutputTokens:null})).toEqual({costCapCny:null,maxInputTokens:null,maxOutputTokens:null});
-  const line=captureReportLine({model:'custom-openai:Qwen3.6-35B-A3B',pagesProcessed:12,pagesRemaining:0,entitiesCreated:0,relationsCreated:0,costCny:null,costCapCny:5,ollama:false,stopReason:'completed'});
-  expect(line).toContain('金额上限无法核算，未生效');
-  expect(line).not.toContain('按 Token 限制');
+  const input={model:'custom-openai:Qwen3.6-35B-A3B',pagesProcessed:12,pagesRemaining:0,entitiesCreated:0,relationsCreated:0,costCny:null,ollama:false,stopReason:'completed' as const};
+  expect(captureReportLine({...input,costCapCny:null})).toContain('不限制');
+  expect(captureReportLine({...input,costCapCny:5})).toContain('部分用量未确认');
 });
 
 test('识别实体单独选可用模型，显式不可用时不改去别的模型', () => {

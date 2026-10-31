@@ -20,7 +20,7 @@ import {
 } from '../core/config.ts';
 import { slog, serr } from '../core/console-prefix.ts';
 import { filterOutEmbedSkipped } from '../core/embed-skip.ts';
-import { getEmbeddingModel } from '../core/ai/gateway.ts';
+import { getEmbeddingDimensions, getEmbeddingModel } from '../core/ai/gateway.ts';
 import {
   getEmbeddingExecutionProfile,
   runEmbeddingExecutionPool,
@@ -65,6 +65,7 @@ export interface EmbedOpts {
   batchSize?: number;
   getBatchSize?: () => number;
   writeBatchSize?: number;
+  preflightSession?: EmbedPreflightSession;
   /**
    * v0.41.18.0 (A13): when 'recent', walks the stale-chunk pool in
    * page.updated_at DESC order (recent-modified pages first) instead
@@ -262,6 +263,26 @@ async function preflightEmbeddingModelChange(engine: BrainEngine, dryRun: boolea
   );
 }
 
+export class EmbedPreflightSession {
+  private readonly verified = new WeakMap<BrainEngine, { model: string; dimensions: number }>();
+
+  async verify(engine: BrainEngine, dryRun: boolean, forceReembed: boolean): Promise<void> {
+    if (dryRun) return;
+    let identity: { model: string; dimensions: number } | undefined;
+    try { identity = { model: getEmbeddingModel(), dimensions: getEmbeddingDimensions() }; } catch {}
+    const previous = this.verified.get(engine);
+    if (!forceReembed && identity && previous?.model === identity.model && previous.dimensions === identity.dimensions) return;
+    this.verified.delete(engine);
+    await preflightDimMismatch(engine, false);
+    await preflightEmbeddingModelChange(engine, false);
+    if (identity) {
+      try {
+        if (identity.model === getEmbeddingModel() && identity.dimensions === getEmbeddingDimensions()) this.verified.set(engine, identity);
+      } catch {}
+    }
+  }
+}
+
 export async function runEmbedCore(engine: BrainEngine, opts: EmbedOpts): Promise<EmbedResult> {
   // v0.37.10.0 T7 (D9): refuse cleanly when init persisted the deferred-setup
   // sentinel. Skipped in dryRun mode so plan-mode introspection still works.
@@ -295,8 +316,11 @@ export async function runEmbedCore(engine: BrainEngine, opts: EmbedOpts): Promis
     });
   }
 
-  await preflightDimMismatch(engine, !!opts.dryRun);
-  await preflightEmbeddingModelChange(engine, !!opts.dryRun);
+  if (opts.preflightSession) await opts.preflightSession.verify(engine, !!opts.dryRun, !!opts.forceReembed);
+  else {
+    await preflightDimMismatch(engine, !!opts.dryRun);
+    await preflightEmbeddingModelChange(engine, !!opts.dryRun);
+  }
 
   const result: EmbedResult = {
     embedded: 0,
