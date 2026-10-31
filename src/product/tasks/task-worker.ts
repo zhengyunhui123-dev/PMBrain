@@ -20,7 +20,7 @@ import { splitProviderModelId } from '../../core/model-id.ts';
 import { maintenanceFailure } from './maintenance-orchestration.ts';
 import { fetchSource, loadAllSources, parseSourceConfig } from '../../core/sources-load.ts';
 import { resolveSourceId } from '../../core/source-resolver.ts';
-import { runEmbedCore } from '../../commands/embed.ts';
+import { EmbedPreflightSession, runEmbedCore } from '../../commands/embed.ts';
 import { assignSearchOptimizeAcceptance, vectorizationRetryDelay, type SearchOptimizeAcceptance } from './search-optimize.ts';
 import { parentPort } from 'node:worker_threads';
 import { format } from 'node:util';
@@ -135,7 +135,12 @@ setCliOptions({ ...DEFAULT_CLI_OPTIONS, progressJson: true });
 
 async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { type: 'dream' }>['input'], progressPrefix:string[] = []) {
   const checkpoint: MaintenanceCheckpoint = input.checkpoint ?? { phases: {}, reports: {} };
-  if (input.phase !== 'capture_entities' && !input.incrementalIngest) {
+  const legacyQuickSources = input.preset === 'quick' ? [...new Set([...Object.keys(checkpoint.phases), ...Object.keys(checkpoint.reports)])].filter(sourceId => {
+    const report = checkpoint.reports[sourceId];
+    return (checkpoint.phases[sourceId] ?? []).some(phase => phase.phase === 'capture_entities' || phase.phase === 'embed')
+      || (Array.isArray(report?.phases) && report.phases.some((phase: { phase?: string }) => phase.phase === 'capture_entities' || phase.phase === 'embed'));
+  }) : [];
+  if (input.preset === 'quick' || (input.phase !== 'capture_entities' && !input.incrementalIngest)) {
     retireAutomaticCapture(checkpoint);
     if (Object.keys(checkpoint.retiredCapture ?? {}).length) {
       console.log('旧版自动实体识别阶段已退出本次整理，历史结果和失败记录保留在原任务检查点。');
@@ -143,7 +148,18 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
       await checkDreamBudget();
     }
   }
-  const capturesImported = !input.phase || input.phase==='all' || !!input.preset;
+  for (const sourceId of legacyQuickSources) {
+    const phases = checkpoint.phases[sourceId] ?? [];
+    const previous = checkpoint.retiredCapture?.[sourceId];
+    const report = checkpoint.reports[sourceId] ?? previous?.report;
+    checkpoint.retiredCapture = { ...checkpoint.retiredCapture, [sourceId]: {
+      phases: [...(previous?.phases ?? []), ...phases.filter(phase => phase.phase === 'embed')],
+      ...(report ? { report } : {}),
+    } };
+    checkpoint.phases[sourceId] = (checkpoint.phases[sourceId] ?? []).filter(phase => phase.phase !== 'extract' && phase.phase !== 'embed');
+    delete checkpoint.reports[sourceId];
+  }
+  const capturesImported = input.preset !== 'quick' && (!input.phase || input.phase==='all' || !!input.preset);
   const automaticEnabled=await engine.getConfig('dream.entity_capture.enabled')!=='false';
   const captureModel = input.phase === 'capture_entities' || (capturesImported && automaticEnabled) ? await chooseCaptureModel(engine, {}) : null;
   const ingestEnabled=automaticEnabled&&captureModel?.ok===true;
@@ -173,7 +189,8 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
         originalSize: snapshot.size, originalMtime: snapshot.mtimeMs, hash,
         modelFingerprint: taskModelFingerprint(),
         modelMayRun: options.documentOcr === true && (isOfficeFilePath(relativePath) || isImageFilePath(relativePath)),
-        fingerprint: syncFileContentFingerprint(options), options,
+        fingerprint: syncFileContentFingerprint(options),
+        ...(input.preset === 'quick' ? { compatibleFingerprints: [syncFileContentFingerprint({ ...options, documentOcr: true })] } : {}), options,
       }]) as import('../../core/import-file.ts').ImportResult & { deferred?: boolean; unchanged?: boolean; capacityReached?:boolean };
       if (result.deferred) pendingFiles = true;
       if(result.capacityReached)capacityReached=true;
@@ -247,7 +264,7 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
     : resolveDreamPresetPhases(input.preset ?? 'full');
   send({ type: 'progress', phases: [...progressPrefix,...phases] });
   const phaseOptions=async(sourceId:string)=>{
-    if(usesSyncFileQueue(input)&&input.phase!=='sync'){
+    if(usesSyncFileQueue(input)&&input.phase!=='sync'&&input.preset!=='quick'){
     await engine.executeRaw(`UPDATE minion_jobs SET status='waiting',result=NULL,error_text=NULL,finished_at=NULL,data=jsonb_set(data-'ocrOwnerCancelled','{authorizedAttempt}',to_jsonb(attempts_started+1)),updated_at=now()
       WHERE name='pmbrain-document-ocr' AND data->'task'->'input'->'ocrOnly'->>'maintenanceOwnerId'=$1 AND status='cancelled' AND data->>'ocrOwnerCancelled'='true'`,[String(ownerJobId)]);
     const waiting=await engine.executeRaw("SELECT 1 FROM pages p JOIN minion_jobs j ON j.id=(p.frontmatter->>'document_ocr_task_id')::int WHERE p.source_id=$1 AND p.deleted_at IS NULL AND p.frontmatter->>'document_ocr_deferred'='true' AND (j.status IN ('waiting','active','delayed') OR j.data->'task'->'input'->'ocrOnly'->>'maintenanceOwnerId'=$2) LIMIT 1",[sourceId,String(ownerJobId)]);
@@ -268,6 +285,7 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
   };
   const sourceId = input.sourceId ? await resolveSourceId(engine, input.sourceId) : undefined;
   if (sourceId && (await fetchSource(engine, sourceId))?.archived) throw new Error(`Source ${sourceId} is archived`);
+  const quickBrainDir = async (id?: string) => (id ? (await fetchSource(engine, id))?.local_path : null) ?? await resolveBrainDir(engine, null, id);
   const common = {
     afterSync: input.preset === 'quick' && !input.dryRun ? (sourceId: string, root: string, result: import('../../commands/sync.ts').SyncResult) => rpc('task.gitCommit', [sourceId, root, result]) : undefined,
     dryRun: input.dryRun, sourceId,
@@ -294,6 +312,20 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
     yieldBetweenPhases:async()=>{await yieldExecution();if(constrained)Bun.gc(false);},
     yieldDuringPhase:async()=>{abort.signal.throwIfAborted();await yieldExecution();if(constrained)Bun.gc(false);},
   };
+  const queueQuickVectors = async (report: import('../../core/cycle.ts').CycleReport, id: string) => {
+    const sync = report.phases.find(phase => phase.phase === 'sync') as (import('../../core/cycle.ts').PhaseResult & { pagesAffected?: string[] }) | undefined;
+    const slugs = [...new Set(sync?.pagesAffected ?? [])];
+    if (input.dryRun || !slugs.length) return;
+    try {
+      const receipt = await rpc('task.quickVectors', [id, slugs, Math.min(1_800_000, (input.windowSeconds ?? 1800) * 1000)]) as { taskId?: string; pages: number; paused?: boolean };
+      Object.assign(report, { quickVector: { ...receipt, sourceId: id } });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      Object.assign(report, { quickVector: { sourceId: id, pages: 0, error: message } });
+      console.error(`本轮资料的后台向量任务未能提交：${message}`);
+    }
+  };
+  if (input.preset === 'quick') console.log('快速维护同步变化并关联已有实体；本轮资料向量化在后台进行，新实体建档和图片识别不属于本次维护。');
   if (input.preset === 'quick' && input.allSources) {
     const reports = [];
     const startedAt = new Date();
@@ -307,19 +339,29 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
       scanned=0;unchanged=0;pendingFiles=false;capacityReached=false;
       send({ type: 'progress', scope: { name: source.name, index, total: sources.length } });
       const report = await runQuickMaintenance(engine, {
-        ...common, sourceId: source.id, brainDir: await resolveBrainDir(engine, null, source.id),
+        ...common, sourceId: source.id, brainDir: await quickBrainDir(source.id),
         ...await phaseOptions(source.id),
       });
       if (report.reason === 'cycle_already_running') return report;
+      await queueQuickVectors(report, source.id);
       checkpoint.reports[source.id] = { ...report };
       await rpc('task.maintenanceCheckpoint', [checkpoint]);
       reports.push({ sourceId: source.id, report });
       if (report.phases.some(phase => phase.status === 'fail' && isGinRepairAbortText(`${phase.error?.message ?? ''}\n${phase.summary}\n${JSON.stringify(phase.details ?? {})}`))) break;
     }
-    return combineQuickMaintenanceReports(reports, startedAt);
+    const combined = combineQuickMaintenanceReports(reports, startedAt);
+    const vectors = reports.flatMap(({ report }) => {
+      const value = (report as typeof report & { quickVector?: unknown }).quickVector;
+      return value ? [value] : [];
+    });
+    return { ...combined, quickVector: vectors };
   }
-  const brainDir = await resolveBrainDir(engine, null, sourceId);
-  if (input.preset === 'quick') return runQuickMaintenance(engine, { ...common, brainDir, ...await phaseOptions(sourceId ?? 'default') });
+  const brainDir = input.preset === 'quick' ? await quickBrainDir(sourceId) : await resolveBrainDir(engine, null, sourceId);
+  if (input.preset === 'quick') {
+    const report = await runQuickMaintenance(engine, { ...common, brainDir, ...await phaseOptions(sourceId ?? 'default') });
+    if (report.reason !== 'cycle_already_running') await queueQuickVectors(report, sourceId ?? 'default');
+    return report;
+  }
   const dreamKnowledge=await import('./dream-knowledge');
   const knowledgeEnabled=input.preset==='full'&&await dreamKnowledge.prepareDreamKnowledge(engine);
   if(input.preset==='full'&&!input.dryRun)await dreamKnowledge.prepareProductEnrichThin(engine);
@@ -439,6 +481,76 @@ async function runSearchOptimize(engine: BrainEngine): Promise<void> {
       return;
     }
     await rpc('task.searchOptimizeDone', revision ? [next.sourceId, next.slug, revision] : [next.sourceId, next.slug]);
+  }
+}
+
+async function runQuickVector(engine: BrainEngine, input: Extract<ProductTask, { type: 'embed' }>['input']): Promise<void> {
+  const sourceId = input.sourceId ?? 'default';
+  const slugs = [...new Set(input.slugs ?? [])];
+  const live = await engine.executeRaw<{ slug: string }>(`SELECT p.slug FROM pages p JOIN sources s ON s.id=p.source_id
+    WHERE p.source_id=$1 AND p.slug=ANY($2::text[]) AND p.deleted_at IS NULL AND s.archived=false`, [sourceId, slugs]);
+  const available = new Set(live.map(row => row.slug));
+  const selected = slugs.filter(slug => available.has(slug));
+  const windowMs = Math.max(1, Math.min(1_800_000, input.windowMs ?? 1_800_000));
+  const windowAbort = new AbortController();
+  const timer = setTimeout(() => windowAbort.abort(new Error('本轮向量窗口已结束')), windowMs);
+  const signal = AbortSignal.any([abort.signal, windowAbort.signal]);
+  const preflightSession = new EmbedPreflightSession();
+  let schedule: VectorizationSchedule | undefined;
+  let lastBatchAt = 0;
+  let done = 0;
+  let embedded = 0;
+  try {
+    send({ type: 'progress', event: { phase: 'embed', event: 'start', done: 0, total: selected.length, unit: '份资料' } });
+    for (const slug of selected) {
+      if (signal.aborted) break;
+      await rpc('task.searchOptimizeForgetPage', [sourceId, slug]);
+      const result = await runEmbedCore(engine, {
+        slugs: [slug], sourceId, batchSize: 32, writeBatchSize: engine.kind === 'pglite' ? 1 : 4,
+        getBatchSize: () => Math.min(constrained ? 4 : 32, schedule?.batchSize || 4),
+        preflightSession, quiet: true, signal,
+        pauseCheck: async () => {
+          const delay = (schedule?.delayMs ?? 0) - (Date.now() - lastBatchAt);
+          if (delay > 0) await waitForBatch(delay, undefined, { signal });
+          const state = await rpc('task.quickVectorState', []) as { paused?: boolean; schedule?: VectorizationSchedule };
+          schedule = state.schedule;
+          return Boolean(state.paused || schedule?.mode === 'waiting' || signal.aborted);
+        },
+        onProgress: (processed, chunks) => {
+          lastBatchAt = Date.now();
+          send({ type: 'progress', background: schedule, event: { phase: 'embed', done, total: selected.length, unit: '份资料', file: slug, stage: `当前资料 ${processed}/${chunks} 段已保存` } });
+        },
+      });
+      embedded += result.embedded;
+      if (result.incomplete || signal.aborted) {
+        if (abort.signal.aborted) throw abort.signal.reason;
+        send({ type: 'deferred', phase: 'quick_vector' });
+        return;
+      }
+      if (result.error || result.failedPages > 0 || result.status === 'failed') {
+        const message = result.error || '本轮资料向量化未完成';
+        if (vectorizationRetryDelay(message, 0) !== null) send({ type: 'deferred', phase: 'quick_vector', error: message });
+        else send({ type: 'error', error: message, result: { quickVector: true, status: 'failed', failures: [{ error: message }] } });
+        return;
+      }
+      done++;
+      send({ type: 'progress', event: { phase: 'embed', done, total: selected.length, unit: '份资料', file: slug } });
+    }
+    if (abort.signal.aborted) throw abort.signal.reason;
+    if (windowAbort.signal.aborted) {
+      send({ type: 'deferred', phase: 'quick_vector' });
+      return;
+    }
+    send({ type: 'progress', event: { phase: 'embed', event: 'finish', done, total: selected.length, unit: '份资料' } });
+    send({ type: 'result', result: { quickVector: true, status: 'ok', pages: done, embedded } });
+  } catch (error) {
+    if (windowAbort.signal.aborted && !abort.signal.aborted) {
+      send({ type: 'deferred', phase: 'quick_vector' });
+      return;
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -619,6 +731,9 @@ async function executeTask(task: ProductTask, kind: BrainEngine['kind']) {
     result = { results, errors: results.filter(row => ['blocked_by_failures', 'partial'].includes(row.status)).length };
   } else if (task.type === 'assistant') {
     throw new Error('助手任务由工作台执行器处理');
+  } else if (task.input.quickVector === true) {
+    await runQuickVector(engine, task.input);
+    return;
   } else if (task.input.searchOptimize === true) {
     await runSearchOptimize(engine);
     return;
@@ -636,7 +751,7 @@ async function executeTask(task: ProductTask, kind: BrainEngine['kind']) {
     result = { ...embedded, catchUp: embed.catchUp === true, forceReembed: embed.forceReembed === true, ...(embedded.error ? { failures: [{ error: embedded.error }] } : {}) };
   }
   abort.signal.throwIfAborted();
-  if(task.type==='dream'||task.type==='sync'){
+  if((task.type==='dream'&&task.input.preset!=='quick')||task.type==='sync'){
     const scope=task.type==='dream'&&!task.input.allSources?task.input.sourceId??'default':null;
     const pending=await engine.executeRaw<{id:number;remaining:number}>(`SELECT (frontmatter->>'document_ocr_task_id')::int id,COALESCE((frontmatter->>'document_ocr_failed')::int,0)+COALESCE((frontmatter->>'document_ocr_skipped')::int,0) remaining FROM pages WHERE deleted_at IS NULL AND ($1::text IS NULL OR source_id=$1) AND frontmatter->>'document_ocr_deferred'='true' AND frontmatter ? 'document_ocr_task_id'`,[scope]);
     if(pending.length){result.ocrPending=pending.reduce((sum,row)=>sum+row.remaining,0);result.ocrTaskIds=[...new Set(pending.map(row=>row.id))];}

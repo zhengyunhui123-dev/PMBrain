@@ -1542,6 +1542,10 @@ export async function extractTimelineFromDB(
 
 export interface RunByMentionOpts {
   signal?: AbortSignal;
+  excludePathPattern?: string;
+  singlePass?: boolean;
+  priorityOnly?: boolean;
+  quickEntityTypes?: boolean;
   yieldDuringPhase?: () => Promise<void>;
   dryRun?: boolean;
   jsonMode?: boolean;
@@ -1553,16 +1557,7 @@ export interface RunByMentionOpts {
    * Used by Quick Maintenance so this-run sync successes re-scan for mentions.
    */
   prioritySlugs?: string[];
-  /**
-   * Cap on how many non-priority (historical catch-up) pages to scan after
-   * priority slugs. Default unlimited. Quick Maintenance leaves this unset
-   * so one run completes deterministic relation repair for the Source.
-   */
   maxHistoricalPages?: number;
-  /**
-   * Optional wall-clock budget for historical catch-up. Priority slugs are
-   * always scanned first. Quick Maintenance leaves this undefined.
-   */
   historicalTimeBudgetMs?: number;
   /** Suppress human-readable progress lines (library callers). */
   quiet?: boolean;
@@ -1572,12 +1567,14 @@ export interface RunByMentionOpts {
 
 export interface RunByMentionResult {
   processedSlugs: Array<{slug:string;sourceId:string}>;
+  disabled?: boolean;
   created: number;
   removed: number;
   pages: number;
   priorityPages: number;
   historicalPages: number;
   historicalRemaining: number;
+  scopeRemaining?: number;
   timeBudgetReached: boolean;
   ambiguousNames: number;
 }
@@ -1598,7 +1595,7 @@ export async function runByMentionCore(
   const { runMentionPass, countMentionDuePages } = await import('../core/mentions/pass.ts');
   const { previewMentionPass } = await import('../core/mentions/stale.ts');
   const priority = [...new Set(opts.prioritySlugs ?? [])];
-  const common = { sourceId:opts.sourceIdFilter,signal:opts.signal,typeFilter:opts.typeFilter,since:opts.since,yieldDuringPhase:opts.yieldDuringPhase };
+  const common = { sourceId:opts.sourceIdFilter,signal:opts.signal,typeFilter:opts.typeFilter,since:opts.since,yieldDuringPhase:opts.yieldDuringPhase,excludePathPattern:opts.excludePathPattern,quickEntityTypes:opts.quickEntityTypes };
   if (opts.dryRun) {
     const preview=await previewMentionPass(engine,opts.sourceIdFilter);
     const gazetteer=await buildGazetteer(engine,{strict:true});
@@ -1625,16 +1622,24 @@ export async function runByMentionCore(
     }
     return {created,removed:0,pages,priorityPages:0,historicalPages:pages,historicalRemaining:preview.due,timeBudgetReached:false,ambiguousNames:countAmbiguousGazetteerEntries(gazetteer),processedSlugs:[]};
   }
-  if(priority.length)await engine.executeRaw('UPDATE page_mention_state SET mention_revision=NULL WHERE page_id IN (SELECT id FROM pages WHERE slug=ANY($1::text[]) AND ($2::text IS NULL OR source_id=$2))',[priority,opts.sourceIdFilter ?? null]);
-  const first=priority.length ? await runMentionPass(engine,{...common,slugs:priority}) : null;
-  if(first?.state==='failed')throw new Error(first.error);
+  if(priority.length && !opts.singlePass)await engine.executeRaw('UPDATE page_mention_state SET mention_revision=NULL WHERE page_id IN (SELECT id FROM pages WHERE slug=ANY($1::text[]) AND ($2::text IS NULL OR source_id=$2) AND ($3::text IS NULL OR (slug !~* $3 AND replace(COALESCE(source_path, \'\'), chr(92), \'/\') !~* $3)))',[priority,opts.sourceIdFilter ?? null,opts.excludePathPattern ?? null]);
   const deadline=opts.historicalTimeBudgetMs===undefined ? undefined : Date.now()+Math.max(0,opts.historicalTimeBudgetMs);
-  const history=await runMentionPass(engine,{...common,excludeSlugs:priority,maxPages:opts.maxHistoricalPages,deadline});
+  const first=priority.length ? await runMentionPass(engine,{...common,slugs:priority,...(opts.singlePass ? {maxPages:opts.maxHistoricalPages,deadline} : {})}) : null;
+  if(first?.state==='failed')throw new Error(first.error);
+  if (opts.priorityOnly) {
+    const remaining = first?.state === 'disabled' ? 0 : first?.remaining ?? 0;
+    return { created: first?.created ?? 0, removed: first?.removed ?? 0, pages: first?.pages ?? 0,
+      priorityPages: first?.pages ?? 0, historicalPages: 0, historicalRemaining: 0, scopeRemaining: remaining,
+      timeBudgetReached: remaining > 0 && deadline !== undefined && Date.now() >= deadline,
+      ambiguousNames: 0, processedSlugs: first?.processedSlugs ?? [], disabled: first?.state === 'disabled' };
+  }
+  const history=await runMentionPass(engine,{...common,excludeSlugs:priority,maxPages:opts.singlePass && opts.maxHistoricalPages !== undefined ? Math.max(0,opts.maxHistoricalPages-(first?.pages ?? 0)) : opts.maxHistoricalPages,deadline});
   if(history.state==='failed')throw new Error(history.error);
   const processedSlugs=[...(first?.processedSlugs ?? []),...history.processedSlugs];
   const result={created:(first?.created ?? 0)+history.created,removed:(first?.removed ?? 0)+history.removed,pages:processedSlugs.length,
-    priorityPages:first?.pages ?? 0,historicalPages:history.pages,historicalRemaining:await countMentionDuePages(engine,opts.sourceIdFilter),
-    timeBudgetReached:history.remaining>0 && deadline!==undefined && Date.now()>=deadline,ambiguousNames:countAmbiguousGazetteerEntries(await buildGazetteer(engine)),processedSlugs};
+    priorityPages:first?.pages ?? 0,historicalPages:history.pages,historicalRemaining:history.state==='disabled' && opts.singlePass ? 0 : await countMentionDuePages(engine,opts.sourceIdFilter,opts.excludePathPattern),
+    timeBudgetReached:history.remaining>0 && deadline!==undefined && Date.now()>=deadline,ambiguousNames:opts.singlePass ? 0 : countAmbiguousGazetteerEntries(await buildGazetteer(engine)),processedSlugs,
+    disabled:history.state==='disabled'};
   if(!opts.jsonMode && !opts.quiet)console.log((await buildGazetteer(engine)).size ? `Mentions: +${result.created}/-${result.removed} links from ${result.pages} due pages (${result.historicalRemaining} remaining)` : 'No linkable entity pages; nothing to scan.');
   return result;
 }

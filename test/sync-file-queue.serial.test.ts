@@ -153,7 +153,8 @@ describe('快速维护文件任务与恢复', () => {
     expect((await runtime.files(otherDone.id))?.rows).toHaveLength(1);
     expect(await engine.getPage('legacy-1',{sourceId:'legacy-other'})).not.toBeNull();
   }, 120000);
-  test('快速维护默认同步未提交变化并本地提交，重复和重命名保留 Source 隔离', async () => {
+  test('启用工作区同步时快速维护同步未提交变化，重复和重命名保留 Source 隔离', async () => {
+    await engine.setConfig('sync.include_working_tree','true');
     const dir = join(root, 'git-source'); mkdirSync(dir);
     const git = (...args: string[]) => execFileSync('git', args, { cwd: dir, stdio: 'pipe' });
     git('init'); git('config', 'user.email', 'synthetic@example.invalid'); git('config', 'user.name', 'Synthetic test');

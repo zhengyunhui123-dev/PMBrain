@@ -1,11 +1,20 @@
 import { describe, expect, test } from 'bun:test';
 import { TaskProgressAdapter, finishTaskProgress, taskRunSummary, taskErrorReason } from '../src/product/tasks/progress-adapter.ts';
 import { resumeMaintenanceCheckpoint } from '../src/product/tasks/checkpoint.ts';
-import {taskCanRetry,taskStatus,taskPhaseSummary} from '../admin/src/product/task-presentation.ts';
+import {taskCanRetry,taskStatus,taskPhaseSummary,quickVectorSummary} from '../admin/src/product/task-presentation.ts';
 import type {ConsoleRun} from '../shared/contracts/common.ts';
 import type { MaintenanceCheckpoint } from '../src/product/tasks/types.ts';
 
 describe('任务的产品进度', () => {
+  test('快速维护完成与后台向量状态分别展示', () => {
+    const quick = { id: 'task-1', kind: 'dream_quick', status: 'completed', result: { status: 'ok', quickVector: { taskId: 'task-2', pages: 1 } } } as ConsoleRun;
+    const vector = { id: 'task-2', kind: 'embed_stale', status: 'running' } as ConsoleRun;
+    expect(taskStatus(quick)).toBe('本轮已完成');
+    expect(quickVectorSummary(quick, [vector])).toContain('后台');
+    expect(quickVectorSummary(quick, [{ ...vector, status: 'completed' }])).toContain('向量化已完成');
+    expect(quickVectorSummary(quick, [{ ...vector, status: 'failed', error: '向量模型未配置' }])).toContain('向量模型未配置');
+    expect(taskStatus(quick)).toBe('本轮已完成');
+  });
   test('未定价模型的任务说明实际费用未知，已核算费用仍单独保留',()=>{
     const adapter=new TaskProgressAdapter('dream_quick');
     const view=finishTaskProgress(adapter.view,'completed',{budget:{capCny:5,spentCny:0.2,reservedCny:0,usdToCny:7,calls:2,unpricedCostUnknown:true}},null);

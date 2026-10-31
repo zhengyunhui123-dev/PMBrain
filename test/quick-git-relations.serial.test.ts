@@ -34,7 +34,21 @@ beforeAll(async()=>{
   await db.connect(database?{database_url:database}:{database_path:join(root,'brain.pglite')});await db.initSchema();
   initializeSourceGit(repo);writeFileSync(join(repo,'other.txt'),'old');commitSourceGit(repo,'initial');
   await db.executeRaw("INSERT INTO sources(id,name,local_path,config) VALUES($1,$1,$2,'{\"syncEnabled\":true}')",[sourceId,repo]);
+  await db.setConfig('sync.include_working_tree','true');
   runtime=new ProductTaskRuntime(db);await runtime.start();
+},60000);
+
+test('quick maintenance syncs uncommitted files even when Git working-tree sync is disabled',async()=>{
+  await db.setConfig('sync.include_working_tree','false');
+  await db.setConfig('sync.auto_git_commit','false');
+  writeFileSync(join(repo,'uncommitted.md'),'# 未提交资料\n\n关闭工作区同步时仍按路径入库。');
+  const run=await finish((await runtime.submitDream({preset:'quick',sourceId})).id);
+  expect(run.status).toBe('completed');
+  expect((await db.getPage('uncommitted',{sourceId}))?.compiled_truth).toContain('仍按路径入库');
+  expect(git('status','--porcelain')).toContain('uncommitted.md');
+  rmSync(join(repo,'uncommitted.md'));
+  await db.setConfig('sync.include_working_tree','true');
+  await db.setConfig('sync.auto_git_commit','true');
 },60000);
 afterAll(async()=>{
   await runtime?.close();await db?.disconnect();
@@ -87,7 +101,7 @@ test('disabling auto commit still syncs; a failed file never prevents committing
   await db.setConfig('sync.auto_git_commit','true');
   writeFileSync(join(repo,'bad.md'),'# Bad\n\n'+'x'.repeat(5_000_001));
   const partial=await finish((await runtime.submitDream({preset:'quick',sourceId})).id);
-  expect((partial.result as Record<string, unknown>)?.status).toBe('partial');
+  expect((partial.result as Record<string, unknown>)?.status, JSON.stringify(partial.result)).toBe('partial');
   expect(git('show','HEAD:disabled.md')).toContain('仍同步');
   expect(git('ls-tree','--name-only','HEAD')).not.toContain('bad.md');
   expect(git('diff','--cached','--name-only')).toBe('other.txt');

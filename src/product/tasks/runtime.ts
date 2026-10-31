@@ -56,7 +56,7 @@ function toRun(job: MinionJob, stopping = false): ConsoleRun {
   const adapter = new TaskProgressAdapter(String(job.data.kind), progress.product);
   if (!progress.product) adapter.write(progress.output ?? '');
   const task = job.data.task as ProductTask;
-  const searchOptimize = task?.type === 'embed' && task.input.searchOptimize === true;
+  const searchOptimize = task?.type === 'embed' && (task.input.searchOptimize === true || task.input.quickVector === true);
   const status: ConsoleRun['status'] = stopping ? 'running' : failure ? 'failed' : job.status === 'completed' ? 'completed'
     : job.status === 'cancelled' ? 'cancelled' : searchOptimize && job.status === 'paused' ? 'paused'
     : ['dead', 'failed', 'paused'].includes(job.status) ? 'failed'
@@ -226,7 +226,7 @@ export class ProductTaskRuntime {
        error_text = '软件已退出，任务结果可能不完整。请查看已完成结果后手动继续；模型请求可能已产生费用。',
        finished_at = now(), updated_at = now()
        WHERE queue = $1 AND name = $2 AND status = 'active' AND data->'task'->'input'->>'preset' IS DISTINCT FROM 'quick' AND data->>'fileSession' IS DISTINCT FROM 'true'
-       AND NOT (data->'task'->>'type' = 'embed' AND data->'task'->'input'->>'searchOptimize' = 'true')
+       AND NOT (data->'task'->>'type' = 'embed' AND (data->'task'->'input'->>'searchOptimize' = 'true' OR data->'task'->'input'->>'quickVector' = 'true'))
        AND ($3::boolean OR lock_until <= now())`, [PRODUCT_TASK_QUEUE, TASK_NAME, this.engine.kind === 'pglite'],
     );
     await this.recoverSearchOptimize();
@@ -315,6 +315,26 @@ export class ProductTaskRuntime {
     return this.submit({ type: 'embed', input: { ...input, slugs: slugs?.length ? slugs : undefined } }, 'embed_stale');
   }
 
+  private async submitQuickVectors(ownerId: number, sourceId: string, slugs: string[], windowMs: number): Promise<{ taskId?: string; pages: number; paused?: boolean }> {
+    const clean = [...new Set(slugs.filter(slug => slug.length > 0 && !slug.includes(':')))].sort();
+    if (!clean.length) return { pages: 0 };
+    const key = createHash('sha256').update(JSON.stringify([ownerId, sourceId, clean])).digest('hex');
+    const existing = await this.engine.executeRaw<{ id: number; pages: number; status: string }>(`SELECT id,status,
+      jsonb_array_length(COALESCE(data->'task'->'input'->'slugs','[]'::jsonb)) AS pages
+      FROM minion_jobs WHERE idempotency_key=$1 LIMIT 1`, [`quick-vector:${key}`]);
+    if (existing.length) return { taskId: `task-${existing[0]!.id}`, pages: Number(existing[0]!.pages), paused: existing[0]!.status === 'paused' };
+    const rows = await this.engine.executeRaw<{ slug: string }>(`SELECT DISTINCT p.slug FROM pages p JOIN content_chunks c ON c.page_id=p.id
+      WHERE p.source_id=$1 AND p.slug=ANY($2::text[]) AND p.deleted_at IS NULL
+        AND NOT (COALESCE(p.frontmatter,'{}'::jsonb) ? 'embed_skip')
+        AND (c.embedding IS NULL OR c.embedded_at IS NULL OR (c.embedded_text_hash IS NOT NULL AND c.embedded_text_hash<>md5(c.chunk_text)))`, [sourceId, clean]);
+    const eligible = rows.map(row => row.slug).sort();
+    if (!eligible.length) return { pages: 0 };
+    const run = await this.submit({ type: 'embed', input: { quickVector: true, quickOwnerId: ownerId, sourceId, slugs: eligible, windowMs: Math.max(1, Math.min(1_800_000, windowMs)) } }, 'embed_stale', `quick-vector:${key}`, 'scheduled');
+    const state = await loadSearchOptimize(this.engine);
+    if (state.paused) await this.parkSearchOptimize(Number(run.id.slice(5)));
+    return { taskId: run.id, pages: eligible.length, paused: state.paused };
+  }
+
   private async queueDeferredImportVectors(task: ProductTask, payload: Record<string, unknown> | undefined, cancelled: boolean): Promise<void> {
     if (cancelled || task.type !== 'import' || task.input.noEmbed === true || !payload || payload.searchOptimizeAccepted === true) return;
     const slugs = Array.isArray(payload.embedSlugs) ? payload.embedSlugs.filter((slug): slug is string => typeof slug === 'string' && slug.length > 0 && !slug.includes(':')) : [];
@@ -332,7 +352,7 @@ export class ProductTaskRuntime {
 
   private searchOptimizeTask(job: MinionJob | null | undefined): boolean {
     const task = job?.data.task as ProductTask | undefined;
-    return job?.queue === PRODUCT_TASK_QUEUE && job.name === TASK_NAME && task?.type === 'embed' && task.input.searchOptimize === true;
+    return job?.queue === PRODUCT_TASK_QUEUE && job.name === TASK_NAME && task?.type === 'embed' && (task.input.searchOptimize === true || task.input.quickVector === true);
   }
 
   private async findSearchOptimizeJob(): Promise<MinionJob | null> {
@@ -428,7 +448,7 @@ export class ProductTaskRuntime {
       await this.engine.executeRaw(`UPDATE minion_jobs SET status='paused', lock_token=NULL, lock_until=NULL,
         error_text=$2, finished_at=COALESCE(finished_at, now()), updated_at=now(),
         data=jsonb_set(data, '{searchOptimizePause}', '"manual"'::jsonb)
-        WHERE queue=$1 AND name=$3 AND data->'task'->>'type'='embed' AND data->'task'->'input'->>'searchOptimize'='true'
+        WHERE queue=$1 AND name=$3 AND data->'task'->>'type'='embed' AND (data->'task'->'input'->>'searchOptimize'='true' OR data->'task'->'input'->>'quickVector'='true')
         AND (status IN ('waiting','delayed','waiting-children')
           OR (status='active' AND ($4::boolean OR lock_until IS NULL OR lock_until<=now()))
           OR (status IN ('failed','dead') AND ${shutdown}))`, [PRODUCT_TASK_QUEUE, SEARCH_OPTIMIZE_PAUSED, TASK_NAME, pglite]);
@@ -437,7 +457,7 @@ export class ProductTaskRuntime {
     }
     await this.engine.executeRaw(`UPDATE minion_jobs SET status='waiting', lock_token=NULL, lock_until=NULL,
       error_text=NULL, finished_at=NULL, updated_at=now(), data=data-'searchOptimizePause'
-      WHERE queue=$1 AND name=$2 AND data->'task'->>'type'='embed' AND data->'task'->'input'->>'searchOptimize'='true'
+      WHERE queue=$1 AND name=$2 AND data->'task'->>'type'='embed' AND (data->'task'->'input'->>'searchOptimize'='true' OR data->'task'->'input'->>'quickVector'='true')
       AND (status='paused' OR (status='active' AND ($3::boolean OR lock_until IS NULL OR lock_until<=now()))
         OR (status IN ('failed','dead') AND ${shutdown}))`, [PRODUCT_TASK_QUEUE, TASK_NAME, pglite]);
     if (state.items.length) await this.ensureSearchOptimizeJob().catch(error => console.error('[tasks] search optimize:', error));
@@ -488,9 +508,15 @@ export class ProductTaskRuntime {
     const record = await this.queue.getJob(Number(id.slice(5)));
     if (!this.searchOptimizeTask(record)) return null;
     await pauseSearchOptimize(this.engine, false);
+    const parked = await this.engine.executeRaw<{ id: number }>(`SELECT id FROM minion_jobs WHERE queue=$1 AND name=$2
+      AND id<>$3 AND status='paused' AND error_text=$4 AND data->>'searchOptimizePause'='manual'
+      AND data->'task'->>'type'='embed' AND data->'task'->'input'->>'quickVector'='true'`,
+    [PRODUCT_TASK_QUEUE, TASK_NAME, record!.id, SEARCH_OPTIMIZE_PAUSED]);
+    for (const job of parked) await this.retry(`task-${job.id}`);
     await this.engine.executeRaw(`UPDATE minion_jobs SET data = data - 'searchOptimizePause' - 'vectorRetryCount' WHERE id = $1`, [record!.id]);
     if (['paused', 'failed', 'dead', 'cancelled'].includes(record!.status)) return this.retry(id);
     if (['waiting', 'active', 'delayed', 'waiting-children'].includes(record!.status)) return this.getRun(id);
+    if ((record!.data.task as ProductTask).type === 'embed' && ((record!.data.task as Extract<ProductTask, { type: 'embed' }>).input.quickVector === true)) return this.getRun(id);
     await this.ensureSearchOptimizeJob();
     const current = await this.findSearchOptimizeJob();
     return this.getRun(current ? `task-${current.id}` : id);
@@ -697,7 +723,7 @@ export class ProductTaskRuntime {
     if (!run) return null;
     const record = await this.queue.getJob(Number(id.slice(5)));
     const task = record!.data.task as ProductTask;
-    const searchOptimize = task?.type === 'embed' && task.input.searchOptimize === true;
+    const searchOptimize = task?.type === 'embed' && (task.input.searchOptimize === true || task.input.quickVector === true);
     if (!['failed', 'cancelled'].includes(run.status) && !(searchOptimize && ['paused', 'failed', 'dead'].includes(record!.status)) && !((taskUsesFileQueue(run.kind) || run.kind === 'dream_capture_entities' || run.kind==='import_path') && (run.result as Record<string, unknown> | undefined)?.status === 'partial')) throw new Error('只有失败、中断或已取消的任务可以重新执行');
     if (task.type === 'dream') {
       if (task.input.phase === 'capture_entities') record!.data.trigger = 'manual';
@@ -764,12 +790,12 @@ export class ProductTaskRuntime {
     const structuredTask = record.data.task as ProductTask;
     const backgroundOcr=structuredTask.type==='import'&&!!structuredTask.input.ocrOnly;
     if(backgroundOcr){const schedule=await this.vectorizationDecision(context.id,true);if(schedule.mode==='waiting')return this.deferMaintenance(record,`资料已保存，图片识别${schedule.reason}`,Math.max(1000,schedule.delayMs));}
-    if (structuredTask.type === 'embed' && structuredTask.input.searchOptimize) {
+    if (structuredTask.type === 'embed' && (structuredTask.input.searchOptimize || structuredTask.input.quickVector)) {
       const state = await this.searchOptimizeView();
-      if (state.items.length && (state.paused || state.schedule.mode === 'waiting')) {
+      if ((structuredTask.input.quickVector || state.items.length) && (state.paused || state.schedule.mode === 'waiting')) {
         const progress = (record.progress ?? {}) as Progress;
         const adapter = new TaskProgressAdapter(String(record.data.kind), progress.product);
-        adapter.event({ phase: 'embed', done: state.done, total: state.total, unit: '份资料' });
+        adapter.event({ phase: 'embed', done: structuredTask.input.quickVector ? 0 : state.done, total: structuredTask.input.quickVector ? structuredTask.input.slugs?.length ?? 0 : state.total, unit: '份资料' });
         await this.settleSearchOptimize(record, adapter, progress, state.schedule);
         return MINION_DEFERRED;
       }
@@ -806,7 +832,7 @@ export class ProductTaskRuntime {
       if(paused.length)this.sessionViews.delete(context.id);
       return MINION_DEFERRED;
     }
-    const searchOptimize = structuredTask.type === 'embed' && structuredTask.input.searchOptimize === true;
+    const searchOptimize = structuredTask.type === 'embed' && (structuredTask.input.searchOptimize === true || structuredTask.input.quickVector === true);
     if (searchOptimize && this.stopIntents.has(context.id) && !this.stoppingSessions.has(context.id) && record.data.searchOptimizePause !== 'manual') {
       const paused = (await loadSearchOptimize(this.engine)).paused;
       if (!paused) await this.clearStopIntent(context.id);
@@ -944,7 +970,7 @@ export class ProductTaskRuntime {
         }
       }
     })();
-    this.executions.set(context.id, { background: backgroundOcr || structuredTask.type === 'embed' && structuredTask.input.searchOptimize === true, pause: () => { record.data.searchOptimizePause = 'manual'; }, cancel, done: finished.catch(() => {}), ownsLockedTransaction: () => host.ownsLockedTransaction(), adjust:constrained=>send({type:'resource-pressure',constrained}), run: () => {
+    this.executions.set(context.id, { background: backgroundOcr || searchOptimize, pause: () => { record.data.searchOptimizePause = 'manual'; }, cancel, done: finished.catch(() => {}), ownsLockedTransaction: () => host.ownsLockedTransaction(), adjust:constrained=>send({type:'resource-pressure',constrained}), run: () => {
       progress.product = adapter.view;
       const run=toRun({ ...record, progress }, cancelRequested);
       if (run.product && structuredTask.type==='dream' && usesSyncFileQueue(structuredTask.input)) run.product.activeFiles=this.fileProjection.active(context.id);
@@ -965,6 +991,11 @@ export class ProductTaskRuntime {
         const dispatch = async () => {
           if(cancelRequested) throw new Error('任务已取消');
           if (message.method === 'task.searchOptimize') return this.acceptSearchOptimize(String(message.args[0] ?? 'default'), Array.isArray(message.args[1]) ? message.args[1].filter((slug): slug is string => typeof slug === 'string') : []);
+          if (message.method === 'task.quickVectors') {
+            if (structuredTask.type !== 'dream' || structuredTask.input.preset !== 'quick' || structuredTask.input.dryRun) throw new Error('无效的快速维护向量任务');
+            const slugs = Array.isArray(message.args[1]) ? message.args[1].filter((slug): slug is string => typeof slug === 'string') : [];
+            return this.submitQuickVectors(context.id, String(message.args[0] ?? 'default'), slugs, Number(message.args[2]) || 1_800_000);
+          }
           if(message.method==='task.documentResources')return this.background.resourceSample();
           if(message.method==='task.documentOcrSchedule')return this.vectorizationDecision(context.id,true);
           if(message.method==='task.waitingOcr'){
@@ -980,6 +1011,11 @@ export class ProductTaskRuntime {
             return {paused:state.paused,schedule:await this.vectorizationDecision(context.id)};
           }
           if (message.method === 'task.searchOptimizeState') return this.searchOptimizeView();
+          if (message.method === 'task.quickVectorState') {
+            if (structuredTask.type !== 'embed' || !structuredTask.input.quickVector) throw new Error('无效的快速维护向量状态');
+            const state = await loadSearchOptimize(this.engine);
+            return { paused: state.paused, schedule: await this.vectorizationDecision(context.id) };
+          }
           if (message.method === 'task.searchOptimizeDone') {
             const state = await completeSearchOptimize(this.engine, String(message.args[0] ?? ''), String(message.args[1] ?? ''), typeof message.args[2] === 'string' ? message.args[2] : undefined);
             if (record.data.vectorRetryCount) {
@@ -1122,7 +1158,7 @@ export class ProductTaskRuntime {
           await this.ensureSearchOptimizeJob().catch(error => console.error('[tasks] search optimize:', error));
         }
       }
-      if (outcome === MINION_DEFERRED && deferredPhase === 'search_optimize') {
+      if (outcome === MINION_DEFERRED && (deferredPhase === 'search_optimize' || deferredPhase === 'quick_vector')) {
         if (!this.stopIntents.has(context.id)) await this.settleSearchOptimize(record, adapter, progress, undefined, deferredError);
         return MINION_DEFERRED;
       }

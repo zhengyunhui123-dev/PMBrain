@@ -43,7 +43,7 @@ async function settledKnowledge(sourceIds?:string[]){
   throw new Error(JSON.stringify({runs:await runtime.listRuns(),pending:await engine.executeRaw(`SELECT key FROM config WHERE key LIKE 'dream.entity_capture.pending.%'`),optimize:await engine.getConfig('pmbrain.search_optimize')}));
 }
 async function maintain(sourceId:string){
-  const done=await finished((await runtime.submitDream({preset:'quick',sourceId})).id);
+  const done=await finished((await runtime.submitDream({preset:'full',sourceId})).id);
   expect(done.status,JSON.stringify(done.result)).toBe('completed');
   await settledKnowledge([sourceId]);
   return done;
@@ -62,14 +62,14 @@ beforeAll(async()=>{
     const slug=prompt.match(/资料 slug: ([^\\\s]+)/)?.[1]??'first';
     const fact=prompt.includes('刘慈欣参与了科幻讨论')?'刘慈欣参与了科幻讨论。':'刘慈欣创作了三体。';
     const content=`---\ntitle: 刘慈欣\ntype: person\n---\n${fact} [Source: ${slug}] [[${source}:${slug}]]`;
-    const tool=body.tools?.find(tool=>tool.function.name.endsWith('capture_entities'))?.function.name??'brain_capture_entities';
-    return Response.json({id:`capture-${calls}`,object:'chat.completion',created:1,model:'isolated-capture',choices:[{index:0,finish_reason:invalid?'stop':'tool_calls',message:invalid?{role:'assistant',content:'{"entities":[],"relations":[]}'}:{role:'assistant',content:null,tool_calls:[{id:`capture-${calls}`,type:'function',function:{name:tool,arguments:JSON.stringify({entities:[{slug:'people/liu',content}],relations:[]})}}]}}],usage:{prompt_tokens:20,completion_tokens:10,total_tokens:30}});
+    return Response.json({id:`capture-${calls}`,object:'chat.completion',created:1,model:'isolated-capture',choices:[{index:0,finish_reason:'stop',message:{role:'assistant',content:JSON.stringify(invalid?{entities:[],relations:[]}:{entities:[{slug:'people/liu',content}],relations:[]})}}],usage:{prompt_tokens:20,completion_tokens:10,total_tokens:30}});
   }});
   writeFileSync(configPath(),JSON.stringify({engine:database?'postgres':'pglite',custom_openai_api_key:'isolated-only',embedding_model:'custom-openai:isolated-embedding',embedding_dimensions:dimensions,provider_base_urls:{'custom-openai':server.url.origin+'/v1'},models:{default:'custom-openai:isolated-capture'},model_usage:{generative_enabled:true,embedding_enabled:true},desktop:{knowledge_directory:root}}));
   if(database)assertSafeE2eDatabaseUrl(database);
   engine=database?new PostgresEngine():new WorkerPgliteEngine() as unknown as BrainEngine;
   await engine.connect(database?{database_url:database}:{});await engine.initSchema();
   await resetPgliteState(engine as any);await engine.setConfig('version','135');await engine.setConfig('pmbrain.schema.version','135');
+  await engine.setConfig('dream.knowledge.enabled','false');await engine.setConfig('dream.synthesize.enabled','false');await engine.setConfig('cycle.enrich_thin.enabled','false');
   await engine.setConfig('pricing.overrides',JSON.stringify({'custom-openai:isolated-capture':{input:1,output:1},'custom-openai:isolated-embedding':{input:1,output:0}}));
   for(const source of ['knowledge-auto','knowledge-other']){
     await engine.executeRaw('DELETE FROM pages WHERE source_id=$1',[source]);
@@ -78,17 +78,17 @@ beforeAll(async()=>{
   runtime=new ProductTaskRuntime(engine, { background: idleBackground });await runtime.start();
 },60000);
 
-test('new source material synchronized by quick maintenance is captured in that task and unchanged vectors are reused',async()=>{
+test('new source material synchronized by deep maintenance is captured in that task and unchanged vectors are reused',async()=>{
   const directory=join(root,'sync-source');mkdirSync(directory);
   writeFileSync(join(directory,'synced.md'),'# 同步资料\n\n刘慈欣创作了三体。');
   await engine.executeRaw("INSERT INTO sources(id,name,local_path) VALUES('knowledge-sync','同步验收',$1) ON CONFLICT(id) DO UPDATE SET local_path=EXCLUDED.local_path",[directory]);
-  const run=await runtime.submitDream({preset:'quick',sourceId:'knowledge-sync'}),done=await finished(run.id);
+  const run=await runtime.submitDream({preset:'full',sourceId:'knowledge-sync'}),done=await finished(run.id);
   expect(done.status,JSON.stringify(done.result)).toBe('completed');
   await settledKnowledge();
   expect(await engine.getPage('people/liu',{sourceId:'knowledge-sync'})).not.toBeNull();
   expect((await engine.getChunks('people/liu',{sourceId:'knowledge-sync'})).every(chunk=>!!chunk.embedded_at)).toBe(true);
   const count=calls,vectors=embeddingCalls;
-  expect((await finished((await runtime.submitDream({preset:'quick',sourceId:'knowledge-sync'})).id)).status).toBe('completed');
+  expect((await finished((await runtime.submitDream({preset:'full',sourceId:'knowledge-sync'})).id)).status).toBe('completed');
   await settledKnowledge();
   expect(calls).toBe(count);expect(embeddingCalls).toBe(vectors);
 },60000);
@@ -102,7 +102,7 @@ test('automatic ingestion setting preserves pending original material; maintenan
     expect(done.status).toBe('completed');expect(calls).toBe(count);
     expect(await engine.getConfig('dream.entity_capture.pending.knowledge-other')).toContain('disabled');
   } finally { await engine.setConfig('dream.entity_capture.enabled','true'); }
-  expect((await finished((await runtime.submitDream({preset:'quick',sourceId:'knowledge-other'})).id)).status).toBe('completed');
+  expect((await finished((await runtime.submitDream({preset:'full',sourceId:'knowledge-other'})).id)).status).toBe('completed');
   expect(calls).toBeGreaterThan(count);expect(await engine.getConfig('dream.entity_capture.pending.knowledge-other')).toBeNull();
 },60000);
 
@@ -152,7 +152,7 @@ afterAll(async()=>{
   if(root&&resolve(root).startsWith(resolve(tmpdir())+sep)&&root.includes('pmbrain-auto-knowledge-'))rmSync(root,{recursive:true,force:true});
 },60000);
 
-test('import keeps source material and quick maintenance creates the evidenced entity graph',async()=>{
+test('import keeps source material and deep maintenance creates the evidenced entity graph',async()=>{
   const file=join(root,'first.md');writeFileSync(file,'# 科幻资料\n\n刘慈欣创作了三体。');
   const before=calls;
   const run=await runtime.submitImport({path:file,sourceId:'knowledge-auto',noEmbed:true});
@@ -193,7 +193,7 @@ test('invalid ingestion leaves raw material and live database available; mainten
   const run=await runtime.submitImport({path:file,sourceId:'knowledge-other',noEmbed:true}),stored=await finished(run.id);
   expect(stored.status).toBe('completed');expect(await engine.getPage('retry',{sourceId:'knowledge-other'})).not.toBeNull();expect((await engine.executeRaw('SELECT 1 AS alive'))[0].alive).toBe(1);
   expect((await engine.executeRaw("SELECT id FROM minion_jobs WHERE queue='pmbrain-product' AND data->>'kind'='dream_capture_entities' AND data->'task'->'input'->'slugs' ? 'retry'")).length).toBe(0);
-  const attempt=await finished((await runtime.submitDream({preset:'quick',sourceId:'knowledge-other'})).id);
+  const attempt=await finished((await runtime.submitDream({preset:'full',sourceId:'knowledge-other'})).id);
   expect(attempt.status,JSON.stringify(attempt.result)).toBe('failed');
   expect(await engine.getPage('retry',{sourceId:'knowledge-other'})).not.toBeNull();
   invalid=false;expect((await runtime.retry(attempt.id))?.id).toBe(attempt.id);expect((await finished(attempt.id)).status).toBe('completed');

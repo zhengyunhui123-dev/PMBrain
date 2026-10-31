@@ -61,6 +61,8 @@ export async function extractStaleFromDB(
     maxPages?: number;
     timeBudgetMs?: number;
     catalogAware?: boolean;
+    excludePathPattern?: string;
+    slugs?: string[];
     signal?: AbortSignal;
     yieldDuringPhase?: () => Promise<void>;
   },
@@ -90,12 +92,12 @@ export async function extractStaleFromDB(
   const processedSlugs: Array<{slug:string;sourceId:string}>=[];
   const finishMentions=async()=>{
     if(opts.catalogAware===false||dryRun)return;
-    mention=await runMentionPass(engine,{sourceId:sourceIdFilter,deadline,signal:opts.signal,maxPages:opts.maxPages,yieldDuringPhase:opts.yieldDuringPhase});
+    mention=await runMentionPass(engine,{sourceId:sourceIdFilter,deadline,signal:opts.signal,maxPages:opts.maxPages,yieldDuringPhase:opts.yieldDuringPhase,excludePathPattern:opts.excludePathPattern});
     if(mention.state==='failed')throw new Error(mention.error);
     for(const ref of mention.processedSlugs)if(!processedSlugs.some(p=>p.slug===ref.slug&&p.sourceId===ref.sourceId))processedSlugs.push(ref);
   };
   const queuedFreshPages=dryRun && opts.catalogAware !== false ? (await previewMentionPass(engine,sourceIdFilter)).due : 0;
-  const totalStale = await engine.countStalePagesForExtraction({ sourceId: sourceIdFilter, versionTs })
+  const totalStale = await engine.countStalePagesForExtraction({ sourceId: sourceIdFilter, versionTs, excludePathPattern: opts.excludePathPattern, slugs: opts.slugs })
     + (dryRun ? queuedFreshPages : 0);
   if (dryRun) {
     if (quiet) {
@@ -156,6 +158,8 @@ export async function extractStaleFromDB(
       afterPageId,
       sourceId: sourceIdFilter,
       versionTs,
+      excludePathPattern: opts.excludePathPattern,
+      slugs: opts.slugs,
     });
     const readMs = performance.now() - readStarted;
     if (rows.length === 0) break;
@@ -257,7 +261,7 @@ export async function extractStaleFromDB(
   progress.finish();
   await finishMentions();
   linksCreated+=mentionCreated();
-  const staleRemaining = await engine.countStalePagesForExtraction({ sourceId: sourceIdFilter, versionTs });
+  const staleRemaining = await engine.countStalePagesForExtraction({ sourceId: sourceIdFilter, versionTs, excludePathPattern: opts.excludePathPattern, slugs: opts.slugs });
 
   if (!quiet && !jsonMode) {
     console.log(`Extract --stale: 从 ${pagesProcessed} 个页面写入 ${linksCreated} 条关系、${timelineCreated} 条时间线。`);

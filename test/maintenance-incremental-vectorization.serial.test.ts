@@ -86,10 +86,10 @@ test('旧维护回执缺少分块指纹时完成一次核验，后续不重复�
   const [after]=await engine.executeRaw<{n:number}>("SELECT count(*)::int AS n FROM minion_jobs WHERE queue='pmbrain-sync-files'");expect(after.n).toBe(before.n);
 },120000);
 
-test('自动维护遵守向量暂停和电脑忙闲，后台恢复后只补缺失向量',async()=>{
+test('深度整理遵守向量暂停和电脑忙闲，后台恢复后只补缺失向量',async()=>{
   await embeddingEnabled(true);
   writeFileSync(join(directory,'vectors.md'),'# Vector task\n\n'+Array.from({length:12},(_,i)=>`## 第 ${i} 节\n\n`+'独立的测试资料需要保留已有成果并确保后台暂停有效。'.repeat(30)).join('\n\n'));
-  const before=calls;const task=await runtime.submitDream({preset:'quick',sourceId:'default'},'scheduled');
+  const before=calls;const task=await runtime.submitDream({preset:'full',sourceId:'default'},'scheduled');
   await waitUntil(async()=>String((await runtime.getRun(task.id))?.product?.stage).includes('知识向量化已暂停'),'维护未等待全局向量暂停');
   expect(calls).toBe(before);expect((await loadSearchOptimize(engine)).paused).toBe(true);expect((await runtime.getRun(task.id))?.status).toBe('queued');
   const [preserved]=await engine.executeRaw<{id:number}>("SELECT id FROM content_chunks WHERE page_id=(SELECT id FROM pages WHERE slug='vectors' AND source_id='default') ORDER BY chunk_index LIMIT 1");
@@ -116,7 +116,7 @@ test('深度整理同样等待全局暂停，继续后在原任务完成',async(
 test('维护向量化沿用整次费用上限，提高上限后原任务继续',async()=>{
   await pauseSearchOptimize(engine,false);cpu=0.1;await engine.setConfig('dream.task_budget_cny','0.000000001');
   writeFileSync(join(directory,'budget.md'),'# Budget\n\n已有维护预算必须约束向量阶段的模型调用。');
-  const before=calls,task=await runtime.submitDream({preset:'quick',sourceId:'default'},'scheduled');const stopped=await finish(task.id);
+  const before=calls,task=await runtime.submitDream({preset:'full',sourceId:'default'},'scheduled');const stopped=await finish(task.id);
   expect(stopped.status).toBe('failed');expect((stopped.result as any).reason).toBe('task_budget');expect(calls).toBe(before);
   await engine.setConfig('dream.task_budget_cny','1');const retried=await runtime.retry(task.id);expect(retried?.id).toBe(task.id);
   const done=await finish(task.id);expect(done.status,JSON.stringify(done.result)).toBe('completed');expect(calls).toBeGreaterThan(before);expect((done.result as any).budget.spentCny).toBeGreaterThan(0);
@@ -128,7 +128,7 @@ test('向量处理中电脑变忙时保存当前批次，重启及暂停后只�
   await engine.executeRaw("INSERT INTO sources(id,name,local_path) VALUES('window','分批恢复验收',$1)",[windowRoot]);
   writeFileSync(join(windowRoot,'window.md'),'# Window\n\n'+Array.from({length:20},(_,i)=>`## 第 ${i} 节\n\n`+'向量批次提交后应当保留成果，电脑资源繁忙时暂停，恢复后不能再次收费处理相同分块。'.repeat(35)).join('\n\n'));
   onEmbedding=async()=>{cpu=0.95;};const before=calls;
-  const task=await runtime.submitDream({preset:'quick',sourceId:'window'},'scheduled');
+  const task=await runtime.submitDream({preset:'full',sourceId:'window'},'scheduled');
   await waitUntil(async()=>{const run=await runtime.getRun(task.id);return run?.status==='queued'&&!!run.product?.stage.includes('电脑');},'批次后电脑繁忙未停止');
   expect(calls).toBe(before+1);
   const kept=await engine.executeRaw<{id:number;model:string;embedded_at:Date}>('SELECT c.id,c.model,c.embedded_at FROM content_chunks c JOIN pages p ON p.id=c.page_id WHERE p.source_id=$1 AND c.embedding IS NOT NULL ORDER BY c.id',['window']);

@@ -53,6 +53,7 @@ export const MENTION_EXTRACTOR_VERSION = 2;
 export const ALIAS_DERIVATION_VERSION = 1;
 
 const RECONCILE_BATCH = 200;
+const QUICK_PROJECT_MENTION_ORIGIN = 'quick-maintenance:project';
 const ALIAS_BATCH = 200;
 const PREFILTER_BATCH = 500;
 
@@ -78,6 +79,8 @@ export interface MentionPassOpts {
   sourceId?: string;
   slugs?: string[];
   excludeSlugs?: string[];
+  excludePathPattern?: string;
+  quickEntityTypes?: boolean;
   typeFilter?: string;
   since?: string;
   maxPages?: number;
@@ -95,11 +98,13 @@ const DUE_PREDICATE = `(s.page_id IS NULL OR s.mention_revision IS DISTINCT FROM
       AND (e.link_source<>'mentions' OR e.link_kind='typed_ner')))`;
 
 /** Mention-due live pages, per source (or one source). */
-export async function countMentionDuePages(engine: Pick<BrainEngine, 'executeRaw'>, sourceId?: string): Promise<number> {
+export async function countMentionDuePages(engine: Pick<BrainEngine, 'executeRaw'>, sourceId?: string, excludePathPattern?: string, slugs?: string[]): Promise<number> {
   const rows = await engine.executeRaw<{ n: number }>(
     `SELECT count(*)::int AS n FROM pages p LEFT JOIN page_mention_state s ON s.page_id = p.id
-      WHERE p.deleted_at IS NULL AND ($1::text IS NULL OR p.source_id = $1) AND ${DUE_PREDICATE}`,
-    [sourceId ?? null, MENTION_EXTRACTOR_VERSION]);
+      WHERE p.deleted_at IS NULL AND ($1::text IS NULL OR p.source_id = $1) AND ${DUE_PREDICATE}
+        AND ($3::text IS NULL OR (p.slug !~* $3 AND replace(COALESCE(p.source_path, ''), chr(92), '/') !~* $3))
+        AND ($4::text[] IS NULL OR p.slug = ANY($4::text[]))`,
+    [sourceId ?? null, MENTION_EXTRACTOR_VERSION, excludePathPattern ?? null, slugs ?? null]);
   return Number(rows[0]?.n ?? 0);
 }
 
@@ -206,14 +211,15 @@ interface DuePage { id: number; slug: string; source_id: string; revision: strin
   compiled_truth: string | null; timeline: string | null; mention_ignore: unknown; frontmatter?:Record<string,unknown> }
 
 /** Refresh derived alias rows of due entity pages in one source; returns pages whose rows changed. */
-async function refreshAliases(engine: BrainEngine, managed: boolean, sourceId: string, types: string[], deadline: number): Promise<number> {
+async function refreshAliases(engine: BrainEngine, managed: boolean, sourceId: string, types: string[], deadline: number, excludePathPattern?: string): Promise<number> {
   let changed = 0;
   // Pages that stopped being linkable entities (retype, pack change, deletion) lose their derived rows.
   const stale = await engine.executeRaw<{ slug: string }>(
     `SELECT DISTINCT pa.slug FROM page_aliases pa
        LEFT JOIN pages p ON p.slug = pa.slug AND p.source_id = pa.source_id
       WHERE pa.source_id = $1 AND pa.origin IN ('declared','subject')
-        AND (p.id IS NULL OR p.deleted_at IS NOT NULL OR NOT (p.type = ANY($2::text[])))`, [sourceId, types]);
+        AND (p.id IS NULL OR p.deleted_at IS NOT NULL OR NOT (p.type = ANY($2::text[])))
+        AND ($3::text IS NULL OR (pa.slug !~* $3 AND replace(COALESCE(p.source_path, ''), chr(92), '/') !~* $3))`, [sourceId, types, excludePathPattern ?? null]);
   if (stale.length) {
     await aliasWrite(engine, managed, sourceId, tx => tx.executeRaw(
       `DELETE FROM page_aliases WHERE source_id = $1 AND slug = ANY($2::text[]) AND origin IN ('declared','subject')`,
@@ -228,7 +234,8 @@ async function refreshAliases(engine: BrainEngine, managed: boolean, sourceId: s
          FROM pages p LEFT JOIN page_mention_state s ON s.page_id = p.id
         WHERE p.source_id = $1 AND p.deleted_at IS NULL AND p.type = ANY($2::text[]) AND p.id > $3
           AND (s.page_id IS NULL OR s.alias_revision IS DISTINCT FROM p.knowledge_revision OR s.alias_version IS DISTINCT FROM $4)
-        ORDER BY p.id LIMIT $5`, [sourceId, types, after, ALIAS_DERIVATION_VERSION, ALIAS_BATCH]);
+          AND ($6::text IS NULL OR (p.slug !~* $6 AND replace(COALESCE(p.source_path, ''), chr(92), '/') !~* $6))
+        ORDER BY p.id LIMIT $5`, [sourceId, types, after, ALIAS_DERIVATION_VERSION, ALIAS_BATCH, excludePathPattern ?? null]);
     if (!pages.length) break;
     after = pages[pages.length - 1]!.id;
     const desired = new Map(pages.map(p => [p.slug, deriveEntityAliases(p).aliases]));
@@ -393,6 +400,9 @@ function sameGenerations(a: Map<string, string>, b: Map<string, string>): boolea
 async function reconcileSource(engine: BrainEngine, sourceId: string, gazetteer: Gazetteer, genSources: string[], allowCrossSource: boolean,
   opts: MentionPassOpts, deadline: number, result: MentionPassResult): Promise<void> {
   const generations = await readGenerations(engine, genSources, false);
+  const projects = opts.quickEntityTypes ? new Set((await engine.executeRaw<{slug:string;source_id:string}>(
+    "SELECT slug,source_id FROM pages WHERE type='project' AND deleted_at IS NULL AND source_id=ANY($1::text[])", [genSources],
+  )).map(row => `${row.source_id}\0${row.slug}`)) : new Set<string>();
   let after = 0;
   for (;;) {
     opts.signal?.throwIfAborted();
@@ -407,16 +417,17 @@ async function reconcileSource(engine: BrainEngine, sourceId: string, gazetteer:
           AND NOT (p.slug=ANY($6::text[]))
           AND ($7::text IS NULL OR p.type=$7)
           AND ($8::timestamptz IS NULL OR p.updated_at >= $8)
+          AND ($9::text IS NULL OR (p.slug !~* $9 AND replace(COALESCE(p.source_path, ''), chr(92), '/') !~* $9))
         ORDER BY p.id LIMIT $4`, [sourceId, MENTION_EXTRACTOR_VERSION, after,
           Math.min(RECONCILE_BATCH, opts.maxPages === undefined ? RECONCILE_BATCH : Math.max(0, opts.maxPages-result.pages)),
-          opts.slugs ?? null, opts.excludeSlugs ?? [], opts.typeFilter ?? null, opts.since ?? null]);
+          opts.slugs ?? null, opts.excludeSlugs ?? [], opts.typeFilter ?? null, opts.since ?? null, opts.excludePathPattern ?? null]);
     if (!pages.length) return;
     after = pages[pages.length - 1]!.id;
     for(const page of pages)Object.assign(page,await (await import('../pmbrain-adapters/ingest-provenance.ts')).activeIngestContent(engine,page));
     const found = new Map(pages.map(p => [Number(p.id), (p.title || p.compiled_truth || p.timeline)
       ? findMentionedEntities(`${p.title ?? ''}\n\n${p.compiled_truth ?? ''}\n\n${p.timeline ?? ''}`, gazetteer, {
           fromSlug: p.slug, fromSourceId: p.source_id, allowCrossSource, ignoreNames: parseNameList(p.mention_ignore),
-        })
+        }).filter(hit => !opts.excludePathPattern || !new RegExp(opts.excludePathPattern, 'i').test(hit.slug))
       : []]));
     await opts.yieldDuringPhase?.();
     opts.signal?.throwIfAborted();
@@ -428,15 +439,15 @@ async function reconcileSource(engine: BrainEngine, sourceId: string, gazetteer:
         [pages.map(p => p.id)])).map(r => [Number(r.id), r.revision]));
       const fresh = pages.filter(p => current.get(Number(p.id)) === p.revision);
       if (!fresh.length) return { fresh: 0, created: 0, removed: 0, processed: [] as typeof result.processedSlugs };
-      const rows = await tx.executeRaw<{ id: number; from_page_id: number; to_slug: string; to_source_id: string; plain: boolean }>(
-        `SELECT l.id, l.from_page_id, t.slug AS to_slug, t.source_id AS to_source_id,
+      const rows = await tx.executeRaw<{ id: number; from_page_id: number; to_slug: string; to_source_id: string; to_type: string; origin_field: string | null; plain: boolean }>(
+        `SELECT l.id, l.from_page_id, t.slug AS to_slug, t.source_id AS to_source_id, t.type AS to_type, l.origin_field,
                 (l.link_source = 'mentions' AND (l.link_kind IS NULL OR l.link_kind = 'plain')) AS plain
            FROM links l JOIN pages t ON t.id = l.to_page_id WHERE l.from_page_id = ANY($1::int[])`,
         [fresh.map(p => p.id)]);
-      const existing = rows.filter(r => r.plain);
+      const existing = rows.filter(r => r.plain && (opts.quickEntityTypes ? ['person', 'company', 'organization', 'project'].includes(r.to_type) || r.origin_field === QUICK_PROJECT_MENTION_ORIGIN : r.origin_field !== QUICK_PROJECT_MENTION_ORIGIN));
       // One link per page pair: a pair another producer already links (markdown, frontmatter, typed_ner, manual) gets no plain mention.
       // A cross-source mention is also covered by an explicit link to the same slug in any source (the resolver may pick another twin).
-      const covered = new Set(rows.filter(r => !r.plain).flatMap(r => [`${r.from_page_id}\0${r.to_source_id}\0${r.to_slug}`, `${r.from_page_id}\0*\0${r.to_slug}`]));
+      const covered = new Set(rows.filter(r => !r.plain || (!opts.quickEntityTypes && r.origin_field === QUICK_PROJECT_MENTION_ORIGIN)).flatMap(r => [`${r.from_page_id}\0${r.to_source_id}\0${r.to_slug}`, `${r.from_page_id}\0*\0${r.to_slug}`]));
       const pageSource = new Map(fresh.map(p => [Number(p.id), p.source_id]));
       const want = new Set(fresh.flatMap(p => (found.get(Number(p.id)) ?? [])
         .filter(m => !covered.has(`${p.id}\0${m.source_id}\0${m.slug}`) && !(m.source_id !== pageSource.get(Number(p.id)) && covered.has(`${p.id}\0*\0${m.slug}`)))
@@ -447,7 +458,8 @@ async function reconcileSource(engine: BrainEngine, sourceId: string, gazetteer:
       const add: LinkBatchInput[] = fresh.flatMap(p => (found.get(Number(p.id)) ?? [])
         .filter(m => want.has(`${p.id}\0${m.source_id}\0${m.slug}`) && !have.has(`${p.id}\0${m.source_id}\0${m.slug}`))
         .map(m => ({ from_slug: p.slug, to_slug: m.slug, link_type: 'mentions', link_source: 'mentions', context: m.name,
-          from_source_id: p.source_id, to_source_id: m.source_id })));
+          from_source_id: p.source_id, to_source_id: m.source_id,
+          ...(projects.has(`${m.source_id}\0${m.slug}`) ? { origin_slug: p.slug, origin_source_id: p.source_id, origin_field: QUICK_PROJECT_MENTION_ORIGIN } : {}) })));
       const created = add.length ? await tx.addLinksBatch(add, { auditSite: 'extract.by_mention' }) : 0; // gbrain-allow-direct-insert: mention pass — reconciling write of the scan's own plain mention rows
       await tx.executeRaw(
         `INSERT INTO page_mention_state (page_id, source_id, mention_revision, mention_version, mention_generation, mentions_scanned_at)
@@ -480,6 +492,7 @@ export async function runMentionPass(engine: BrainEngine, opts: MentionPassOpts 
   const catalogSources = opts.sourceId && opts.sourceId !== 'default' ? [opts.sourceId, 'default'] : sources;
   const managed = false;
   if (!policy.enabled) {
+    if (opts.excludePathPattern) return { ...result, state: 'disabled' };
     const status = new Map((await engine.executeRaw<{ source_id: string; state: string }>(
       'SELECT source_id, state FROM mention_index_status WHERE source_id = ANY($1::text[])', [sources])).map(r => [r.source_id, r.state]));
     for (const sourceId of sources) {
@@ -498,7 +511,7 @@ export async function runMentionPass(engine: BrainEngine, opts: MentionPassOpts 
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     for (const sourceId of sources) await writeStatus(engine, sourceId, { state: 'failed', error: message });
-    return { ...result, state: 'failed', error: message, remaining: await countMentionDuePages(engine, opts.sourceId) };
+    return { ...result, state: 'failed', error: message, remaining: await countMentionDuePages(engine, opts.sourceId, opts.excludePathPattern) };
   }
   const allSources = await sourcesInScope(engine);
   const chineseStopwords=await readChineseMentionStopwords(engine);
@@ -507,7 +520,7 @@ export async function runMentionPass(engine: BrainEngine, opts: MentionPassOpts 
     'SELECT source_id, policy_fingerprint FROM mention_index_status WHERE source_id = ANY($1::text[])', [catalogSources]))
     .map(r => [r.source_id, r.policy_fingerprint]));
   for (const sourceId of catalogSources) {
-    if (stored.get(sourceId) === fingerprints.get(sourceId)) continue;
+    if (opts.quickEntityTypes || stored.get(sourceId) === fingerprints.get(sourceId)) continue;
     await engine.transaction(async tx => {
       await tx.executeRaw('UPDATE page_mention_state SET mention_revision = NULL, alias_revision = NULL WHERE source_id = $1', [sourceId]);
       await writeStatus(tx, sourceId, { state: 'pending', bumpGeneration: true, fingerprint: fingerprints.get(sourceId)! });
@@ -515,7 +528,7 @@ export async function runMentionPass(engine: BrainEngine, opts: MentionPassOpts 
   }
   for (const sourceId of catalogSources) {
     if (Date.now() > deadline) break;
-    result.aliasPages += await refreshAliases(engine, managed, sourceId, types.get(sourceId)!, deadline);
+    result.aliasPages += await refreshAliases(engine, managed, sourceId, types.get(sourceId)!, deadline, opts.excludePathPattern);
   }
   // Aliases may have changed: the gazetteer the reconcile uses is built after the refresh.
   if (result.aliasPages > 0) {
@@ -523,17 +536,35 @@ export async function runMentionPass(engine: BrainEngine, opts: MentionPassOpts 
     catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       for (const sourceId of sources) await writeStatus(engine, sourceId, { state: 'failed', error: message });
-      return { ...result, state: 'failed', error: message, remaining: await countMentionDuePages(engine, opts.sourceId) };
+      return { ...result, state: 'failed', error: message, remaining: await countMentionDuePages(engine, opts.sourceId, opts.excludePathPattern) };
     }
   }
+  const deferredCatalogSources = new Set<string>();
   for (const sourceId of catalogSources) {
-    await saveEntries(engine, sourceId, gazetteer, sourceId === 'default' ? allSources : [sourceId], allowCrossSource);
+    if (!opts.quickEntityTypes) {
+      await saveEntries(engine, sourceId, gazetteer, sourceId === 'default' ? allSources : [sourceId], allowCrossSource);
+      continue;
+    }
+    if (stored.get(sourceId) !== fingerprints.get(sourceId)) {
+      deferredCatalogSources.add(sourceId);
+      continue;
+    }
+    const saved = await engine.executeRaw<GazetteerEntryKey>(
+      'SELECT source_id, name_norm, target_slug, case_sensitive FROM mention_gazetteer_entries WHERE source_id = $1', [sourceId]);
+    const current = gazetteerEntryKeys(gazetteer).filter(entry => entry.source_id === sourceId);
+    const currentKeys = new Set(current.map(entryKey));
+    if (saved.length !== current.length || saved.some(entry => !currentKeys.has(entryKey(entry)))) deferredCatalogSources.add(sourceId);
   }
+  const quickGazetteer = opts.quickEntityTypes && await countMentionDuePages(engine, opts.sourceId, opts.excludePathPattern, opts.slugs) > 0
+    ? await (await import('../pmbrain-adapters/quick-maintenance-policy.ts')).buildQuickMaintenanceGazetteer(engine)
+    : gazetteer;
   for (const sourceId of sources) {
-    await reconcileSource(engine, sourceId, gazetteer, sourceId === 'default' ? ['default'] : [sourceId, 'default'], allowCrossSource, opts, deadline, result);
-    const pending = await countMentionDuePages(engine, sourceId);
+    await reconcileSource(engine, sourceId, quickGazetteer, sourceId === 'default' ? ['default'] : [sourceId, 'default'], allowCrossSource, opts, deadline, result);
+    const pending = await countMentionDuePages(engine, sourceId, opts.excludePathPattern, opts.quickEntityTypes ? opts.slugs : undefined);
+    const indexPending = opts.quickEntityTypes && opts.slugs ? await countMentionDuePages(engine, sourceId, opts.excludePathPattern) : pending;
     result.remaining += pending;
-    await writeStatus(engine, sourceId, { state: pending > 0 ? 'pending' : 'complete', pending, error: null, lastPassAt: passStart });
+    const catalogDeferred = deferredCatalogSources.has(sourceId) || (sourceId !== 'default' && deferredCatalogSources.has('default'));
+    await writeStatus(engine, sourceId, { state: indexPending > 0 || catalogDeferred ? 'pending' : 'complete', pending: indexPending, error: null, ...(catalogDeferred ? {} : { lastPassAt: passStart }) });
   }
   result.state = result.remaining > 0 ? 'pending' : 'complete';
   return result;

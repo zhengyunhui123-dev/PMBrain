@@ -39,6 +39,7 @@ interface SyncableOptions {
   includeImages?: boolean;
   include?: string[];
   exclude?: string[];
+  excludePathPattern?: string;
 }
 
 // v0.19.0 shipped a 9-extension allowlist (ts/tsx/js/jsx/mjs/cjs/py/rb/go). The
@@ -432,6 +433,7 @@ function classifySync(path: string, opts: SyncableOptions = {}): SyncableReason 
   if ((SYNC_SKIP_FILES as readonly string[]).includes(basename)) return 'metafile';
 
   if (opts.include && opts.include.length > 0 && !matchesAnyGlob(path, opts.include)) return 'include-glob-miss';
+  if (opts.excludePathPattern && new RegExp(opts.excludePathPattern, 'i').test(path.replace(/\\/g, '/'))) return 'exclude-glob-hit';
   if (opts.exclude && opts.exclude.length > 0 && matchesAnyGlob(path, opts.exclude)) return 'exclude-glob-hit';
 
   return null;

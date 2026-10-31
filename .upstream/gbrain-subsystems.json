@@ -410,7 +410,7 @@
       "path": "src/core/mentions/pass.ts",
       "upstream_path": "src/core/mentions/pass.ts",
       "mode": "adapted",
-      "sha256": "5fa188c028302c7d02a564d16a92f73fef7f8d54bc9cf17f12458acb43983062",
+      "sha256": "021d6d4e51a33afd3924663512bbd547464b034b20ceeeb1775b1e03a71b930a",
       "upstream_sha256": "fde8f033481a3fa776b235dbf40a899196c09ee6f20b8c3adf66f724a0d3e6e6"
     },
     {
@@ -424,7 +424,7 @@
       "path": "src/core/mentions/coverage.ts",
       "upstream_path": "src/core/mentions/coverage.ts",
       "mode": "adapted",
-      "sha256": "70a34c7f6b170974633bfaa790623f5600f1f3f1ec81af3e4bba479beba03c2b",
+      "sha256": "c54a3b8c4ead4973a5a570887e8d52a79bfb82a48d27991514d522d2a15228dd",
       "upstream_sha256": "d52dc9a4d94185cdea1abf1850c38253d0936a73e825527ec7bfe7750e60a461"
     },
     {
