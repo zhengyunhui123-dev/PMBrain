@@ -29,6 +29,23 @@ export const taskRoundCompleted = (run: ConsoleRun) => run.kind.startsWith('drea
 export const taskPercent = (run: ConsoleRun) => taskRoundCompleted(run) ? null : run.status==='running'&&run.kind.startsWith('dream_')&&run.product?.phaseProgress ? run.product.phasePercent : run.product?.percent ?? null;
 export const taskStatus = (run: ConsoleRun) => taskStopping(run) ? '正在停止' : run.searchOptimize&&run.status==='paused' ? '已暂停' : run.searchOptimize&&run.status==='queued'&&run.product?.background?.mode==='waiting' ? run.product.stage.includes('自动重试')?'等待重试':'等待空闲' : run.kind==='embed_stale'&&run.status==='cancelled' ? '已暂停' : taskWasSkipped(run) ? '未执行' : run.product?.stage.includes('AI 提炼未执行')?'AI 提炼未执行':(run.kind==='import_path'||run.status==='completed')&&taskIsPartial(run)?'部分完成':run.kind==='import_path'&&run.status==='completed'?'导入成功':taskRoundCompleted(run) ? '本轮已完成' : ({ queued:'排队中',running:'执行中',completed:'已完成',failed:'失败',cancelled:'已停止',paused:'已暂停' })[run.status];
 
+export function quickVectorSummary(run: ConsoleRun, runs: ConsoleRun[]): string | null {
+  if (!run.kind.includes('quick')) return null;
+  const value = (run.result as { quickVector?: unknown } | undefined)?.quickVector;
+  const entries = (Array.isArray(value) ? value : value ? [value] : []).filter((item): item is { taskId?: string; pages?: number; error?: string } => !!item && typeof item === 'object');
+  const error = entries.find(item => item.error)?.error;
+  if (error) return `本轮向量任务未能提交：${error}`;
+  const ids = [...new Set(entries.flatMap(item => item.taskId ? [item.taskId] : []))];
+  if (!ids.length) return null;
+  const jobs = ids.flatMap(id => runs.filter(item => item.id === id));
+  const failed = jobs.find(job => job.status === 'failed');
+  if (failed) return `本轮向量化未完成：${failed.error ?? failed.product?.errorReason ?? '请在任务中心查看原因'}`;
+  if (jobs.some(job => job.status === 'paused' || job.status === 'cancelled')) return '本轮资料的向量化已暂停，可在任务中心继续。';
+  if (jobs.length === ids.length && jobs.every(job => job.status === 'completed')) return '本轮资料向量化已完成。';
+  if (jobs.length < ids.length) return '本轮向量任务已提交，可在任务中心查看状态。';
+  return '本轮资料向量化在后台进行，可在任务中心查看进度。';
+}
+
 const remainingMetric = (label: string) => /^(?:待|剩余|未关联|未解析|孤立|异常)|失败|待补/.test(label);
 const operationalMetric = (label: string) => /Token|费用|预算|上限/.test(label);
 

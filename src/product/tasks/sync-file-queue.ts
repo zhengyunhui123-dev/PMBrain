@@ -14,6 +14,8 @@ import { isSessionExportPath } from '../../core/conversation-parser/session-impo
 import { syncFileContentFingerprint } from './checkpoint.ts';
 import { TaskResourceGuard, SYNC_QUEUE_CAPACITY, streamFileHash, copyFileSnapshot, assertImportFileSize, isSyncCapacityError } from './resource-guard.ts';
 import {readDocumentChunkManifest} from '../../core/document/chunk-manifest.ts';
+import { syncFileManifestKey } from '../../core/sync-file-identity.ts';
+export { syncFileManifestKey } from '../../core/sync-file-identity.ts';
 
 export const SYNC_FILE_QUEUE = 'pmbrain-sync-files';
 export const SYNC_FILE_TASK = 'pmbrain-sync-file';
@@ -349,9 +351,6 @@ export async function validateSyncFileSnapshot(file: SyncFileInput) {
 }
 
 export interface SyncFileManifest {hash:string;fingerprint:string;slug:string;pageHash:string;size?:number;mtime?:number;chunks?:number;chunkHash?:string;contentMatched?:boolean;}
-export function syncFileManifestKey(file:Pick<SyncFileInput,'options'|'sourceRoot'|'relativePath'>){
-  return 'sync.file.sha256:'+createHash('sha256').update(JSON.stringify([file.options.sourceId??'default',file.sourceRoot,file.relativePath])).digest('hex');
-}
 export function syncFileManifest(file:SyncFileInput,slug:string,pageHash:string,chunks?:number,contentMatched=false,chunkHash?:string):SyncFileManifest {
   return {hash:file.hash,fingerprint:file.fingerprint,slug,pageHash,size:file.originalSize,mtime:file.originalMtime,chunks,...(chunkHash?{chunkHash}:{}),...(contentMatched?{contentMatched:true}:{})};
 }

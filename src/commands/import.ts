@@ -18,6 +18,7 @@ import {
   isOfficeTransientFile,
   type SyncStrategy,
   matchesAnyGlob,
+  slugifyPath,
 } from '../core/sync.ts';
 import { sortNewestFirst } from '../core/sort-newest-first.ts';
 import {
@@ -82,6 +83,7 @@ export interface ImportOptions {
     /** Sync exclusion globs, matched against the import-root-relative path. */
     exclude?: string[];
     excludePathPattern?: string;
+    strictPaths?: boolean;
     runtime?: {
       signal: AbortSignal;
       onFile: (result: Record<string, unknown>) => Promise<void>;
@@ -284,13 +286,13 @@ export async function runStructuredImport(
         : [];
     } else {
       allFiles = collectSyncableFiles(dir, {
-        strategy, includeOffice, includeImages, includeSessions: strategy !== 'code',
+        strategy, includeOffice, includeImages, includeSessions: strategy !== 'code', strict: opts.strictPaths, excludePathPattern: opts.excludePathPattern,
       });
     }
   } catch (error) {
     if (opts.runtime) throw error;
     allFiles = collectSyncableFiles(dir, {
-      strategy, includeOffice, includeImages, includeSessions: strategy !== 'code',
+      strategy, includeOffice, includeImages, includeSessions: strategy !== 'code', strict: opts.strictPaths, excludePathPattern: opts.excludePathPattern,
     });
   }
   console.error(
@@ -403,7 +405,7 @@ export async function runStructuredImport(
       // up images when GBRAIN_EMBEDDING_MULTIMODAL=true so this branch is
       // unreachable when the gate is off; defense-in-depth check anyway.
       const imageImportEnabled = input.includeImages===false?false:includeImages || (process.env.PMBRAIN_EMBEDDING_MULTIMODAL ?? process.env.GBRAIN_EMBEDDING_MULTIMODAL) === 'true';
-      const result = opts.fileRuntime
+      let result = opts.fileRuntime
         ? await opts.fileRuntime.importFile(filePath, relativePath, { noEmbed, sourceId, includeOffice, includeImages: imageImportEnabled, documentOcr, structured: structuredDocuments, session: sourceType === 'file' && strategy !== 'code', activePack: importActivePack })
         : sourceType === 'file' && strategy !== 'code' && isSessionExportPath(relativePath)
         ? await importSessionExport(eng, filePath, relativePath, { noEmbed, sourceId })
@@ -420,6 +422,17 @@ export async function runStructuredImport(
               activePack: importActivePack,
             })
         : await importFile(eng, filePath, relativePath, { noEmbed, sourceId, activePack: importActivePack });
+      if (opts.strictPaths && opts.excludePathPattern && isMarkdownFilePath(relativePath)
+        && result.status === 'skipped' && !result.error && result.slug !== slugifyPath(relativePath)) {
+        const [duplicate] = await eng.executeRaw<{ slug: string; source_path: string | null }>(
+          'SELECT slug,source_path FROM pages WHERE slug=$1 AND source_id=$2 AND deleted_at IS NULL', [result.slug, sourceId ?? 'default']);
+        const excluded = new RegExp(opts.excludePathPattern, 'i');
+        if (duplicate && (excluded.test(duplicate.slug) || excluded.test((duplicate.source_path ?? '').replace(/\\/g, '/')))) {
+          result = opts.fileRuntime
+            ? await opts.fileRuntime.importFile(filePath, relativePath, { noEmbed, forceRechunk: true, sourceId, activePack: importActivePack })
+            : await importFile(eng, filePath, relativePath, { noEmbed, forceRechunk: true, sourceId, activePack: importActivePack });
+        }
+      }
       const _fileMs = Date.now() - _fileT0;
       if ('deferred' in result && result.deferred) { processed++; tickProgress(); return; }
       opts.runtime?.signal.throwIfAborted();
@@ -736,6 +749,8 @@ interface CollectOpts {
   includeOffice?: boolean;
   includeImages?: boolean;
   includeSessions?: boolean;
+  strict?: boolean;
+  excludePathPattern?: string;
 }
 
 /**
@@ -794,18 +809,21 @@ export function collectSyncableFiles(dir: string, opts: CollectOpts = {}): strin
   const multimodalOn = opts.includeImages
     ?? (process.env.PMBRAIN_EMBEDDING_MULTIMODAL ?? process.env.GBRAIN_EMBEDDING_MULTIMODAL) === 'true';
   const maxDepth = resolveMaxWalkDepth();
+  const excluded = opts.excludePathPattern ? new RegExp(opts.excludePathPattern, 'i') : null;
   const visitedInodes = new Map<string, true>();
   const files: string[] = [];
 
   function walk(d: string, depth: number): void {
     if (depth >= maxDepth) {
+      if (opts.strict) throw new Error(`目录层级超出限制：${d}`);
       console.warn(`[pmbrain] walker depth limit reached at ${d}; skipping`);
       return;
     }
     let entries: string[];
     try {
       entries = readdirSync(d);
-    } catch {
+    } catch (error) {
+      if (opts.strict) throw error;
       return;
     }
     for (const entry of entries) {
@@ -816,10 +834,12 @@ export function collectSyncableFiles(dir: string, opts: CollectOpts = {}): strin
       if (entry === 'node_modules' || entry === 'ops') continue;
 
       const full = join(d, entry);
+      if (excluded?.test(relative(dir, full).replace(/\\/g, '/'))) continue;
       let stat;
       try {
         stat = lstatSync(full);
-      } catch {
+      } catch (error) {
+        if (opts.strict) throw error;
         console.warn(`[pmbrain import] Skipping unreadable path: ${full}`);
         continue;
       }

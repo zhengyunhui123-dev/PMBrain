@@ -364,7 +364,7 @@ describe('Dream GUI product contract', () => {
     expect(stages[2]?.results).toEqual([
       { label: '新增关联', value: 56 }, { label: '扫描历史页面', value: 414 }, { label: '历史待补关联', value: 1706 },
     ]);
-    expect(dream).toContain('仅关联已有实体；新实体建档和向量化不属于本次维护。');
+    expect(dream).toContain('仅关联已有实体；本轮资料向量化在后台进行，不影响维护完成。');
   });
 
   test('快速维护在关联阶段运行时显示前面步骤已完成', () => {
@@ -412,6 +412,16 @@ describe('Dream GUI product contract', () => {
       { phase: 'embed', status: 'ok', details: { pending: 3563 } },
     ], totals: {} });
     expect(describeDreamRun(clean).headline).toBe('快速维护已完成');
+  });
+
+  test('快速维护只显示本轮待补关联，不把历史积压计入完成状态', () => {
+    const run = quickRun({ status: 'partial', phases: [
+      { phase: 'sync', status: 'ok', details: {} },
+      { phase: 'extract', status: 'warn', details: { relationScopeRemaining: 2, mentionScopeRemaining: 1, relationHistoricalRemaining: 99 } },
+    ], totals: {} });
+    expect(buildDreamOutcome(run).pendingMetrics.map(metric => [metric.label, metric.value])).toContainEqual(['本轮待补关联', 2]);
+    expect(buildQuickMaintenanceStages(run)[2]?.results).toContainEqual({ label: '本轮待补关联', value: 2 });
+    expect(phaseSummaryZh({ phase: 'extract', status: 'warn', details: { relationScopeRemaining: 2, mentionScopeRemaining: 1 } } as any)).toContain('本轮仍有 2 页待关联');
   });
 
   test('proposal drain statistics are shown from the structured phase report', () => {

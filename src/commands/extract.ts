@@ -1544,6 +1544,7 @@ export interface RunByMentionOpts {
   signal?: AbortSignal;
   excludePathPattern?: string;
   singlePass?: boolean;
+  priorityOnly?: boolean;
   quickEntityTypes?: boolean;
   yieldDuringPhase?: () => Promise<void>;
   dryRun?: boolean;
@@ -1573,6 +1574,7 @@ export interface RunByMentionResult {
   priorityPages: number;
   historicalPages: number;
   historicalRemaining: number;
+  scopeRemaining?: number;
   timeBudgetReached: boolean;
   ambiguousNames: number;
 }
@@ -1624,6 +1626,13 @@ export async function runByMentionCore(
   const deadline=opts.historicalTimeBudgetMs===undefined ? undefined : Date.now()+Math.max(0,opts.historicalTimeBudgetMs);
   const first=priority.length ? await runMentionPass(engine,{...common,slugs:priority,...(opts.singlePass ? {maxPages:opts.maxHistoricalPages,deadline} : {})}) : null;
   if(first?.state==='failed')throw new Error(first.error);
+  if (opts.priorityOnly) {
+    const remaining = first?.state === 'disabled' ? 0 : first?.remaining ?? 0;
+    return { created: first?.created ?? 0, removed: first?.removed ?? 0, pages: first?.pages ?? 0,
+      priorityPages: first?.pages ?? 0, historicalPages: 0, historicalRemaining: 0, scopeRemaining: remaining,
+      timeBudgetReached: remaining > 0 && deadline !== undefined && Date.now() >= deadline,
+      ambiguousNames: 0, processedSlugs: first?.processedSlugs ?? [], disabled: first?.state === 'disabled' };
+  }
   const history=await runMentionPass(engine,{...common,excludeSlugs:priority,maxPages:opts.singlePass && opts.maxHistoricalPages !== undefined ? Math.max(0,opts.maxHistoricalPages-(first?.pages ?? 0)) : opts.maxHistoricalPages,deadline});
   if(history.state==='failed')throw new Error(history.error);
   const processedSlugs=[...(first?.processedSlugs ?? []),...history.processedSlugs];

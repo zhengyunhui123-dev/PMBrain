@@ -408,7 +408,7 @@ function EntityCaptureBudgetSettings() {
         <span className="settings-panel-icon"><Sparkles /></span>
         <div>
           <h2>实体与关联整理费用</h2>
-          <p>用于需要模型的实体整理任务。快速维护不调用模型，不受此费用上限影响。达到上限后保留已完成结果；本地 Ollama 不计入金额。</p>
+          <p>此上限用于实体整理任务。快速维护不使用生成模型建档；本轮资料的后台向量化使用已配置的向量模型。</p>
         </div>
       </div>
       <div className="dream-schedule-row">

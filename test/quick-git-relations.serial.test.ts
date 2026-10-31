@@ -38,15 +38,17 @@ beforeAll(async()=>{
   runtime=new ProductTaskRuntime(db);await runtime.start();
 },60000);
 
-test('quick maintenance follows the configured working-tree policy',async()=>{
+test('quick maintenance syncs uncommitted files even when Git working-tree sync is disabled',async()=>{
   await db.setConfig('sync.include_working_tree','false');
-  writeFileSync(join(repo,'uncommitted.md'),'# 未提交资料\n\n关闭工作区同步时保留在本地。');
+  await db.setConfig('sync.auto_git_commit','false');
+  writeFileSync(join(repo,'uncommitted.md'),'# 未提交资料\n\n关闭工作区同步时仍按路径入库。');
   const run=await finish((await runtime.submitDream({preset:'quick',sourceId})).id);
   expect(run.status).toBe('completed');
-  expect(await db.getPage('uncommitted',{sourceId})).toBeNull();
+  expect((await db.getPage('uncommitted',{sourceId}))?.compiled_truth).toContain('仍按路径入库');
   expect(git('status','--porcelain')).toContain('uncommitted.md');
   rmSync(join(repo,'uncommitted.md'));
   await db.setConfig('sync.include_working_tree','true');
+  await db.setConfig('sync.auto_git_commit','true');
 },60000);
 afterAll(async()=>{
   await runtime?.close();await db?.disconnect();

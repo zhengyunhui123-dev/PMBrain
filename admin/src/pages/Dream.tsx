@@ -497,12 +497,18 @@ function quickMaintenancePending(report: DreamCycleReport | null): {
   exceptionalFiles: number;
   historicalLinks: number;
   processingErrors: number;
+  scopeLimited: boolean;
 } {
   const phases = report?.phases ?? [];
+  const extract = phases.find(phase => phase.phase === 'extract')?.details ?? {};
+  const scopeLimited = 'relationScopeRemaining' in extract || 'mentionScopeRemaining' in extract;
   return {
     exceptionalFiles: phases.reduce((sum, phase) => sum + Math.max(0, Number(phase.details?.failedFiles ?? 0)), 0),
-    historicalLinks: Math.max(phaseDetailNumber(report, 'extract', 'mentionHistoricalRemaining'), phaseDetailNumber(report, 'extract', 'relationHistoricalRemaining')),
+    historicalLinks: scopeLimited
+      ? Math.max(phaseDetailNumber(report, 'extract', 'mentionScopeRemaining'), phaseDetailNumber(report, 'extract', 'relationScopeRemaining'))
+      : Math.max(phaseDetailNumber(report, 'extract', 'mentionHistoricalRemaining'), phaseDetailNumber(report, 'extract', 'relationHistoricalRemaining')),
     processingErrors: phases.reduce((sum, phase) => sum + Math.max(0, Number(phase.details?.errors_count ?? 0)), 0),
+    scopeLimited,
   };
 }
 
@@ -687,7 +693,7 @@ export function describeDreamRun(run: ConsoleRun): {
       ? '预览只检查可能受影响的内容，不会同步、建立关联或写入向量。'
       : 'dry-run 会检查影响范围和部分判定逻辑，但不会提交综合写入，所以“没有新知识点”是预期结果。'
     : isQuick
-      ? '本轮变化同步和已有实体关联已结束；新实体建档、图片识别和向量化不属于本次维护。'
+      ? '本轮变化同步和已有实体关联已结束；本轮资料需要向量化时会在后台继续，新实体建档和图片识别不属于本次维护。'
       : '命令已结束，需要看下面的产出和子任务结果判断是否真的沉淀成功。';
   const outputs: string[] = [];
 
@@ -939,7 +945,7 @@ export function buildDreamOutcome(run: ConsoleRun): DreamOutcomeSummary {
     pendingMetrics: isQuick
       ? [
           { label: '异常文件', value: quickPending.exceptionalFiles, note: quickPending.exceptionalFiles > 0 ? '需要检查解析原因' : '本次无异常文件' },
-          { label: '历史待补关联', value: quickPending.historicalLinks, note: '下次从检查点继续' },
+          { label: quickPending.scopeLimited ? '本轮待补关联' : '历史待补关联', value: quickPending.historicalLinks, note: '下次从检查点继续' },
         ]
       : [],
     knowledgeItems,
@@ -959,7 +965,7 @@ export function DreamRunContent({run,expanded=false}:{run:ConsoleRun;expanded?:b
   const reasons:Record<string,string>={not_configured:'未配置该阶段需要的资料目录',not_in_active_pack:'当前知识类型未启用该阶段',insufficient_evidence:'资料数量不足，未满足执行条件'};
   return <details className="dream-outcome-content" open={expanded}>
     <summary>查看本次整理内容</summary>
-    {isQuick&&<p className="pm-hint">快速维护只关联已有实体；完成不代表已为新实体建档，图片识别和向量化也不属于本次维护。</p>}
+    {isQuick&&<p className="pm-hint">快速维护只关联已有实体；本轮资料向量化在后台进行，完成不代表已为新实体建档或完成图片识别。</p>}
     {typeof proposals.model_id==='string'&&<p className="pm-hint">观点提炼模型：{proposals.model_id} · 成功处理 {Number(proposals.pages_processed??0)} 页 · 剩余 {Number(proposals.remaining??0)} 页</p>}
     <div className="dream-outcome-content-grid">
       <section><h3>新增与更新的知识</h3>{outcome.knowledgeItems.length>0
@@ -1292,8 +1298,8 @@ export function buildQuickMaintenanceStages(run: ConsoleRun | null): QuickMainte
       state: quickStageState(progress, QUICK_MAINTENANCE_STEPS[2].phases, pending.historicalLinks > 0),
       results: [
         { label: '新增关联', value: number(totals.links_created) },
-        { label: '扫描历史页面', value: historicalScanned },
-        { label: '历史待补关联', value: pending.historicalLinks },
+        { label: pending.scopeLimited ? '本轮关联页面' : '扫描历史页面', value: pending.scopeLimited ? number(extract.mentionPagesProcessed) : historicalScanned },
+        { label: pending.scopeLimited ? '本轮待补关联' : '历史待补关联', value: pending.historicalLinks },
       ],
     },
   ];
@@ -1321,7 +1327,7 @@ function QuickMaintenanceJourney({ run }: { run: ConsoleRun | null }) {
         <div>
           <span className="dream-eyebrow">快速维护进度</span>
           <h2>{running ? '正在执行快速维护' : '快速维护的处理范围'}</h2>
-          <p className="pm-hint">仅关联已有实体；新实体建档和向量化不属于本次维护。</p>
+          <p className="pm-hint">仅关联已有实体；本轮资料向量化在后台进行，不影响维护完成。</p>
           {running && source && (
             <p className="pm-hint">
               当前 Source：{source.id}
@@ -1449,11 +1455,12 @@ export function phaseSummaryZh(phase: DreamPhaseReport): string {
       return `检测到 ${candidates} 个待同步文件，${result}${failed > 0 ? `，${failed} 个文件解析失败` : ''}。`;
     }
     case 'extract': {
-      const remaining = Math.max(number('relationHistoricalRemaining'), number('mentionHistoricalRemaining'));
+      const scoped = 'relationScopeRemaining' in details || 'mentionScopeRemaining' in details;
+      const remaining = scoped ? Math.max(number('relationScopeRemaining'), number('mentionScopeRemaining')) : Math.max(number('relationHistoricalRemaining'), number('mentionHistoricalRemaining'));
       const breakdown = details.by_mention || details.typed_ner || details.historical_relation_backfill
-        ? `其中历史显式关联 ${number('relationLinksCreated')} 条、正文实体关联 ${number('mentionLinksCreated')} 条、关系类型关联 ${number('nerLinksCreated')} 条。`
+        ? `其中${scoped ? '本轮' : '历史'}显式关联 ${number('relationLinksCreated')} 条、正文实体关联 ${number('mentionLinksCreated')} 条、关系类型关联 ${number('nerLinksCreated')} 条。`
         : '';
-      return `已建立 ${number('linksCreated')} 条知识链接和 ${number('timelineCreated')} 条时间线记录。${breakdown}${details.by_mention_disabled ? '自动提及匹配已关闭，本轮未执行实体提及和规则关联。' : ''}${remaining > 0 ? `历史仍有 ${remaining} 页待补扫。` : ''}`;
+      return `已建立 ${number('linksCreated')} 条知识链接和 ${number('timelineCreated')} 条时间线记录。${breakdown}${details.by_mention_disabled ? '自动提及匹配已关闭，本轮未执行实体提及和规则关联。' : ''}${remaining > 0 ? scoped ? `本轮仍有 ${remaining} 页待关联。` : `历史仍有 ${remaining} 页待补扫。` : ''}`;
     }
     case 'extract_facts':
       return `已检查 ${number('pagesScanned')} 个页面，核对并写入 ${number('factsInserted')} 条事实。`;
@@ -1951,7 +1958,7 @@ function DreamRunPanel({
   }> = {
     quick: {
       title: '先做一次轻量维护',
-      description: '同步已注册 Source 的变化资料，匹配已有实体并补充规则关联。此过程不调用模型；新实体建档和向量化留给深度整理或单独任务。',
+      description: '同步已注册 Source 的变化资料，匹配已有实体并补充规则关联。本轮资料向量化在后台进行；新实体建档留给深度整理。',
       action: '开始快速维护',
     },
     cycle: {

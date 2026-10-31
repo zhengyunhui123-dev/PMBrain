@@ -98,12 +98,13 @@ const DUE_PREDICATE = `(s.page_id IS NULL OR s.mention_revision IS DISTINCT FROM
       AND (e.link_source<>'mentions' OR e.link_kind='typed_ner')))`;
 
 /** Mention-due live pages, per source (or one source). */
-export async function countMentionDuePages(engine: Pick<BrainEngine, 'executeRaw'>, sourceId?: string, excludePathPattern?: string): Promise<number> {
+export async function countMentionDuePages(engine: Pick<BrainEngine, 'executeRaw'>, sourceId?: string, excludePathPattern?: string, slugs?: string[]): Promise<number> {
   const rows = await engine.executeRaw<{ n: number }>(
     `SELECT count(*)::int AS n FROM pages p LEFT JOIN page_mention_state s ON s.page_id = p.id
       WHERE p.deleted_at IS NULL AND ($1::text IS NULL OR p.source_id = $1) AND ${DUE_PREDICATE}
-        AND ($3::text IS NULL OR (p.slug !~* $3 AND replace(COALESCE(p.source_path, ''), chr(92), '/') !~* $3))`,
-    [sourceId ?? null, MENTION_EXTRACTOR_VERSION, excludePathPattern ?? null]);
+        AND ($3::text IS NULL OR (p.slug !~* $3 AND replace(COALESCE(p.source_path, ''), chr(92), '/') !~* $3))
+        AND ($4::text[] IS NULL OR p.slug = ANY($4::text[]))`,
+    [sourceId ?? null, MENTION_EXTRACTOR_VERSION, excludePathPattern ?? null, slugs ?? null]);
   return Number(rows[0]?.n ?? 0);
 }
 
@@ -554,15 +555,16 @@ export async function runMentionPass(engine: BrainEngine, opts: MentionPassOpts 
     const currentKeys = new Set(current.map(entryKey));
     if (saved.length !== current.length || saved.some(entry => !currentKeys.has(entryKey(entry)))) deferredCatalogSources.add(sourceId);
   }
-  const quickGazetteer = opts.quickEntityTypes && await countMentionDuePages(engine, opts.sourceId, opts.excludePathPattern) > 0
+  const quickGazetteer = opts.quickEntityTypes && await countMentionDuePages(engine, opts.sourceId, opts.excludePathPattern, opts.slugs) > 0
     ? await (await import('../pmbrain-adapters/quick-maintenance-policy.ts')).buildQuickMaintenanceGazetteer(engine)
     : gazetteer;
   for (const sourceId of sources) {
     await reconcileSource(engine, sourceId, quickGazetteer, sourceId === 'default' ? ['default'] : [sourceId, 'default'], allowCrossSource, opts, deadline, result);
-    const pending = await countMentionDuePages(engine, sourceId, opts.excludePathPattern);
+    const pending = await countMentionDuePages(engine, sourceId, opts.excludePathPattern, opts.quickEntityTypes ? opts.slugs : undefined);
+    const indexPending = opts.quickEntityTypes && opts.slugs ? await countMentionDuePages(engine, sourceId, opts.excludePathPattern) : pending;
     result.remaining += pending;
     const catalogDeferred = deferredCatalogSources.has(sourceId) || (sourceId !== 'default' && deferredCatalogSources.has('default'));
-    await writeStatus(engine, sourceId, { state: pending > 0 || catalogDeferred ? 'pending' : 'complete', pending, error: null, ...(catalogDeferred ? {} : { lastPassAt: passStart }) });
+    await writeStatus(engine, sourceId, { state: indexPending > 0 || catalogDeferred ? 'pending' : 'complete', pending: indexPending, error: null, ...(catalogDeferred ? {} : { lastPassAt: passStart }) });
   }
   result.state = result.remaining > 0 ? 'pending' : 'complete';
   return result;

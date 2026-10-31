@@ -215,6 +215,7 @@ export interface ImportResult {
   status: 'imported' | 'partial' | 'skipped' | 'error';
   chunks: number;
   error?: string;
+  contentHash?: string;
   embeddingPending?: boolean;
   ocrPending?:number;
   ocrTaskId?:number;
@@ -568,7 +569,7 @@ export async function importFromContent(
     : undefined;
   const contentUnchanged = existing?.content_hash === hash && (existingVersion === undefined || existingVersion >= 0) && !opts.forceRechunk;
   if (opts.checkOnly && !contentUnchanged) {
-    return { slug, status: 'skipped', chunks: 0, error: '同步检查：需要处理', parsedPage };
+    return { slug, status: 'skipped', chunks: 0, error: '同步检查：需要处理', parsedPage, contentHash: hash };
   }
   if (opts.checkOnly) {
     if ((checkMetadata?.chunker_version ?? 0) < 0

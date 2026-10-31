@@ -256,10 +256,13 @@ export function finishTaskProgress(view: TaskProductProgress, status: string, re
     const sync = data.phases.find((phase: any) => phase.phase === 'sync');
     add('更新资料', sync?.details?.modified);
     const relations = data.phases.find((phase: any) => phase.phase === 'extract')?.details;
-    add('历史显式关联', relations?.relationLinksCreated);
+    const scopedRelations = next.name === '快速维护' && (relations?.relationScopeRemaining !== undefined || relations?.mentionScopeRemaining !== undefined);
+    add(scopedRelations ? '本轮显式关联' : '历史显式关联', relations?.relationLinksCreated);
     add('正文实体关联', relations?.mentionLinksCreated);
     add('关系类型关联', relations?.nerLinksCreated);
-    add('历史待补关联', Math.max(relations?.relationHistoricalRemaining ?? 0, relations?.mentionHistoricalRemaining ?? 0) || (relations?.historical_relation_backfill ? 0 : undefined));
+    add(scopedRelations ? '本轮待补关联' : '历史待补关联', scopedRelations
+      ? Math.max(relations?.relationScopeRemaining ?? 0, relations?.mentionScopeRemaining ?? 0)
+      : Math.max(relations?.relationHistoricalRemaining ?? 0, relations?.mentionHistoricalRemaining ?? 0) || (relations?.historical_relation_backfill ? 0 : undefined));
     const lint = data.phases.find((phase: any) => phase.phase === 'lint');
     add('待检查项', lint?.details?.issues);
     const capture = data.phases.find((phase: any) => phase.phase === 'capture_entities')?.details;

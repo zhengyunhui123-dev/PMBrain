@@ -1,4 +1,5 @@
-import { existsSync, readFileSync, writeFileSync, statSync, mkdirSync, mkdtempSync, rmSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, statSync, mkdirSync, mkdtempSync, rmSync, createReadStream } from 'fs';
+import { createHash } from 'node:crypto';
 import { execFileSync } from 'child_process';
 import { join, relative } from 'path';
 import { tmpdir } from 'os';
@@ -6,12 +7,14 @@ import type { BrainEngine } from '../core/engine.ts';
 import { DELETE_BATCH_SIZE } from '../core/engine-constants.ts';
 import { importFile, importImageFile, isImageFilePath } from '../core/import-file.ts';
 import type { SyncFileRuntime } from '../core/sync-file-runtime.ts';
+import { syncFileManifestKey } from '../core/sync-file-identity.ts';
 import { collectSyncableFiles } from './import.ts';
 import { createInterface } from 'readline';
 import {
   buildSyncManifest,
   parseGitStatusPorcelainZ,
   isSyncable,
+  isMarkdownFilePath,
   unsyncableReason,
   isPoisonedPath,
   resolveSlugForPath,
@@ -184,6 +187,7 @@ async function promptYesNo(question: string): Promise<boolean> {
 
 export interface SyncOpts {
   fileRuntime?: SyncFileRuntime;
+  localPathOnly?: boolean;
   repoPath?: string;
   dryRun?: boolean;
   full?: boolean;
@@ -1110,7 +1114,7 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
 
   // Google source kind is API-backed, not git-backed: materialize then import.
   let remoteUrl: string | null = null;
-  if (opts.sourceId) {
+  if (opts.sourceId && !opts.localPathOnly) {
     const cfgRows = await engine.executeRaw<{ local_path: string | null; config: unknown }>(
       `SELECT local_path, config FROM sources WHERE id = $1`,
       [opts.sourceId],
@@ -1163,7 +1167,7 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
   // clone is auto-managed. validateRepoState classifies the on-disk state;
   // we recover from missing/no-git/not-a-dir by re-cloning, refuse on
   // url-drift or corruption with structured hints.
-  if (opts.sourceId) {
+  if (opts.sourceId && !opts.localPathOnly) {
     const { validateRepoState } = await import('../core/git-remote.ts');
     const { recloneIfMissing } = await import('../core/sources-ops.ts');
     const cfgRows = await engine.executeRaw<{ config: unknown }>(
@@ -1207,11 +1211,13 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
     }
   }
 
-  if (!existsSync(join(repoPath, '.git')) && opts.sourceId && !remoteUrl) {
+  if (opts.localPathOnly || (!existsSync(join(repoPath, '.git')) && opts.sourceId && !remoteUrl)) {
     const files = collectSyncableFiles(repoPath, {
       strategy: opts.strategy ?? 'markdown',
       includeOffice: opts.includeOffice,
       includeImages: opts.includeImages,
+      strict: opts.localPathOnly,
+      excludePathPattern: opts.excludePathPattern,
     })
       .map(path => ({
         path: relative(repoPath, path).replace(/\\/g, '/'),
@@ -1223,6 +1229,7 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
         includeOffice: opts.includeOffice,
         includeImages: opts.includeImages,
         exclude: opts.exclude,
+        excludePathPattern: opts.excludePathPattern,
       }))
       .sort((a, b) => a.path.localeCompare(b.path));
     const snapshot = `directory:${fingerprint({ files })}`;
@@ -2291,6 +2298,110 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
   };
 }
 
+async function reconcileQuickRenames(engine: BrainEngine, root: string, paths: Set<string>, opts: SyncOpts): Promise<string[]> {
+  if (!opts.localPathOnly || !opts.sourceId) return [];
+  const sourceId = opts.sourceId;
+  const rows = await engine.executeRaw<{ id: number; slug: string; source_path: string; content_hash: string; raw_hash: string | null }>(
+    "SELECT id,slug,source_path,content_hash,frontmatter->>'raw_sha256' AS raw_hash FROM pages WHERE source_id=$1 AND source_path IS NOT NULL AND deleted_at IS NULL", [sourceId]);
+  const known = new Set(rows.map(row => row.source_path.replace(/\\/g, '/')));
+  const missing = rows.filter(row => !paths.has(row.source_path.replace(/\\/g, '/')) && unsyncableReason(row.source_path.replace(/\\/g, '/'), {
+    strategy: opts.strategy, includeOffice: opts.includeOffice, includeImages: opts.includeImages,
+    exclude: opts.exclude, excludePathPattern: opts.excludePathPattern,
+  }) === null);
+  const added = [...paths].filter(path => !known.has(path));
+  if (!missing.length || !added.length) return [];
+  type OldPage = { id: number; slug: string; source_path: string; content_hash: string; size?: number };
+  const oldByHash = new Map<string, OldPage[]>();
+  const legacyByContent = new Map<string, OldPage[]>();
+  const keys = missing.map(row => syncFileManifestKey({ options: { sourceId }, sourceRoot: root, relativePath: row.source_path }));
+  const manifests = new Map<string, string>();
+  for (let i = 0; i < keys.length; i += 500) {
+    const values = await engine.executeRaw<{ key: string; value: string }>('SELECT key,value FROM config WHERE key=ANY($1::text[])', [keys.slice(i, i + 500)]);
+    for (const value of values) manifests.set(value.key, value.value);
+  }
+  for (const row of missing) {
+    opts.signal?.throwIfAborted();
+    const raw = manifests.get(syncFileManifestKey({ options: { sourceId }, sourceRoot: root, relativePath: row.source_path }));
+    let manifest: { hash?: string; slug?: string; pageHash?: string; size?: number } | undefined;
+    try { if (raw) manifest = JSON.parse(raw); } catch {}
+    if (manifest?.hash && /^[a-f0-9]{64}$/.test(manifest.hash) && manifest.slug === row.slug && manifest.pageHash === row.content_hash) {
+      const matches = oldByHash.get(manifest.hash) ?? [];
+      matches.push({ ...row, size: manifest.size });
+      oldByHash.set(manifest.hash, matches);
+    } else if (row.raw_hash && /^[a-f0-9]{64}$/.test(row.raw_hash)) {
+      const matches = oldByHash.get(row.raw_hash) ?? [];
+      matches.push(row);
+      oldByHash.set(row.raw_hash, matches);
+    } else if (isMarkdownFilePath(row.source_path) && row.content_hash) {
+      const matches = legacyByContent.get(row.content_hash) ?? [];
+      matches.push(row);
+      legacyByContent.set(row.content_hash, matches);
+    }
+  }
+  if (!oldByHash.size && !legacyByContent.size) return [];
+  const newByHash = new Map<string, string[]>();
+  const newByContent = new Map<string, string[]>();
+  const knownSizes = new Set<number>();
+  let unknownSize = false;
+  for (const originals of oldByHash.values()) for (const row of originals) {
+    if (row.size === undefined) unknownSize = true;
+    else knownSizes.add(row.size);
+  }
+  for (const path of added) {
+    opts.signal?.throwIfAborted();
+    const full = join(root, path);
+    const size = statSync(full).size;
+    if (unknownSize || knownSizes.has(size)) {
+      const hash = createHash('sha256');
+      for await (const chunk of createReadStream(full)) { opts.signal?.throwIfAborted(); hash.update(chunk); }
+      const digest = hash.digest('hex');
+      if (oldByHash.has(digest)) {
+        const matches = newByHash.get(digest) ?? [];
+        matches.push(path);
+        newByHash.set(digest, matches);
+      }
+    }
+    if (legacyByContent.size && isMarkdownFilePath(path)) {
+      const inspected = await importFile(engine, full, path, { sourceId, noEmbed: true, checkOnly: true });
+      if (inspected.contentHash && legacyByContent.has(inspected.contentHash)) {
+        const matches = newByContent.get(inspected.contentHash) ?? [];
+        matches.push(path);
+        newByContent.set(inspected.contentHash, matches);
+      }
+    }
+  }
+  const pairs = new Map<string, { old: OldPage; path: string }>();
+  for (const [oldMap, newMap] of [[oldByHash, newByHash], [legacyByContent, newByContent]] as const) {
+    for (const [hash, candidates] of newMap) {
+      const originals = oldMap.get(hash)!;
+      if (candidates.length !== 1 || originals.length !== 1) continue;
+      pairs.set(`${originals[0]!.id}\0${candidates[0]}`, { old: originals[0]!, path: candidates[0]! });
+    }
+  }
+  const moved: string[] = [];
+  const oldCounts = new Map<number, number>();
+  const pathCounts = new Map<string, number>();
+  for (const { old, path } of pairs.values()) {
+    oldCounts.set(old.id, (oldCounts.get(old.id) ?? 0) + 1);
+    pathCounts.set(path, (pathCounts.get(path) ?? 0) + 1);
+  }
+  for (const { old, path } of pairs.values()) {
+    if (oldCounts.get(old.id) !== 1 || pathCounts.get(path) !== 1) continue;
+    const slug = resolveSlugForPath(path);
+    if (!slug || slug === old.slug) continue;
+    const changed = await engine.transaction(async tx => {
+      const current = await tx.executeRaw('SELECT id FROM pages WHERE id=$1 AND source_id=$2 AND slug=$3 AND content_hash=$4 AND deleted_at IS NULL FOR UPDATE', [old.id, sourceId, old.slug, old.content_hash]);
+      const collision = await tx.executeRaw('SELECT id FROM pages WHERE source_id=$1 AND slug=$2', [sourceId, slug]);
+      if (!current.length || collision.length) return false;
+      await tx.updateSlug(old.slug, slug, { sourceId });
+      await tx.executeRaw('UPDATE pages SET source_path=$1 WHERE id=$2 AND source_id=$3', [relative(root, join(root, path)), old.id, sourceId]);
+      return true;
+    });
+    if (changed) moved.push(slug);
+  }
+  return moved;
+}
+
 async function performFullSync(
   engine: BrainEngine,
   repoPath: string,
@@ -2337,6 +2448,8 @@ async function performFullSync(
       strategy: opts.strategy ?? 'markdown',
       includeOffice: opts.includeOffice,
       includeImages: opts.includeImages,
+      strict: opts.localPathOnly,
+      excludePathPattern: opts.excludePathPattern,
     })
       .map(abs => relative(importPath, abs).replace(/\\/g, '/'))
       .filter(path => isSyncable(path, {
@@ -2361,6 +2474,8 @@ async function performFullSync(
       strategy: opts.strategy ?? 'markdown',
       includeOffice: opts.includeOffice,
       includeImages: opts.includeImages,
+      strict: opts.localPathOnly,
+      excludePathPattern: opts.excludePathPattern,
     });
     if (opts.exclude?.length) {
       allFiles = allFiles.filter(path => isSyncable(relative(importPath, path), {
@@ -2397,6 +2512,7 @@ async function performFullSync(
   // PGLite stays serial because its engine is single-connection. Routes the
   // policy through autoConcurrency() so it stays consistent with incremental
   // sync and the jobs handler.
+  const movedSlugs = await reconcileQuickRenames(engine, repoPath, authoritativePaths, opts);
   const FULL_SYNC_LARGE_MARKER = Number.MAX_SAFE_INTEGER;
   const fullConcurrency = autoConcurrency(engine, FULL_SYNC_LARGE_MARKER, opts.concurrency);
   slog(
@@ -2440,6 +2556,7 @@ async function performFullSync(
       managedBookmark: true,
       exclude: opts.exclude,
       excludePathPattern: opts.excludePathPattern,
+      strictPaths: opts.localPathOnly,
     });
   } finally {
     committedSnapshot?.cleanup();
@@ -2485,7 +2602,7 @@ async function performFullSync(
       status: 'blocked_by_failures', fromCommit: null, toCommit: headCommit,
       added: result.imported, modified: 0, deleted: 0, renamed: 0,
       chunksCreated: result.chunksCreated, embedded: 0,
-      pagesAffected: result.importedSlugs ?? [], failedFiles: result.failures.length,
+      pagesAffected: [...new Set([...movedSlugs, ...(result.importedSlugs ?? [])])], failedFiles: result.failures.length,
       ...(uncommittedDrift ? { uncommitted: uncommittedDrift } : {}),
     };
   }
@@ -2601,12 +2718,12 @@ async function performFullSync(
     added: result.imported,
     modified: 0,
     deleted: reconciledDeletes,
-    renamed: 0,
+    renamed: movedSlugs.length,
     chunksCreated: result.chunksCreated,
     embedded,
     // Surface imported slugs so cycle extract can run incrementally after
     // first_sync instead of receiving [] and processing zero pages.
-    pagesAffected: result.importedSlugs ?? [],
+    pagesAffected: [...new Set([...movedSlugs, ...(result.importedSlugs ?? [])])],
     ...(uncommittedDrift ? { uncommitted: uncommittedDrift } : {}),
   };
 }

@@ -1052,6 +1052,7 @@ async function runPhaseSync(
     const result = await performSync(engine, {
       repoPath: brainDir,
       sourceId,
+      localPathOnly: quickMaintenance,
       dryRun,
       noPull: !pull,
       noEmbed: true,                       // embed is a separate phase
@@ -1977,6 +1978,7 @@ export async function runCycle(
             includeFrontmatter: true,
             catalogAware: !opts.quickMaintenance,
             excludePathPattern: opts.quickMaintenance ? (await import('./pmbrain-adapters/quick-maintenance-policy.ts')).QUICK_MAINTENANCE_EXCLUDED_PATH : undefined,
+            slugs: opts.quickMaintenance ? prioritySlugs ?? [] : undefined,
             sourceIdFilter: filesystemSourceId,
             catchUp: !opts.quickMaintenance && opts.markdownCatchUpMaxHistorical == null,
             timeBudgetMs: opts.quickMaintenance ? opts.byMentionTimeBudgetMs : undefined,
@@ -1993,7 +1995,8 @@ export async function runCycle(
             relationLinksCreated: Number(result.details.relationLinksCreated ?? 0) + catchUp.linksCreated,
             relationTimelineCreated: Number(result.details.relationTimelineCreated ?? 0) + catchUp.timelineCreated,
             relationPagesProcessed: Number(result.details.relationPagesProcessed ?? 0) + catchUp.pagesProcessed,
-            relationHistoricalRemaining: catchUp.staleRemaining,
+            relationHistoricalRemaining: opts.quickMaintenance ? 0 : catchUp.staleRemaining,
+            ...(opts.quickMaintenance ? { relationScopeRemaining: catchUp.staleRemaining } : {}),
             relationUnresolvedReferences: catchUp.unresolvedReferences,
             relationSkippedMissingTarget: catchUp.skippedMissingTarget,
             relationSkippedCrossSource: catchUp.skippedCrossSource,
@@ -2037,6 +2040,7 @@ export async function runCycle(
           const mention = await runByMentionCore(engine, {
             prioritySlugs,
             singlePass: opts.quickMaintenance,
+            priorityOnly: opts.quickMaintenance,
             quickEntityTypes: opts.quickMaintenance,
             excludePathPattern: opts.quickMaintenance ? (await import('./pmbrain-adapters/quick-maintenance-policy.ts')).QUICK_MAINTENANCE_EXCLUDED_PATH : undefined,
             maxHistoricalPages: limits && Object.prototype.hasOwnProperty.call(limits, 'maxHistoricalPages')
@@ -2060,6 +2064,7 @@ export async function runCycle(
             mentionPriorityPagesProcessed: Number(result.details.mentionPriorityPagesProcessed ?? 0) + mention.priorityPages,
             mentionHistoricalPagesProcessed: Number(result.details.mentionHistoricalPagesProcessed ?? 0) + mention.historicalPages,
             mentionHistoricalRemaining: mention.historicalRemaining,
+            ...(opts.quickMaintenance ? { mentionScopeRemaining: mention.scopeRemaining ?? 0 } : {}),
             mentionTimeBudgetReached: mention.timeBudgetReached,
             mentionTimeBudgetMs: opts.byMentionTimeBudgetMs ?? null,
             mentionAmbiguousNames: mention.ambiguousNames,
@@ -2069,9 +2074,9 @@ export async function runCycle(
           result.summary =
             `${result.summary}; by-mention +${mention.created}/-${mention.removed} link(s) ` +
             `(${mention.pages} page(s), ${mention.historicalRemaining} historical remaining)`;
-          if (opts.quickMaintenance && mention.historicalRemaining > 0) {
+          if (opts.quickMaintenance && (mention.scopeRemaining ?? 0) > 0) {
             result.status = result.status === 'fail' ? 'fail' : 'warn';
-            result.details.remaining = Math.max(Number(result.details.remaining ?? 0), mention.historicalRemaining);
+            result.details.remaining = Math.max(Number(result.details.remaining ?? 0), mention.scopeRemaining ?? 0);
           }
           result.duration_ms += mentionMs;
           if (result.status === 'skipped' && mention.pages > 0) {
