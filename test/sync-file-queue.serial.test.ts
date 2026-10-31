@@ -1,5 +1,5 @@
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { afterAll, beforeAll, describe, expect, test, spyOn } from 'bun:test';
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { PGLiteEngine } from '../src/core/pglite-engine.ts';
@@ -17,7 +17,8 @@ import { TaskEngineHost } from '../src/product/tasks/engine-host.ts';
 import { createHash } from 'node:crypto';
 import { statSync } from 'node:fs';
 import { PRODUCT_TASK_QUEUE } from '../src/product/tasks/runtime.ts';
-import { taskModelFingerprint } from '../src/product/tasks/checkpoint.ts';
+import { taskArtifactPath, taskModelFingerprint } from '../src/product/tasks/checkpoint.ts';
+import { databaseRequestContext, withDatabaseRequest } from '../src/product/database/request-context.ts';
 import { importFile } from '../src/core/import-file.ts';
 
 const keys = ['GBRAIN_HOME', 'PMBRAIN_HOME', 'DATABASE_URL', 'GBRAIN_DATABASE_URL', 'PMBRAIN_DATABASE_URL'];
@@ -62,6 +63,80 @@ afterAll(async () => {
 }, 60000);
 
 describe('快速维护文件任务与恢复', () => {
+  test.skipIf(!database && process.env.PMBRAIN_TASK_TEST_WORKER!=='1')('文件数据库超时后保留整轮原因，继续时清理旧子任务停止标记并处理剩余资料', async () => {
+    const dir = join(root, 'timeout-resume'); mkdirSync(dir);
+    for (const name of ['01-before','02-timeout','03-after']) writeFileSync(join(dir, `${name}.md`), `# ${name}\n\n隔离测试资料。`);
+    await engine.executeRaw("INSERT INTO sources (id,name,local_path,config) VALUES ($1,$2,$3,$4::jsonb)", ['timeout-resume-source', '文件超时续跑', dir, {syncEnabled:true}]);
+    await engine.putPage('retained', {type:'note',title:'保留',compiled_truth:'先前已保存的资料'}, {sourceId:'timeout-resume-source'});
+    const dispatch = TaskEngineHost.prototype.dispatch;
+    let timedChild = 0;
+    const intercepted = spyOn(TaskEngineHost.prototype, 'dispatch').mockImplementation(function(this:TaskEngineHost,message) {
+      const context = databaseRequestContext();
+      if (!timedChild && context && message.method==='putPage' && message.args[0]==='02-timeout') {
+        timedChild = context.taskId;
+        const sql = database ? 'SELECT pg_sleep(30)' : 'DO $$ BEGIN LOOP PERFORM 1; END LOOP; END $$';
+        return withDatabaseRequest({...context,timeoutMs:150},()=>dispatch.call(this,{...message,method:'executeRaw',args:[sql]}));
+      }
+      return dispatch.call(this,message);
+    });
+    let runId = '';
+    try {
+      runId = (await runtime.submitDream({preset:'quick',sourceId:'timeout-resume-source'})).id;
+      const stopped = await finish(runId);
+      expect(timedChild).toBeGreaterThan(0);
+      expect(stopped.status).toBe('failed');
+      expect(stopped.error).toContain('数据库请求超时');
+      expect(stopped.product?.errorReason).toContain('数据库执行超时');
+      expect((await engine.getPage('retained',{sourceId:'timeout-resume-source'}))?.compiled_truth).toBe('先前已保存的资料');
+      expect(existsSync(taskArtifactPath(timedChild,'stop.json'))).toBe(false);
+      expect(existsSync(taskArtifactPath(Number(runId.slice(5)),'stop.json'))).toBe(true);
+    } finally { intercepted.mockRestore(); }
+    await runtime.close();
+    const queue = new MinionQueue(engine);
+    const other = await queue.add('unrelated-parent',{}, {queue:'unrelated-test',delay:86400000});
+    const otherFile = await queue.add(SYNC_FILE_TASK,{sessionId:other.id,task:{type:'sync-file',input:{relativePath:'unrelated.md',options:{sourceId:'unrelated'}}}}, {queue:SYNC_FILE_QUEUE,delay:86400000});
+    await engine.executeRaw("UPDATE minion_jobs SET status='paused' WHERE id=$1",[otherFile.id]);
+    writeFileSync(taskArtifactPath(timedChild,'stop.json'),JSON.stringify({id:timedChild,reason:'数据库请求超时：putPage，60000 毫秒内未完成'}));
+    writeFileSync(taskArtifactPath(otherFile.id,'stop.json'),JSON.stringify({id:otherFile.id,reason:'其他任务已停止'}));
+    runtime = new ProductTaskRuntime(engine); await runtime.start();
+    const restarted = await runtime.getRun(runId);
+    expect(restarted?.error).toContain('数据库请求超时');
+    expect(restarted?.product?.errorReason).toContain('数据库执行超时');
+    await runtime.retry(runId);
+    const resumed = await finish(runId);
+    expect(resumed.status).toBe('completed');
+    expect(existsSync(taskArtifactPath(timedChild,'stop.json'))).toBe(false);
+    expect(existsSync(taskArtifactPath(otherFile.id,'stop.json'))).toBe(true);
+    expect((await queue.getJob(otherFile.id))?.status).toBe('paused');
+    for (const name of ['01-before','02-timeout','03-after']) {
+      expect(await engine.getPage(name,{sourceId:'timeout-resume-source'})).not.toBeNull();
+      expect(readFileSync(join(dir,`${name}.md`),'utf8')).toContain('隔离测试资料');
+    }
+  }, 120000);
+  test('含空字节的资料单独失败，后续资料继续同步，续跑不再卡住', async () => {
+    const dir = join(root, 'nul-resume'); mkdirSync(dir);
+    const invalid = '# 无效资料\n\n合成内容\0包含空字节。';
+    writeFileSync(join(dir, '01-before.md'), '# 第一份\n\n正常资料。');
+    writeFileSync(join(dir, '02-invalid.md'), invalid);
+    writeFileSync(join(dir, '03-after.md'), '# 后一份\n\n正常资料应继续同步。');
+    await engine.executeRaw("INSERT INTO sources (id,name,local_path,config) VALUES ($1,$2,$3,$4::jsonb)", ['nul-resume-source', '空字节续跑', dir, {syncEnabled:true}]);
+    const first = await finish((await runtime.submitDream({preset:'quick',sourceId:'nul-resume-source'})).id);
+    expect((first.result as Record<string,unknown>)?.status).toBe('partial');
+    const details = await runtime.files(first.id);
+    expect(details?.rows.filter(row=>row.status==='failed')).toHaveLength(1);
+    expect(details?.rows.find(row=>row.path==='02-invalid.md')?.error).toContain('0x00');
+    expect(details?.rows.filter(row=>row.status==='pending')).toHaveLength(0);
+    expect(await engine.getPage('01-before',{sourceId:'nul-resume-source'})).not.toBeNull();
+    expect(await engine.getPage('03-after',{sourceId:'nul-resume-source'})).not.toBeNull();
+    expect(await engine.getPage('02-invalid',{sourceId:'nul-resume-source'})).toBeNull();
+    await runtime.retry(first.id);
+    const resumed = await finish(first.id);
+    expect((resumed.result as Record<string,unknown>)?.status).toBe('partial');
+    const resumedDetails = await runtime.files(first.id);
+    expect(resumedDetails?.rows.filter(row=>row.status==='failed')).toHaveLength(1);
+    expect(resumedDetails?.rows.filter(row=>row.status==='pending')).toHaveLength(0);
+    expect(readFileSync(join(dir, '02-invalid.md'), 'utf8')).toBe(invalid);
+  }, 120000);
   test.skipIf(!database && process.env.PMBRAIN_TASK_TEST_WORKER!=='1')('1MB 与 3MB 正文批次进度真实可见，写入阻塞可停止，未提交正文回滚后继续',async()=>{
     const dir=join(root,'large-progress');mkdirSync(dir);
     const content=(sections:number)=>'# 大文件处理验收\n\n'+Array.from({length:sections},(_,i)=>`## 第 ${i} 节\n\n`+'正文保持有意义的中文段落以测试可信结构切分和逐批写入。'.repeat(120)+'\n\n').join('');

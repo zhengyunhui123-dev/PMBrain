@@ -169,7 +169,9 @@ export class ProductTaskRuntime {
         const parent = await this.queue.getJob(sessionId);
         if (parent?.queue !== PRODUCT_TASK_QUEUE || parent.status !== 'waiting-children') throw new Error('同步会话已停止，文件尚未开始');
         this.scheduleSessionRefresh(sessionId, ((context.data.task as ProductTask).input as SyncFileInput).relativePath);
-        return await withDatabasePriority(2, () => this.execute(context));
+        const parentTask = parent.data.task as ProductTask;
+        const quickOwner = parent.data.kind === 'dream_quick' || (parentTask?.type === 'dream' && parentTask.input.preset === 'quick') ? sessionId : undefined;
+        return await withDatabasePriority(2, () => this.execute(context, quickOwner));
       } catch (error) {
         if (this.stopIntents.has(sessionId) || this.recoveringOwner) throw error;
         await this.fileQueue.pause(sessionId);
@@ -754,6 +756,16 @@ export class ProductTaskRuntime {
         await this.engine.executeRaw(`UPDATE minion_jobs SET data = data || ($2::jsonb - 'relations' - 'gitFiles' - 'gitResults' - 'taskBudget') WHERE id = $1`, [jobId, { ...record!.data, task }]);
       }
       await this.engine.executeRaw(`UPDATE minion_jobs SET status = 'paused', result = NULL WHERE queue = $1 AND (data->>'sessionId')::bigint = $2 AND result->>'status' IN ('failed','error','partial')`, [SYNC_FILE_QUEUE, jobId]);
+      const stoppedChildren = run.kind === 'dream_quick' || task.input.preset === 'quick' ? [...this.stopIntents].filter(childId => childId !== jobId) : [];
+      if (stoppedChildren.length) {
+        const children = await this.engine.executeRaw<{id:number}>(`SELECT id FROM minion_jobs WHERE queue=$1 AND (data->>'sessionId')::bigint=$2
+          AND id=ANY($3::bigint[]) AND status IN ('paused','dead','failed') AND data->>'superseded' IS DISTINCT FROM 'true'`, [SYNC_FILE_QUEUE, jobId, stoppedChildren]);
+        for (const child of children) {
+          await this.stoppingSessions.get(child.id);
+          await this.executions.get(child.id)?.done;
+          await this.clearStopIntent(child.id);
+        }
+      }
       await this.clearStopIntent(jobId);
       await this.fileQueue.resume(jobId);
       return this.getRun(id);
@@ -779,7 +791,7 @@ export class ProductTaskRuntime {
     throw new Error('文件任务请通过快速维护继续');
   }
 
-  private async execute(context: MinionJobContext): Promise<unknown> {
+  private async execute(context: MinionJobContext, quickTimeoutOwner?: number): Promise<unknown> {
     this.checkMemory();
     if(this.failure)throw this.failure;
     if (this.stopped || this.paused) throw new Error('后台任务执行器已停止，任务未开始，请稍后重试');
@@ -1089,9 +1101,10 @@ export class ProductTaskRuntime {
             if (!rows.length) throw new Error('维护任务已停止或租约失效');
             return null;
           }
+          const timeoutOwner = quickTimeoutOwner ?? context.id;
           return withDatabaseRequest({ taskId: context.id, token: record.lock_token!, signal: gitController.signal,
             stage: activity?.stage ?? adapter.view.stage, file: activity?.path ?? adapter.view.file ?? undefined,
-            onTimeout: error => { withoutDatabaseRequest(() => { void this.requestCancel(`task-${context.id}`, error.message).catch(reason => console.error('[tasks] database timeout:', reason)); }); },
+            onTimeout: error => { withoutDatabaseRequest(() => { void this.requestCancel(`task-${timeoutOwner}`, error.message).catch(reason => console.error('[tasks] database timeout:', reason)); }); },
           }, () => host.dispatch(message));
         };
         void withDatabasePriority(['import','sync-file'].includes(structuredTask.type) ? 2 : 3, dispatch).then(value => {
