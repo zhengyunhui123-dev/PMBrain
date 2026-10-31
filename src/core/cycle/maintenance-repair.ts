@@ -232,8 +232,8 @@ interface RepairRow {
   source_path: string | null;
 }
 
-async function loadBatch(engine: BrainEngine, sourceId: string | undefined, cursorKey: string, predicate: string): Promise<{ rows: RepairRow[]; cursor: number }> {
-  const stored = Number(await engine.getConfig(cursorKey));
+async function loadBatch(engine: BrainEngine, sourceId: string | undefined, cursorKey: string, predicate: string, slugs?: string[]): Promise<{ rows: RepairRow[]; cursor: number }> {
+  const stored = slugs ? 0 : Number(await engine.getConfig(cursorKey));
   const cursor = Number.isFinite(stored) && stored > 0 ? stored : 0;
   const rows = await engine.executeRaw<RepairRow>(
     `SELECT id, source_id, slug, type, title, compiled_truth, timeline, frontmatter, content_hash, source_path
@@ -241,10 +241,11 @@ async function loadBatch(engine: BrainEngine, sourceId: string | undefined, curs
       WHERE deleted_at IS NULL
         AND id > $1
         AND ($2::text IS NULL OR source_id = $2)
+        AND ($3::text[] IS NULL OR slug = ANY($3))
         AND ${predicate}
       ORDER BY id
-      LIMIT ${BATCH}`,
-    [cursor, sourceId ?? null],
+      LIMIT ${slugs ? Math.max(1, slugs.length) : BATCH}`,
+    [cursor, sourceId ?? null, slugs ?? null],
   );
   return { rows, cursor };
 }
@@ -280,7 +281,7 @@ async function writePage(engine: BrainEngine, row: RepairRow, compiledTruth: str
 
 export async function runPhaseFenceRepair(
   engine: BrainEngine,
-  opts: { dryRun?: boolean; sourceId?: string } = {},
+  opts: { dryRun?: boolean; sourceId?: string; slugs?: string[] } = {},
 ): Promise<RepairPhaseResult> {
   const started = Date.now();
   try {
@@ -292,6 +293,7 @@ export async function runPhaseFenceRepair(
       opts.sourceId,
       'fences.repair.cursor_id',
       `(compiled_truth LIKE '%gbrain:facts:%' OR compiled_truth LIKE '%gbrain:takes:%')`,
+      opts.slugs,
     );
     let merged = 0;
     let closed = 0;
@@ -317,7 +319,7 @@ export async function runPhaseFenceRepair(
       }
       if (await writePage(engine, row, repaired.body, frontmatterOf(row.frontmatter))) written += 1;
     }
-    await advance(engine, 'fences.repair.cursor_id', rows, opts.dryRun === true);
+    if (!opts.slugs) await advance(engine, 'fences.repair.cursor_id', rows, opts.dryRun === true);
     const status = refused > 0 ? 'warn' : rows.length === 0 ? 'skipped' : 'ok';
     return {
       phase: 'fence_repair',
@@ -339,7 +341,7 @@ export async function runPhaseFenceRepair(
 
 export async function runPhaseContentRepair(
   engine: BrainEngine,
-  opts: { dryRun?: boolean; sourceId?: string } = {},
+  opts: { dryRun?: boolean; sourceId?: string; slugs?: string[] } = {},
 ): Promise<RepairPhaseResult> {
   const started = Date.now();
   try {
@@ -351,6 +353,7 @@ export async function runPhaseContentRepair(
       opts.sourceId,
       'fences.repair.slug_cursor_id',
       `frontmatter ? 'slug'`,
+      opts.slugs,
     );
     let removed = 0;
     let fileBacked = 0;
@@ -373,7 +376,7 @@ export async function runPhaseContentRepair(
       if (opts.dryRun) continue;
       await writePage(engine, row, row.compiled_truth ?? '', next);
     }
-    await advance(engine, 'fences.repair.slug_cursor_id', rows, opts.dryRun === true);
+    if (!opts.slugs) await advance(engine, 'fences.repair.slug_cursor_id', rows, opts.dryRun === true);
     return {
       phase: 'content_repair',
       status: rows.length === 0 ? 'skipped' : 'ok',

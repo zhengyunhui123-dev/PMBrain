@@ -92,12 +92,12 @@ export class SyncFileQueue {
     }
     const rawManifest=await this.engine.getConfig(syncFileManifestKey(file));
     const manifest=rawManifest?JSON.parse(rawManifest) as SyncFileManifest:null;
-    if(manifest?.hash===file.hash && manifest.fingerprint===file.fingerprint && !file.options.forceRechunk){
+    if(manifest?.hash===file.hash && (manifest.fingerprint===file.fingerprint || file.compatibleFingerprints?.includes(manifest.fingerprint)) && !file.options.forceRechunk){
       const page=await this.completePage(manifest.slug,file,manifest.contentMatched===true);
       if(page?.content_hash===manifest.pageHash && (manifest.chunks!==page.chunks || manifest.chunkHash!==page.chunkHash))file.options={...file.options,forceRechunk:true};
       if(page?.content_hash===manifest.pageHash && manifest.chunks===page.chunks && manifest.chunkHash===page.chunkHash){
         await this.validate(file);
-        if(manifest.size!==file.originalSize||manifest.mtime!==file.originalMtime||manifest.chunks===undefined)await this.remember(file,{slug:manifest.slug,status:'skipped',chunks:page.chunks,pageHash:manifest.pageHash});
+        if(manifest.size!==file.originalSize||manifest.mtime!==file.originalMtime||manifest.chunks===undefined)await this.remember({...file,fingerprint:manifest.fingerprint},{slug:manifest.slug,status:'skipped',chunks:page.chunks,pageHash:manifest.pageHash});
         await this.retireUnchanged(job);
         return {slug:manifest.slug,status:'skipped',chunks:0,unchanged:true};
       }

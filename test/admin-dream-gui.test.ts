@@ -324,264 +324,94 @@ describe('Dream GUI product contract', () => {
       ['新增知识', 985],
       ['更新知识', 3],
       ['新增关联', 183],
-      ['完成向量', 12132],
     ]);
     expect(buildDreamOutcome(run).pendingMetrics.map(metric => [metric.label, metric.value])).toEqual([
       ['异常文件', 0],
-      ['待向量化', 1868],
       ['历史待补关联', 0],
     ]);
     expect(buildDreamOutcome(run).failureItems).toEqual(['更新索引：1 项模型或数据处理未成功']);
     expect(describeDreamRun(run).headline).toBe('快速维护已部分完成');
+    expect(describeDreamRun(run).diagnosis).not.toContain('待向量化');
   });
 
-  test('Quick maintenance presents five honest clickable stages with individual states and results', () => {
+  test('快速维护完成说明只涵盖本轮实际范围', () => {
+    const summary = describeDreamRun(quickRun({ status: 'ok', phases: [] }));
+    expect(summary.diagnosis).toContain('已有实体');
+    expect(summary.diagnosis).not.toContain('向量索引和异常检查已经结束');
+  });
+
+  test('快速维护只展示同步、格式整理和已有实体关联', () => {
     const run = quickRun({
       status: 'partial',
       phases: [
-        { phase: 'lint', status: 'warn', details: { pages_scanned: 2177, issues: 2777, fixed: 9 } },
-        { phase: 'backlinks', status: 'ok', details: { gaps: 3, added: 0 } },
-        {
-          phase: 'sync',
-          status: 'warn',
-          details: { added: 81, modified: 7, failedFiles: 2 },
-          pagesAffected: ['one', 'two'],
-          pagesAffectedCount: 86,
-        },
-        {
-          phase: 'extract',
-          status: 'ok',
-          details: {
-            linksCreated: 48,
-            mentionLinksCreated: 40,
-            mentionPagesProcessed: 500,
-            mentionHistoricalRemaining: 1706,
-          },
-        },
-        { phase: 'extract_facts', status: 'ok', details: { facts_upserted: 0 } },
-        { phase: 'resolve_symbol_edges', status: 'ok', details: { chunks_walked: 300, edges_resolved: 8 } },
-        { phase: 'embed', status: 'ok', details: { embedded: 420, skipped: 1200, total_chunks: 2000, pending: 380 } },
-        { phase: 'orphans', status: 'warn', details: { total_orphans: 31, total_pages: 2177 } },
+        { phase: 'sync', status: 'warn', details: { added: 81, modified: 7, failedFiles: 2 }, pagesAffectedCount: 86 },
+        { phase: 'fence_repair', status: 'ok', details: { scanned: 3 } },
+        { phase: 'content_repair', status: 'ok', details: { scanned: 2 } },
+        { phase: 'extract', status: 'ok', details: { mentionPagesProcessed: 500, mentionHistoricalRemaining: 1706 } },
       ],
-      totals: { pages_added: 81, pages_synced: 88, links_created: 56, pages_embedded: 420 },
+      totals: { pages_added: 81, links_created: 56 },
     });
-
     const stages = buildQuickMaintenanceStages(run);
     expect(stages.map(stage => [stage.title, stage.state])).toEqual([
-      ['检查知识', 'done'],
-      ['同步内容', 'partial'],
-      ['建立关联', 'done'],
-      ['更新索引', 'partial'],
-      ['完成检查', 'done'],
+      ['同步内容', 'partial'], ['整理格式', 'done'], ['建立关联', 'partial'],
     ]);
     expect(stages[0]?.results).toEqual([
-      { label: '扫描页面', value: 2177 },
-      { label: '发现问题', value: 2780 },
-      { label: '自动修复', value: 9 },
+      { label: '新增内容', value: 81 }, { label: '更新内容', value: 7 }, { label: '异常文件', value: 2 },
     ]);
     expect(stages[1]?.results).toEqual([
-      { label: '新增内容', value: 81 },
-      { label: '更新内容', value: 7 },
-      { label: '异常文件', value: 2 },
+      { label: '检查事实栏', value: 3 }, { label: '检查页面标记', value: 2 },
     ]);
     expect(stages[2]?.results).toEqual([
-      { label: '新增关联', value: 56 },
-      { label: '扫描历史页面', value: 414 },
-      { label: '历史待补关联', value: 1706 },
+      { label: '新增关联', value: 56 }, { label: '扫描历史页面', value: 414 }, { label: '历史待补关联', value: 1706 },
     ]);
-    expect(stages[3]?.results).toEqual([
-      { label: '本次完成向量', value: 420 },
-      { label: '待向量化', value: 380 },
-    ]);
-    expect(stages[4]?.results).toEqual([
-      { label: '孤立知识', value: 31 },
-      { label: '整体状态', value: '部分完成' },
-    ]);
-    expect(dream).toContain('未开始');
-    expect(dream).toContain('进行中');
-    expect(dream).toContain('已完成');
-    expect(dream).toContain('部分完成');
-    expect(dream).toContain('异常');
+    expect(dream).toContain('仅关联已有实体；新实体建档和向量化不属于本次维护。');
   });
 
-  test('Quick maintenance marks earlier stages completed while a later stage is running', () => {
-    const run: ConsoleRun = {
-      ...quickRun({}, 'running'),
-      stdout: [
-        '[cycle.lint] start',
-        '[cycle.lint] done',
-        '[cycle.backlinks] start',
-        '[cycle.backlinks] done',
-        '[cycle.sync] start',
-        '[cycle.sync] done',
-        '[cycle.extract] start',
-        '[cycle.extract] done',
-        '[cycle.extract_facts] start',
-        '[cycle.extract_facts] done',
-        '[cycle.resolve_symbol_edges] start',
-        '[cycle.resolve_symbol_edges] done',
-        '[cycle.embed] start',
-      ].join('\n'),
-    };
-
-    expect(buildQuickMaintenanceStages(run).map(stage => stage.state)).toEqual([
-      'done',
-      'done',
-      'done',
-      'active',
-      'idle',
-    ]);
+  test('快速维护在关联阶段运行时显示前面步骤已完成', () => {
+    const run: ConsoleRun = { ...quickRun({}, 'running'), stdout: [
+      '[cycle.sync] start', '[cycle.sync] done', '[cycle.fence_repair] start', '[cycle.fence_repair] done',
+      '[cycle.content_repair] start', '[cycle.content_repair] done', '[cycle.extract] start',
+    ].join('\n') };
+    expect(buildQuickMaintenanceStages(run).map(stage => stage.state)).toEqual(['done', 'done', 'active']);
   });
 
-  test('Quick maintenance resets the five-step track when all-sources advances to a new Source', () => {
-    const run: ConsoleRun = {
-      ...quickRun({}, 'running'),
-      stderr: [
-        '[quick-maintenance] Source source-a start (1/2)',
-        '[cycle.lint] start',
-        '[cycle.lint] done',
-        '[cycle.backlinks] start',
-        '[cycle.backlinks] done',
-        '[cycle.sync] start',
-        '[cycle.sync] done',
-        '[cycle.extract] start',
-        '[cycle.extract] done',
-        '[cycle.extract_facts] start',
-        '[cycle.extract_facts] done',
-        '[cycle.resolve_symbol_edges] start',
-        '[cycle.resolve_symbol_edges] done',
-        '[cycle.embed] start',
-        '[cycle.embed] done',
-        '[cycle.orphans] start',
-        '[cycle.orphans] done',
-        '[quick-maintenance] Source source-a ok',
-        '[quick-maintenance] Source source-b start (2/2)',
-        '[cycle.lint] start',
-      ].join('\n'),
-    };
-
-    expect(buildQuickMaintenanceStages(run).map(stage => stage.state)).toEqual([
-      'active',
-      'idle',
-      'idle',
-      'idle',
-      'idle',
-    ]);
+  test('多 Source 切换后重新显示本 Source 的同步进度', () => {
+    const run: ConsoleRun = { ...quickRun({}, 'running'), stderr: [
+      '[quick-maintenance] Source source-a start (1/2)', '[cycle.sync] start', '[cycle.sync] done',
+      '[cycle.extract] start', '[cycle.extract] done', '[quick-maintenance] Source source-a ok',
+      '[quick-maintenance] Source source-b start (2/2)', '[cycle.sync] start',
+    ].join('\n') };
+    expect(buildQuickMaintenanceStages(run).map(stage => stage.state)).toEqual(['active', 'idle', 'idle']);
     expect(quickMaintenanceRunSource(run)).toEqual({ id: 'source-b', completed: 1, index: 2, total: 2 });
   });
 
-  test('Quick maintenance only checks prior stages inside the current Source cycle', () => {
-    const run: ConsoleRun = {
-      ...quickRun({}, 'running'),
-      stderr: [
-        '[quick-maintenance] Source source-a start',
-        '[cycle.orphans] start',
-        '[cycle.orphans] done',
-        '[quick-maintenance] Source source-a ok',
-        '[quick-maintenance] Source source-b start',
-        '[cycle.lint] start',
-        '[cycle.lint] done',
-        '[cycle.backlinks] start',
-        '[cycle.backlinks] done',
-        '[cycle.sync] start',
-        '[cycle.sync] done',
-        '[cycle.extract] start',
-        '[cycle.extract] done',
-        '[cycle.extract_facts] start',
-        '[cycle.extract_facts] done',
-        '[cycle.resolve_symbol_edges] start',
-        '[cycle.resolve_symbol_edges] done',
-        '[cycle.embed] start',
-      ].join('\n'),
-    };
-
-    expect(buildQuickMaintenanceStages(run).map(stage => stage.state)).toEqual([
-      'done',
-      'done',
-      'done',
-      'active',
-      'idle',
-    ]);
+  test('快速维护识别 JSON 进度和启动时的第一个步骤', () => {
+    const run: ConsoleRun = { ...quickRun({}, 'running'), stdout: '', stderr: [
+      '{"event":"start","phase":"cycle.sync"}', '{"event":"finish","phase":"cycle.sync"}',
+      '{"event":"start","phase":"cycle.fence_repair"}',
+    ].join('\n') };
+    expect(buildQuickMaintenanceStages(run).map(stage => stage.state)).toEqual(['done', 'active', 'idle']);
+    expect(buildQuickMaintenanceStages({ ...run, stderr: '' }).map(stage => stage.state)).toEqual(['active', 'idle', 'idle']);
   });
 
-  test('Quick maintenance reads --progress-json events so running stages are not stuck idle', () => {
-    const run: ConsoleRun = {
-      ...quickRun({}, 'running'),
-      stdout: '',
-      stderr: [
-        '{"event":"start","phase":"cycle.lint","ts":"2026-08-22T13:32:00.000Z"}',
-        '{"event":"tick","phase":"cycle.lint","done":18,"elapsed_ms":1200,"ts":"2026-08-22T13:32:01.000Z"}',
-      ].join('\n'),
-    };
-
-    expect(buildQuickMaintenanceStages(run).map(stage => stage.state)).toEqual([
-      'active',
-      'idle',
-      'idle',
-      'idle',
-      'idle',
-    ]);
-  });
-
-  test('Quick maintenance JSON finish/start advances the five-step track', () => {
-    const run: ConsoleRun = {
-      ...quickRun({}, 'running'),
-      stdout: '',
-      stderr: [
-        '{"event":"start","phase":"cycle.lint","ts":"2026-08-22T13:32:00.000Z"}',
-        '{"event":"finish","phase":"cycle.lint","elapsed_ms":800,"ts":"2026-08-22T13:32:01.000Z"}',
-        '{"event":"start","phase":"cycle.backlinks","ts":"2026-08-22T13:32:01.000Z"}',
-        '{"event":"finish","phase":"cycle.backlinks","elapsed_ms":200,"ts":"2026-08-22T13:32:01.200Z"}',
-        '{"event":"start","phase":"cycle.sync","ts":"2026-08-22T13:32:01.200Z"}',
-        '{"event":"tick","phase":"cycle.sync.files","done":2,"ts":"2026-08-22T13:32:02.000Z"}',
-      ].join('\n'),
-    };
-
-    expect(buildQuickMaintenanceStages(run).map(stage => stage.state)).toEqual([
-      'done',
-      'active',
-      'idle',
-      'idle',
-      'idle',
-    ]);
-  });
-
-  test('Quick maintenance shows the first stage as active while the child has not emitted phase logs yet', () => {
-    const run: ConsoleRun = {
-      ...quickRun({}, 'running'),
-      stdout: '',
-      stderr: '',
-    };
-
-    expect(buildQuickMaintenanceStages(run).map(stage => stage.state)).toEqual([
-      'active',
-      'idle',
-      'idle',
-      'idle',
-      'idle',
-    ]);
-  });
-
-  test('Quick pending work is shown separately from real failures', () => {
-    const run = quickRun({
-      status: 'partial',
-      phases: [
-        { phase: 'sync', status: 'warn', details: { added: 9, modified: 2, failedFiles: 1 } },
-        { phase: 'extract', status: 'ok', details: { linksCreated: 4, mentionHistoricalRemaining: 1706 } },
-        { phase: 'embed', status: 'ok', details: { embedded: 20, pending: 3563 } },
-      ],
-      totals: { pages_added: 9, links_created: 4, pages_embedded: 20 },
-    });
+  test('快速维护待补关联单独展示，旧向量状态不会变成新维护的结束条件', () => {
+    const run = quickRun({ status: 'partial', phases: [
+      { phase: 'sync', status: 'warn', details: { added: 9, modified: 2, failedFiles: 1 } },
+      { phase: 'extract', status: 'ok', details: { linksCreated: 4, mentionHistoricalRemaining: 1706 } },
+      { phase: 'embed', status: 'ok', details: { embedded: 20, pending: 3563 } },
+    ], totals: { pages_added: 9, links_created: 4 } });
     const outcome = buildDreamOutcome(run);
-    expect(outcome.metrics.map(metric => metric.label)).toEqual(['新增知识', '更新知识', '新增关联', '完成向量']);
+    expect(outcome.metrics.map(metric => metric.label)).toEqual(['新增知识', '更新知识', '新增关联']);
     expect(outcome.pendingMetrics.map(metric => [metric.label, metric.value])).toEqual([
-      ['异常文件', 1],
-      ['待向量化', 3563],
-      ['历史待补关联', 1706],
+      ['异常文件', 1], ['历史待补关联', 1706],
     ]);
     expect(outcome.failureItems).toEqual(['同步内容：1 个文件未处理成功']);
-    expect(dream).toContain('仍需处理');
-    expect(outcome.metrics.some(metric => metric.label === '未处理成功')).toBe(false);
+    const clean = quickRun({ status: 'clean', phases: [
+      { phase: 'sync', status: 'ok', details: {} },
+      { phase: 'extract', status: 'ok', details: {} },
+      { phase: 'embed', status: 'ok', details: { pending: 3563 } },
+    ], totals: {} });
+    expect(describeDreamRun(clean).headline).toBe('快速维护已完成');
   });
 
   test('proposal drain statistics are shown from the structured phase report', () => {
@@ -744,5 +574,8 @@ describe('Dream GUI product contract', () => {
       const run = {...completedRun({status:'partial',phases:[phase],totals:{links_created:8}}),kind};
       expect(buildDreamOutcome(run).failureItems).toContain('关系类型判断：native database failure');
     }
+  });
+  test('自动提及关闭时，维护结果说明关联被跳过', () => {
+    expect(phaseSummaryZh({ phase: 'extract', status: 'ok', details: { by_mention: true, by_mention_disabled: true } } as any)).toContain('自动提及匹配已关闭');
   });
 });

@@ -392,6 +392,7 @@ export interface CycleReport {
 }
 
 export interface CycleOpts {
+  quickMaintenance?: boolean;
   quickEntitiesOnly?: boolean;
   reuseDuplicateKnowledgeSources?: boolean;
   captureEntitySlugs?: string[];
@@ -1037,11 +1038,13 @@ async function runPhaseSync(
   fileRuntime?: SyncFileRuntime,
   signal?: AbortSignal,
   afterSync?: CycleOpts['afterSync'],
+  quickMaintenance?: boolean,
 ): Promise<SyncPhaseResult> {
   try {
     const { performSync } = await import('../commands/sync.ts');
     const gateway = await import('./ai/gateway.ts');
-    const documentOcr = gateway.isOcrEnabled();
+    const ocrEnabled = gateway.isOcrEnabled();
+    const documentOcr = !quickMaintenance && ocrEnabled;
     // Resolve the per-source id so sync reads source-scoped last_commit
     // instead of the global config key. The global key can drift out of
     // git history (force push, GC) causing a full reimport of all files.
@@ -1056,8 +1059,9 @@ async function runPhaseSync(
                                            // If extract isn't scheduled (e.g. `gbrain dream --phase sync`),
                                            // sync's inline extract still runs to preserve prior behavior.
       includeOffice,
-      includeImages: documentOcr,
+      includeImages: ocrEnabled,
       documentOcr,
+      excludePathPattern: quickMaintenance ? (await import('./pmbrain-adapters/quick-maintenance-policy.ts')).QUICK_MAINTENANCE_EXCLUDED_PATH : undefined,
       concurrency,
       fileRuntime,
       workingTree: fileRuntime ? fileRuntime.workingTree ?? true : undefined,
@@ -1877,6 +1881,7 @@ export async function runCycle(
           opts.syncFileRuntime,
           opts.signal,
           opts.afterSync,
+          opts.quickMaintenance,
         ));
         result.duration_ms = duration_ms;
         // Capture changed slugs for incremental extract.
@@ -1903,7 +1908,7 @@ export async function runCycle(
         progress.start(`cycle.${repairPhase}`);
         const repair = await import('./cycle/maintenance-repair.ts');
         const runRepair = repairPhase === 'fence_repair' ? repair.runPhaseFenceRepair : repair.runPhaseContentRepair;
-        const { result, duration_ms } = await timePhase(() => runRepair(engine, { dryRun, sourceId: cycleSourceId }));
+        const { result, duration_ms } = await timePhase(() => runRepair(engine, { dryRun, sourceId: cycleSourceId, ...(opts.quickMaintenance ? { slugs: syncPagesAffected ?? [] } : {}) }));
         result.duration_ms = duration_ms;
         phaseResults.push(result);
         progress.finish();
@@ -1960,7 +1965,7 @@ export async function runCycle(
       prioritySlugs?: string[],
       limits?: { maxHistoricalPages?: number; nerSlugs?: string[] },
     ) => {
-      const relationNerSlugs=new Set([...(prioritySlugs ?? []),...(limits?.nerSlugs ?? [])]);
+      const relationNerSlugs=new Set([...(opts.quickMaintenance ? [] : prioritySlugs ?? []),...(limits?.nerSlugs ?? [])]);
       checkAborted(opts.signal);
       if (opts.includeHistoricalMarkdownCatchUp && !dryRun) {
         try {
@@ -1970,9 +1975,11 @@ export async function runCycle(
             dryRun: false,
             jsonMode: false,
             includeFrontmatter: true,
-            catalogAware: true,
+            catalogAware: !opts.quickMaintenance,
+            excludePathPattern: opts.quickMaintenance ? (await import('./pmbrain-adapters/quick-maintenance-policy.ts')).QUICK_MAINTENANCE_EXCLUDED_PATH : undefined,
             sourceIdFilter: filesystemSourceId,
-            catchUp: opts.markdownCatchUpMaxHistorical == null,
+            catchUp: !opts.quickMaintenance && opts.markdownCatchUpMaxHistorical == null,
+            timeBudgetMs: opts.quickMaintenance ? opts.byMentionTimeBudgetMs : undefined,
             quiet: !getCliOptions().progressJson,
             signal: opts.signal,
             yieldDuringPhase: buildYieldDuringPhase(lock, opts.yieldDuringPhase),
@@ -1998,6 +2005,10 @@ export async function runCycle(
             `${result.summary}; historical relations +${catchUp.linksCreated} link(s) ` +
             `from ${catchUp.pagesProcessed} page(s) (${catchUp.staleRemaining} stale remaining, ` +
             `${catchUp.unresolvedReferences + catchUp.skippedMissingTarget + catchUp.skippedCrossSource} unresolved/skipped)`;
+          if (opts.quickMaintenance && catchUp.staleRemaining > 0) {
+            result.status = result.status === 'fail' ? 'fail' : 'warn';
+            result.details.remaining = catchUp.staleRemaining;
+          }
           result.duration_ms += Math.round(performance.now() - catchUpStart);
           if (result.status === 'skipped' && catchUp.pagesProcessed > 0) {
             result.status = 'ok';
@@ -2025,6 +2036,9 @@ export async function runCycle(
           const mentionStart = performance.now();
           const mention = await runByMentionCore(engine, {
             prioritySlugs,
+            singlePass: opts.quickMaintenance,
+            quickEntityTypes: opts.quickMaintenance,
+            excludePathPattern: opts.quickMaintenance ? (await import('./pmbrain-adapters/quick-maintenance-policy.ts')).QUICK_MAINTENANCE_EXCLUDED_PATH : undefined,
             maxHistoricalPages: limits && Object.prototype.hasOwnProperty.call(limits, 'maxHistoricalPages')
               ? limits.maxHistoricalPages
               : opts.byMentionMaxHistorical,
@@ -2049,11 +2063,16 @@ export async function runCycle(
             mentionTimeBudgetReached: mention.timeBudgetReached,
             mentionTimeBudgetMs: opts.byMentionTimeBudgetMs ?? null,
             mentionAmbiguousNames: mention.ambiguousNames,
+            ...(opts.quickMaintenance && mention.disabled ? { by_mention_disabled: true } : {}),
             by_mention: true,
           };
           result.summary =
             `${result.summary}; by-mention +${mention.created}/-${mention.removed} link(s) ` +
             `(${mention.pages} page(s), ${mention.historicalRemaining} historical remaining)`;
+          if (opts.quickMaintenance && mention.historicalRemaining > 0) {
+            result.status = result.status === 'fail' ? 'fail' : 'warn';
+            result.details.remaining = Math.max(Number(result.details.remaining ?? 0), mention.historicalRemaining);
+          }
           result.duration_ms += mentionMs;
           if (result.status === 'skipped' && mention.pages > 0) {
             result.status = 'ok';
@@ -2080,16 +2099,21 @@ export async function runCycle(
 
       if (result.error && isGinRepairAbortText(result.error.message)) return;
       if (opts.includeNer && !dryRun) {
+        if (opts.quickMaintenance && (relationNerSlugs.size === 0 || result.details.by_mention_disabled === true)) return;
         const started = performance.now();
         try {
           const { extractNerLinks } = await import('./extract-ner.ts');
+          const gazetteer = opts.quickMaintenance ? await (await import('./pmbrain-adapters/quick-maintenance-policy.ts')).buildQuickMaintenanceGazetteer(engine) : undefined;
           const ner = await extractNerLinks(engine, {
             sourceIdFilter: filesystemSourceId, signal: opts.signal,
             yieldDuringPhase: buildYieldDuringPhase(lock, opts.yieldDuringPhase),
             slugs: [...relationNerSlugs],
+            excludePathPattern: opts.quickMaintenance ? (await import('./pmbrain-adapters/quick-maintenance-policy.ts')).QUICK_MAINTENANCE_EXCLUDED_PATH : undefined,
+            gazetteer,
+            includeProjectTargets: opts.quickMaintenance,
           });
           const { runMentionPass }=await import('./mentions/pass.ts');
-          const settled=await runMentionPass(engine,{sourceId:filesystemSourceId,slugs:[...relationNerSlugs],signal:opts.signal});
+          const settled=await runMentionPass(engine,{sourceId:filesystemSourceId,slugs:[...relationNerSlugs],signal:opts.signal,quickEntityTypes:opts.quickMaintenance,excludePathPattern:opts.quickMaintenance ? (await import('./pmbrain-adapters/quick-maintenance-policy.ts')).QUICK_MAINTENANCE_EXCLUDED_PATH : undefined});
           if(settled.state==='failed')throw new Error(settled.error);
           result.details = {
             ...result.details,
@@ -2135,7 +2159,11 @@ export async function runCycle(
         // is undefined → extract falls back to full walk (safe default).
         let result: PhaseResult;
         let progressStarted = false;
-        if (brainDir === null) {
+        if (opts.quickMaintenance) {
+          progress.start('cycle.extract');
+          progressStarted = true;
+          result = { phase: 'extract', status: 'ok', duration_ms: 0, summary: '增量检查已有知识关联', details: { incremental: true } };
+        } else if (brainDir === null) {
           result = skipNoBrainDir('extract');
           result.details = { ...result.details, filesystem_skipped: true };
         } else {

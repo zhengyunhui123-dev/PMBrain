@@ -12,7 +12,7 @@ import { dialogBackdropClick } from '../lib/dialog-backdrop';
 
 const activeTask = (run: ConsoleRun) => run.status === 'running' || run.status === 'queued';
 const selectedTaskId = () => new URLSearchParams(window.location.hash.split('?')[1]).get('run') ?? '';
-const description = (run: ConsoleRun) => run.kind.includes('quick') ? '同步资料，建立关联并更新搜索索引' : run.kind.includes('full') || run.kind.includes('cycle') ? '理解知识，提炼内容并建立联系' : '整理知识库中的内容';
+const description = (run: ConsoleRun) => run.kind.includes('quick') ? '同步变化资料并关联已有实体；不进行新实体建档、图片识别或向量化' : run.kind.includes('full') || run.kind.includes('cycle') ? '理解知识，提炼内容并建立联系' : '整理知识库中的内容';
 
 function MaintenanceTaskDetail({ run, onClose, onAction, onStop, busy, error }: { run: ConsoleRun; onClose: () => void; onAction: (run: ConsoleRun, retry: boolean) => void; onStop: (run: ConsoleRun) => void; busy: boolean; error: string }) {
   const dialog = useRef<HTMLDialogElement>(null);
@@ -113,7 +113,7 @@ export function MaintenanceTasksPage() {
   };
   const act = async (run: ConsoleRun, retry: boolean) => {
     if (acting.current) return;
-    if (retry && !window.confirm(taskUsesFileQueue(run.kind) ? '将保留已完成资料，继续未完成的同步和知识增强。中断的模型请求可能已产生费用，继续吗？' : '将重新执行整理任务，中断的模型请求可能已产生费用，继续吗？')) return;
+    if (retry && !window.confirm(run.kind.includes('quick') ? '将保留已完成资料，继续未完成的同步与关联。继续吗？' : taskUsesFileQueue(run.kind) ? '将保留已完成资料，继续未完成的同步和知识增强。中断的模型请求可能已产生费用，继续吗？' : '将重新执行整理任务，中断的模型请求可能已产生费用，继续吗？')) return;
     acting.current = true; setBusyId(run.id); setError('');
     try {
       let id = run.id;
@@ -129,7 +129,7 @@ export function MaintenanceTasksPage() {
   const requestStop = (run: ConsoleRun) => { setError(''); setStopRun(run); };
   const visible = runs.filter(run => filter === 'all' || (filter === 'active' ? activeTask(run) : filter === 'unfinished' ? ['failed', 'cancelled'].includes(run.status) || taskCanRetry(run) || (taskRoundCompleted(run) && taskHasRemaining(run)) : run.status === filter));
   return <div className="pm-page maintenance-tasks-page">
-    <header className="maintenance-page-head"><div><h1>知识整理</h1><p>查看整理任务、进度和结果。</p></div><div className="maintenance-launch-actions"><button type="button" disabled={Boolean(starting)} onClick={() => void start('quick')}>{starting === 'quick' ? <LoaderCircle size={16} /> : <PenLine size={16} />}快速维护</button><button type="button" className="maintenance-primary" disabled={Boolean(starting)} onClick={() => void start('full')}>{starting === 'full' ? <LoaderCircle size={16} /> : <Sparkles size={16} />}AI 深度整理</button></div></header>
+    <header className="maintenance-page-head"><div><h1>知识整理</h1><p>查看整理任务、进度和结果。快速维护只关联已有实体；新实体建档和向量化留待深度整理。</p></div><div className="maintenance-launch-actions"><button type="button" disabled={Boolean(starting)} onClick={() => void start('quick')}>{starting === 'quick' ? <LoaderCircle size={16} /> : <PenLine size={16} />}快速维护</button><button type="button" className="maintenance-primary" disabled={Boolean(starting)} onClick={() => void start('full')}>{starting === 'full' ? <LoaderCircle size={16} /> : <Sparkles size={16} />}AI 深度整理</button></div></header>
     <div className="maintenance-automation"><span className={`maintenance-automation-icon ${schedule?.enabled ? 'enabled' : ''}`}><Clock3 size={18} /></span><span>{schedule ? <><strong>自动整理{schedule.enabled ? '已开启' : '已关闭'}</strong><small>{schedule.enabled ? `每天 ${schedule.time} · ${schedule.timeZone}` : '可在整理设置中安排自动运行'}</small></> : <strong>{scheduleError || '正在读取自动整理设置…'}</strong>}</span><button type="button" onClick={() => { window.location.hash = 'settings-dream'; }}><Settings size={15} />整理设置</button></div>
     {(error || tasks.error) && <p className="product-error" role="alert">{error || tasks.error}</p>}
     <div className="maintenance-list-toolbar"><h2>整理记录 <span>{visible.length} 条</span></h2><div><select aria-label="整理任务状态" value={filter} onChange={event => setFilter(event.target.value)}><option value="all">全部状态</option><option value="active">处理中</option><option value="completed">已完成</option><option value="unfinished">未完成</option></select><button type="button" onClick={() => { window.location.hash = 'tasks'; }}>全部后台任务 <ArrowRight size={15} /></button></div></div>
@@ -138,7 +138,7 @@ export function MaintenanceTasksPage() {
         {starting && <tr className="maintenance-submitting"><td><span className="maintenance-run-title">{starting === 'quick' ? '快速维护' : 'AI 深度整理'}</span></td><td><span role="status"><LoaderCircle size={16} />正在创建任务…</span></td><td>准备处理</td><td>—</td><td /></tr>}
         {visible.map(run => {
           const name = run.product?.name ?? taskName(run.kind);
-          const state = run.status;
+          const state = run.kind.includes('quick') && taskStatus(run) === '部分完成' ? 'partial' : run.status;
           const percent=taskPercent(run);
           return <tr key={run.id} className="maintenance-run-row" tabIndex={0} aria-label={`查看${name}任务`} onClick={() => select(run)} onKeyDown={event => { if (event.target === event.currentTarget && ['Enter', ' '].includes(event.key)) { event.preventDefault(); select(run); } }}>
             <td><div className="maintenance-run-name"><span className="maintenance-run-icon">{run.kind.includes('quick') ? <PenLine size={18} /> : <Sparkles size={18} />}</span><div><b>{name}</b><small>{run.trigger === 'scheduled' ? '自动整理' : '手动整理'}{run.product?.scope?.name ? ` · ${run.product.scope.name}` : ''}</small></div></div></td>

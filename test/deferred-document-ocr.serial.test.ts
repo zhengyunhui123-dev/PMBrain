@@ -58,6 +58,36 @@ async function vectorConfiguration(){
 async function finish(id:number){const until=Date.now()+60000;let last:any;while(Date.now()<until){last=await runtime.getRun('task-'+id);if(last&&!['running','queued'].includes(last.status))return last;await Bun.sleep(60);}throw Error('OCR task timeout '+JSON.stringify({run:last,rows:await engine.executeRaw('SELECT id,name,queue,status,attempts_started,progress,error_text FROM minion_jobs')}));}
 const options={sourceId:'default',noEmbed:true,documentOcr:true,deferDocumentOcr:true};
 
+test('快速维护不发起识图，保留旧资料已识别的图片文字',async()=>{
+  const folder=join(root,'quick-no-model');mkdirSync(folder);
+  await engine.executeRaw("INSERT INTO sources(id,name,local_path,config) VALUES('quick-no-model','快速维护识图边界',$1,'{\"includeOffice\":true}'::jsonb)",[folder]);
+  const original=await word('quick-no-model-input','需要保留的正文。'),path=join(folder,'material.docx');writeFileSync(path,readFileSync(original));unlinkSync(original);
+  cpu=0.95;const imported=await importOfficeFile(engine,path,'material.docx',{...options,sourceId:'quick-no-model'});
+  cpu=0.1;expect((await finish(imported.ocrTaskId!)).status).toBe('completed');
+  const beforeBody=(await engine.getPage('material.docx',{sourceId:'quick-no-model'}))!.compiled_truth;
+  expect(beforeBody).toContain('DeferredEvidence');
+  const before=[calls,embeddingCalls,captureCalls];cpu=0.95;
+  const task=await runtime.submitDream({preset:'quick',sourceId:'quick-no-model'});
+  const done=await finish(Number(task.id.slice(5)));
+  expect(done.status,JSON.stringify(done.result)).toBe('completed');
+  expect([calls,embeddingCalls,captureCalls]).toEqual(before);
+  expect((await engine.getPage('material.docx',{sourceId:'quick-no-model'}))!.compiled_truth).toBe(beforeBody);
+  const revised=await word('quick-no-model-input','正文已经更新，图片没有变化。');writeFileSync(path,readFileSync(revised));unlinkSync(revised);
+  const changed=await runtime.submitDream({preset:'quick',sourceId:'quick-no-model'});
+  const changedDone=await finish(Number(changed.id.slice(5)));
+  expect(changedDone.status,JSON.stringify(changedDone.result)).toBe('completed');
+  const changedBody=(await engine.getPage('material.docx',{sourceId:'quick-no-model'}))!.compiled_truth;
+  expect(changedBody).toContain('正文已经更新');
+  expect(changedBody).toContain('DeferredEvidence');
+  expect([calls,embeddingCalls,captureCalls]).toEqual(before);
+  const canvas=createCanvas(40,40);canvas.getContext('2d').fillRect(0,0,40,40);
+  writeFileSync(join(folder,'new-image.png'),canvas.toBuffer('image/png'));
+  const imageTask=await runtime.submitDream({preset:'quick',sourceId:'quick-no-model'});
+  expect((await finish(Number(imageTask.id.slice(5)))).status).toBe('completed');
+  expect(await engine.getPage('new-image.png',{sourceId:'quick-no-model'})).not.toBeNull();
+  expect([calls,embeddingCalls,captureCalls]).toEqual(before);
+},180000);
+
 test('可直接读取的 PDF 保存文字，不创建识图任务',async()=>{
   const path=textPdf('native-text'),before=calls,original=readFileSync(path),result=await importOfficeFile(engine,path,'native-text.pdf',options as any);
   expect(result.ocrPending??0).toBe(0);expect(result.ocrTaskId).toBeUndefined();expect(calls).toBe(before);
@@ -228,22 +258,22 @@ test('产品导入先完成、慢识图不阻塞下一份资料，全部识图�
   expect(calls-before).toBe(3);expect(embeddingCalls).toBeGreaterThan(vectorBefore);const sequence=events.slice(eventStart);expect(sequence.indexOf('embed')).toBeGreaterThan(sequence.lastIndexOf('ocr'));expect((await runtime.getRun(task.id))!.result).toMatchObject({ocrPending:0,ocrFailed:0});
 },180000);
 
-test('同资料导入、同步、快速维护共用待识图任务，未补齐前不提取知识或向量化',async()=>{
+test('已有后台识图不阻塞快速维护，维护不发起实体提炼或向量化',async()=>{
   cpu=0.95;const chain=join(root,'chain');mkdirSync(chain);await engine.executeRaw("UPDATE sources SET config=config||'{\"syncEnabled\":false}'::jsonb WHERE id='default'");await engine.executeRaw("INSERT INTO sources(id,name,local_path,config) VALUES('chain','完整链路',$1,'{\"syncEnabled\":true,\"includeOffice\":true}'::jsonb)",[chain]);
   const original=await word('chain-input','保留这一份足够长的原始文字，图片文字补齐前不能进入后续提炼与向量化。'.repeat(8)),path=join(chain,'chain.docx');writeFileSync(path,readFileSync(original));unlinkSync(original);
   await engine.executeRaw("DELETE FROM config WHERE key='dream.entity_capture.pending.default'");await engine.setConfig('dream.entity_capture.enabled','true');await engine.setConfig('pricing.overrides',JSON.stringify({'custom-openai:isolated-office-ocr':{input:1,output:1},'custom-openai:deferred-embed':{input:1,output:0}}));
-  const before=calls,vectorBefore=embeddingCalls,captureBefore=captureSources.filter(text=>text.includes('chain.docx')).length,offset=events.length,result=await importOfficeFile(engine,path,'chain.docx',{...options,sourceId:'chain',deferredOcrVectors:true});
+  const before=calls,vectorBefore=embeddingCalls,captureBefore=captureSources.filter(text=>text.includes('chain.docx')).length,result=await importOfficeFile(engine,path,'chain.docx',{...options,sourceId:'chain',deferredOcrVectors:false});
   const sync=await finish(Number((await runtime.submitSync()).id.slice(5)));expect(sync.status,JSON.stringify(sync.result)).toBe('completed');
-  const maintenance=await runtime.submitDream({preset:'quick',sourceId:'chain'},'scheduled');const waitUntil=Date.now()+60000;while(Date.now()<waitUntil){const current=await runtime.getRun(maintenance.id);if(current?.status==='queued'&&current.product?.stage.includes('后台识图'))break;await Bun.sleep(100);}expect((await runtime.getRun(maintenance.id))!.product!.stage,JSON.stringify(await engine.executeRaw("SELECT id,name,status,error_text,progress->'product'->>'stage' stage,data->'task'->'input'->>'phase' phase,data->'task'->'input'->>'sourceId' source,data->>'waitingForOcr' waiting FROM minion_jobs WHERE status NOT IN ('completed','cancelled','failed','dead')"))).toContain('资料已保存');
+  const maintenance=await runtime.submitDream({preset:'quick',sourceId:'chain'},'scheduled');expect((await finish(Number(maintenance.id.slice(5)))).status).toBe('completed');
   expect(calls).toBe(before);expect(embeddingCalls).toBe(vectorBefore);expect(captureSources.filter(text=>text.includes('chain.docx')).length).toBe(captureBefore);expect(await selectEntityCaptureCandidates(engine,'chain')).toHaveLength(0);
   const [queued]=await engine.executeRaw<{n:number}>("SELECT count(*)::int n FROM minion_jobs WHERE name='pmbrain-document-ocr' AND data->'task'->'input'->>'sourceId'='chain'");expect(queued.n).toBe(1);
-  cpu=0.1;expect((await finish(result.ocrTaskId!)).status).toBe('completed');expect((await finish(Number(maintenance.id.slice(5)))).status).toBe('completed');expect(calls-before).toBe(3);expect(captureSources.filter(text=>text.includes('chain.docx')).length).toBeGreaterThan(captureBefore);const sequence=events.slice(offset);expect(sequence.indexOf('chain_capture')).toBeGreaterThan(sequence.lastIndexOf('ocr'));
+  cpu=0.1;expect((await finish(result.ocrTaskId!)).status).toBe('completed');expect(calls-before).toBe(3);expect(captureSources.filter(text=>text.includes('chain.docx')).length).toBe(captureBefore);
 },180000);
 
 test('维护产生的后台识图仍计入原任务总预算，提额继续后费用和向量合并到原任务',async()=>{
   await vectorConfiguration();
   await engine.setConfig('dream.entity_capture.enabled','false');await engine.setConfig('dream.task_budget_cny','0.000000001');const folder=join(root,'budget');mkdirSync(folder);await engine.executeRaw("INSERT INTO sources(id,name,local_path,config) VALUES('ocr-budget','识图费用验收',$1,'{\"includeOffice\":true}'::jsonb)",[folder]);
-  const file=await word('budget-input');writeFileSync(join(folder,'budget.docx'),readFileSync(file));unlinkSync(file);cpu=0.1;const before=calls,vectorBefore=embeddingCalls,task=await runtime.submitDream({preset:'quick',sourceId:'ocr-budget'},'scheduled');
+  const file=await word('budget-input');writeFileSync(join(folder,'budget.docx'),readFileSync(file));unlinkSync(file);cpu=0.1;const before=calls,vectorBefore=embeddingCalls,task=await runtime.submitDream({preset:'full',sourceId:'ocr-budget'},'scheduled');
   let childId=0;const until=Date.now()+60000;while(Date.now()<until){const [child]=await engine.executeRaw<{id:number}>("SELECT id FROM minion_jobs WHERE name='pmbrain-document-ocr' AND data->'task'->'input'->'ocrOnly'->>'maintenanceOwnerId'=$1",[task.id.slice(5)]);if(child){childId=child.id;break;}await Bun.sleep(100);}expect(childId).toBeGreaterThan(0);
   const rejected=await finish(childId);expect(rejected.status).toBe('failed');expect((rejected.result as any).reason).toBe('task_budget');expect(calls).toBe(before);expect(embeddingCalls).toBe(vectorBefore);
   await engine.setConfig('dream.task_budget_cny','1');const raised=Date.now()+60000;while(Date.now()<raised){const [parent]=await engine.executeRaw<{cap:string}>("SELECT data->'taskBudget'->>'capCny' cap FROM minion_jobs WHERE id=$1",[Number(task.id.slice(5))]);if(Number(parent.cap)===1)break;await Bun.sleep(100);}
@@ -253,7 +283,7 @@ test('维护产生的后台识图仍计入原任务总预算，提额继续后�
 test('停止维护同时停止它的识图子任务，重启保持停止，继续原维护才恢复',async()=>{
   await vectorConfiguration();await engine.setConfig('dream.task_budget_cny','1');
   cpu=0.95;const folder=join(root,'owned-stop');mkdirSync(folder);await engine.executeRaw("INSERT INTO sources(id,name,local_path,config) VALUES('owned-stop','停止验收',$1,'{\"includeOffice\":true}'::jsonb)",[folder]);const file=await word('owned-stop-input');writeFileSync(join(folder,'owned.docx'),readFileSync(file));unlinkSync(file);
-  const before=calls,task=await runtime.submitDream({preset:'quick',sourceId:'owned-stop'},'scheduled');let childId=0;const until=Date.now()+60000;while(Date.now()<until){const [child]=await engine.executeRaw<{id:number}>("SELECT id FROM minion_jobs WHERE name='pmbrain-document-ocr' AND data->'task'->'input'->'ocrOnly'->>'maintenanceOwnerId'=$1",[task.id.slice(5)]);if(child){childId=child.id;break;}await Bun.sleep(100);}expect(childId).toBeGreaterThan(0);
+  const before=calls,task=await runtime.submitDream({preset:'full',sourceId:'owned-stop'},'scheduled');let childId=0;const until=Date.now()+60000;while(Date.now()<until){const [child]=await engine.executeRaw<{id:number}>("SELECT id FROM minion_jobs WHERE name='pmbrain-document-ocr' AND data->'task'->'input'->'ocrOnly'->>'maintenanceOwnerId'=$1",[task.id.slice(5)]);if(child){childId=child.id;break;}await Bun.sleep(100);}expect(childId).toBeGreaterThan(0);
   await runtime.cancel(task.id);expect((await runtime.getRun('task-'+childId))!.status).toBe('cancelled');await runtime.close();await start();cpu=0.1;await Bun.sleep(300);expect((await runtime.getRun(task.id))!.status).toBe('cancelled');expect((await runtime.getRun('task-'+childId))!.status).toBe('cancelled');expect(calls).toBe(before);
   await runtime.retry(task.id);const done=await finish(Number(task.id.slice(5)));expect(done.status,JSON.stringify(done.result)).toBe('completed');expect(calls-before).toBe(3);expect((await runtime.getRun('task-'+childId))!.status).toBe('completed');
 },180000);

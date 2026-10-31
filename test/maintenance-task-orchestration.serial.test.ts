@@ -9,6 +9,7 @@ import { ProductTaskRuntime, PRODUCT_TASK_QUEUE } from '../src/product/tasks/run
 import { MinionQueue } from '../src/core/minions/queue.ts';
 import { enqueueImportedEntityCapture } from '../src/core/pmbrain-adapters/imported-entity-capture.ts';
 import { requestImportedEntityCapture } from '../src/core/pmbrain-adapters/entity-capture-request.ts';
+import { runQuickMaintenance } from '../src/core/quick-maintenance.ts';
 import { configPath } from '../src/core/config.ts';
 import { assertSafeE2eDatabaseUrl } from './helpers/db-guard.ts';
 import { tryAcquireDbLock } from '../src/core/db-lock.ts';
@@ -16,7 +17,7 @@ import { taskRoundCompleted, taskStatus } from '../admin/src/product/task-presen
 import type { ConsoleRun } from '../shared/contracts/common.ts';
 
 let engine: BrainEngine, runtime: ProductTaskRuntime, root: string, server: ReturnType<typeof Bun.serve>;
-let calls = 0, hold = false, invalid = false, usageInput = 20, incompleteSlug = '';
+let calls = 0, embeddingCalls = 0, hold = false, invalid = false, usageInput = 20, incompleteSlug = '';
 const releases = new Set<() => void>();
 const keys = ['PMBRAIN_HOME', 'GBRAIN_HOME', 'DATABASE_URL', 'PMBRAIN_DATABASE_URL', 'GBRAIN_DATABASE_URL'];
 const original = Object.fromEntries(keys.map(key => [key, process.env[key]]));
@@ -43,7 +44,7 @@ beforeAll(async () => {
   if (databaseUrl) assertSafeE2eDatabaseUrl(databaseUrl);
   server = Bun.serve({ port: 0, async fetch(req) {
     const body = await req.json() as { input?: string | string[]; messages?: unknown[] };
-    if (new URL(req.url).pathname.endsWith('/embeddings')) return Response.json({ object: 'list', data: (Array.isArray(body.input) ? body.input : [body.input]).map((_, index) => ({ object: 'embedding', index, embedding: Array.from({ length: dimensions }, (_, i) => i === 0 ? 1 : 0) })), model: 'isolated-embedding', usage: { prompt_tokens: 2, total_tokens: 2 } });
+    if (new URL(req.url).pathname.endsWith('/embeddings')) { embeddingCalls++; return Response.json({ object: 'list', data: (Array.isArray(body.input) ? body.input : [body.input]).map((_, index) => ({ object: 'embedding', index, embedding: Array.from({ length: dimensions }, (_, i) => i === 0 ? 1 : 0) })), model: 'isolated-embedding', usage: { prompt_tokens: 2, total_tokens: 2 } }); }
     calls++;
     if (hold) await new Promise<void>(finish => releases.add(finish));
     const unfinished=invalid||!!incompleteSlug&&JSON.stringify(body.messages).includes(`资料 slug: ${incompleteSlug}\\n`);
@@ -56,7 +57,7 @@ beforeAll(async () => {
 }, 60_000);
 
 beforeEach(async () => {
-  calls = 0; invalid = false; usageInput = 20; incompleteSlug = ''; release();
+  calls = 0; embeddingCalls = 0; invalid = false; usageInput = 20; incompleteSlug = ''; release();
   await engine.executeRaw('DELETE FROM minion_jobs');
   await engine.executeRaw("DELETE FROM config WHERE key LIKE 'dream.entity_capture.pending.%'");
   await engine.executeRaw('DELETE FROM pages');
@@ -78,7 +79,7 @@ afterAll(async () => {
   if (root && resolve(root).startsWith(resolve(tmpdir()) + sep) && root.includes('pmbrain-orchestration-')) rmSync(root, { recursive: true, force: true });
 }, 60_000);
 
-test('同步多份资料只有一个主任务，深度整理等待它完成，重复维护不再识别未变化资料', async () => {
+test('同步多份资料只有一个主任务，快速维护不调用模型或向量服务', async () => {
   const repo = join(root, 'batch'); mkdirSync(repo);
   for (let i = 0; i < 5; i++) writeFileSync(join(repo, `input-${i}.md`), `---\ntitle: 批次资料${i}\ntype: note\n---\n这是用于保存原文及断点检查的测试资料，第${i}份。`);
   await engine.executeRaw("UPDATE sources SET local_path=$1 WHERE id='default'", [repo]);
@@ -88,10 +89,11 @@ test('同步多份资料只有一个主任务，深度整理等待它完成，�
   const jobs = await engine.executeRaw<{ kind: string }>("SELECT data->>'kind' AS kind FROM minion_jobs WHERE queue=$1", [PRODUCT_TASK_QUEUE]);
   expect(jobs.filter(job => job.kind === 'dream_capture_entities')).toHaveLength(0);
   expect(jobs.filter(job => job.kind === 'dream_quick')).toHaveLength(1);
-  expect(calls).toBe(5);
+  expect(calls).toBe(0);
+  expect(embeddingCalls).toBe(0);
   expect(done.status, JSON.stringify(done.result)).toBe('completed');
   const phases = (done.result as { phases: Array<{ phase: string; status: string; details: Record<string, any> }> }).phases;
-  expect(phases.some(phase => phase.phase === 'capture_entities')).toBe(true);
+  expect(phases.some(phase => phase.phase === 'capture_entities' || phase.phase === 'embed')).toBe(false);
   const deepDone = await finished(deep.id);
   expect(deepDone.status).toBe('completed');
   expect((deepDone.result as { phases: Array<{ phase: string }> }).phases.some(phase => phase.phase === 'backlinks')).toBe(true);
@@ -103,7 +105,7 @@ test('同步多份资料只有一个主任务，深度整理等待它完成，�
   for (let i = 0; i < 5; i++) expect((await engine.getPage(`input-${i}`, { sourceId: 'default' }))?.compiled_truth).toContain(`第${i}份`);
 }, 90_000);
 
-test('多Source维护领取各自增量请求并保留预算停止的原任务范围', async () => {
+test('多 Source 快速维护不领取实体建档请求，保留深度整理所需队列', async () => {
   const first=join(root,'budget-first'),second=join(root,'budget-second');mkdirSync(first);mkdirSync(second);
   await engine.executeRaw("UPDATE sources SET local_path=$1 WHERE id='default'",[first]);
   await engine.executeRaw("INSERT INTO sources(id,name,local_path) VALUES('budget-other','第二个源',$1)",[second]);
@@ -119,8 +121,9 @@ test('多Source维护领取各自增量请求并保留预算停止的原任务�
   const quick=await runtime.submitDream({preset:'quick',allSources:true});
   const done=await finished(quick.id,90_000);
   expect(done.status,JSON.stringify(done.result)).toBe('completed');
-  expect(calls).toBe(2);
-  expect(await engine.getConfig('dream.entity_capture.pending.default')).toBeNull();
+  expect(calls).toBe(0);
+  expect(embeddingCalls).toBe(0);
+  expect(await engine.getConfig('dream.entity_capture.pending.default')).not.toBeNull();
   const count=calls;
   const next=await runtime.submitDream({preset:'quick',allSources:true});
   expect((await finished(next.id,90_000)).status).toBe('completed');expect(calls).toBe(count);
@@ -129,6 +132,151 @@ test('多Source维护领取各自增量请求并保留预算停止的原任务�
   expect(await engine.getPage('second',{sourceId:'default'})).toBeNull();
   await engine.setConfig('dream.entity_capture.max_input_tokens','1000000');
 },180_000);
+
+test('快速维护只连接已有实体，跳过备份和新名字，并在无变化时跳过重复提取', async () => {
+  const directory = join(root, 'incremental-quick');
+  mkdirSync(join(directory, 'backups'), { recursive: true });
+  await engine.executeRaw("UPDATE sources SET local_path=$1 WHERE id='default'", [directory]);
+  await engine.putPage('people/zhang', { type: 'person', title: '张三', compiled_truth: '张三在星河公司任职。', timeline: '', frontmatter: {} }, { sourceId: 'default' });
+  await engine.putPage('companies/example', { type: 'company', title: '星河公司', compiled_truth: '已有公司。', timeline: '', frontmatter: {} }, { sourceId: 'default' });
+  await engine.putPage('projects/water', { type: 'project', title: '智慧水务项目', compiled_truth: '已有项目。', timeline: '', frontmatter: {} }, { sourceId: 'default' });
+  await engine.setPageAliases('projects/water', 'default', ['蓝水工程']);
+  await engine.putPage('organizations/team', { type: 'organization', title: '星河团队', compiled_truth: '已有组织。', timeline: '', frontmatter: {} }, { sourceId: 'default' });
+  await engine.putPage('backups/keep', { type: 'note', title: '旧备份', compiled_truth: '旧备份需要保留。', timeline: '', frontmatter: {} }, { sourceId: 'default' });
+  writeFileSync(join(directory, 'material.md'), '---\ntitle: 新资料\ntype: note\n---\n张三和星河团队参与星河公司的蓝水工程。新名字李四仅出现在原文中。');
+  writeFileSync(join(directory, 'backups', 'keep.md'), '---\ntitle: 修改过的备份\ntype: note\n---\n张三不应从备份建立关系。');
+  writeFileSync(join(directory, 'notes.bak.md'), '---\ntitle: 备份文件\ntype: note\n---\n星河公司不应从备份建立关系。');
+  const first = await finished((await runtime.submitDream({ preset: 'quick', sourceId: 'default' })).id, 90_000);
+  expect(first.status, JSON.stringify(first.result)).toBe('completed');
+  expect(calls).toBe(0);
+  expect(embeddingCalls).toBe(0);
+  const links = await engine.executeRaw<{ slug: string }>("SELECT t.slug FROM links l JOIN pages f ON f.id=l.from_page_id JOIN pages t ON t.id=l.to_page_id WHERE f.source_id='default' AND f.slug='material'");
+  expect(links.map(link => link.slug)).toContain('people/zhang');
+  expect(links.map(link => link.slug)).toContain('companies/example');
+  expect(links.map(link => link.slug)).toContain('organizations/team');
+  expect(links.map(link => link.slug)).toContain('projects/water');
+  const entityRelations = await engine.executeRaw<{ link_type: string }>("SELECT l.link_type FROM links l JOIN pages f ON f.id=l.from_page_id JOIN pages t ON t.id=l.to_page_id WHERE f.source_id='default' AND f.slug='people/zhang' AND t.slug='companies/example'");
+  expect(entityRelations.map(link => link.link_type)).toContain('works_at');
+  expect(await engine.getPage('people/李四', { sourceId: 'default' })).toBeNull();
+  expect((await engine.getPage('backups/keep', { sourceId: 'default' }))?.compiled_truth).toBe('旧备份需要保留。');
+  expect(await engine.getPage('notes.bak', { sourceId: 'default' })).toBeNull();
+  const repeatStarted = performance.now();
+  const next = await finished((await runtime.submitDream({ preset: 'quick', sourceId: 'default' })).id, 90_000);
+  console.log(`[quick-unchanged] ${Math.round(performance.now()-repeatStarted)} ms`);
+  expect(next.status, JSON.stringify(next.result)).toBe('completed');
+  expect(calls).toBe(0);
+  expect(embeddingCalls).toBe(0);
+  const extract = (next.result as { phases: Array<{ phase: string; details: Record<string, unknown> }> }).phases.find(phase => phase.phase === 'extract');
+  expect(Number(extract?.details.mentionPagesProcessed ?? 0)).toBe(0);
+  expect(Number(extract?.details.relationPagesProcessed ?? 0)).toBe(0);
+  await engine.executeRaw("UPDATE page_mention_state SET mention_revision=NULL WHERE page_id IN (SELECT id FROM pages WHERE source_id='default' AND slug='material')");
+  const { runMentionPass } = await import('../src/core/mentions/pass.ts');
+  expect((await runMentionPass(engine, { sourceId: 'default', slugs: ['material'] })).state).not.toBe('failed');
+  const afterDeepPass = await engine.executeRaw<{ n: number }>("SELECT count(*)::int n FROM links l JOIN pages f ON f.id=l.from_page_id JOIN pages t ON t.id=l.to_page_id WHERE f.source_id='default' AND f.slug='material' AND t.slug='projects/water'");
+  expect(Number(afterDeepPass[0]?.n)).toBe(1);
+  writeFileSync(join(directory, 'material.md'), '---\ntitle: 新资料\ntype: note\n---\n张三和星河团队参与星河公司的工作。');
+  const changed = await finished((await runtime.submitDream({ preset: 'quick', sourceId: 'default' })).id, 90_000);
+  expect(changed.status, JSON.stringify(changed.result)).toBe('completed');
+  const afterEdit = await engine.executeRaw<{ n: number }>("SELECT count(*)::int n FROM links l JOIN pages f ON f.id=l.from_page_id JOIN pages t ON t.id=l.to_page_id WHERE f.source_id='default' AND f.slug='material' AND t.slug='projects/water'");
+  expect(Number(afterEdit[0]?.n)).toBe(0);
+  expect(calls).toBe(0);
+  expect(embeddingCalls).toBe(0);
+}, 180_000);
+
+test('待补关联按批次保存并可继续，未完成时不显示全部完成', async () => {
+  await engine.putPage('people/zhang', { type: 'person', title: '张三', compiled_truth: '已有人员。', timeline: '', frontmatter: {} }, { sourceId: 'default' });
+  for (let i = 0; i < 7; i++) {
+    await engine.putPage(`notes/batch-${i}`, { type: 'note', title: `资料${i}`, compiled_truth: '张三参与工作。', timeline: '', frontmatter: {} }, { sourceId: 'default' });
+  }
+  let complete = false;
+  for (let round = 0; round < 12; round++) {
+    const report = await runQuickMaintenance(engine, { brainDir: null, sourceId: 'default', markdownCatchUpMaxHistorical: 2, byMentionMaxHistorical: 2, byMentionTimeBudgetMs: 30_000 });
+    const extract = report.phases.find(phase => phase.phase === 'extract')!;
+    expect(Number(extract.details.relationPagesProcessed ?? 0)).toBeLessThanOrEqual(2);
+    expect(Number(extract.details.mentionPagesProcessed ?? 0)).toBeLessThanOrEqual(2);
+    if (round === 0) {
+      expect(report.status).toBe('partial');
+      expect(Number(extract.details.remaining)).toBeGreaterThan(0);
+    }
+    if (report.status === 'ok' || report.status === 'clean') { complete = true; break; }
+  }
+  expect(complete).toBe(true);
+  const links = await engine.executeRaw<{ n: number }>("SELECT count(*)::int n FROM links l JOIN pages f ON f.id=l.from_page_id JOIN pages t ON t.id=l.to_page_id WHERE f.slug LIKE 'notes/batch-%' AND t.slug='people/zhang'");
+  expect(Number(links[0]?.n)).toBe(7);
+  expect(calls).toBe(0);
+  expect(embeddingCalls).toBe(0);
+}, 180_000);
+
+test('实体名字表变化不使快速维护扫描未变化资料，深度关联仍可补扫', async () => {
+  await engine.putPage('people/zhang', { type: 'person', title: '张三', compiled_truth: '已有人员。', timeline: '', frontmatter: {} }, { sourceId: 'default' });
+  await engine.putPage('notes/old', { type: 'note', title: '旧资料', compiled_truth: '老张参与工作。', timeline: '', frontmatter: {} }, { sourceId: 'default' });
+  await runQuickMaintenance(engine, { brainDir: null, sourceId: 'default', byMentionTimeBudgetMs: 30_000 });
+  const { runMentionPass } = await import('../src/core/mentions/pass.ts');
+  await runMentionPass(engine, { sourceId: 'default' });
+  await engine.setPageAliases('people/zhang', 'default', ['老张']);
+  const quick = await runQuickMaintenance(engine, { brainDir: null, sourceId: 'default', byMentionTimeBudgetMs: 30_000 });
+  const extract = quick.phases.find(phase => phase.phase === 'extract')!;
+  expect(Number(extract.details.mentionPagesProcessed ?? 0)).toBe(0);
+  const countLinks = async () => Number((await engine.executeRaw<{ n: number }>("SELECT count(*)::int n FROM links l JOIN pages f ON f.id=l.from_page_id JOIN pages t ON t.id=l.to_page_id WHERE f.source_id='default' AND f.slug='notes/old' AND t.slug='people/zhang'"))[0]?.n);
+  expect(await countLinks()).toBe(0);
+  const { readMentionCoverage } = await import('../src/core/mentions/coverage.ts');
+  expect((await readMentionCoverage(engine, ['default'])).state).toBe('pending');
+  expect((await runMentionPass(engine, { sourceId: 'default' })).state).not.toBe('failed');
+  expect(await countLinks()).toBe(1);
+  expect((await readMentionCoverage(engine, ['default'])).state).toBe('complete');
+  expect(calls).toBe(0);
+}, 90_000);
+
+test('旧快速维护断点保留实体识别记录，继续时只执行新的维护范围', async () => {
+  await engine.putPage('people/zhang', { type: 'person', title: '张三', compiled_truth: '已有人员。', timeline: '', frontmatter: {} }, { sourceId: 'default' });
+  await engine.putPage('notes/resume', { type: 'note', title: '恢复资料', compiled_truth: '张三参与工作。', timeline: '', frontmatter: {} }, { sourceId: 'default' });
+  const phase = (name: string, status: string, details: Record<string, unknown> = {}) => ({ phase: name, status, summary: name, duration_ms: 1, details });
+  const capture = phase('capture_entities', 'warn', { pages_remaining: 8 });
+  const oldPhases = [phase('sync', 'skipped'), phase('extract', 'ok'), capture, phase('embed', 'warn', { remainingChunks: 50 })];
+  const checkpoint = { phases: { default: oldPhases }, reports: { default: { status: 'partial', phases: oldPhases } } } as any;
+  const task = await runtime.submitDream({ preset: 'quick', sourceId: 'default', checkpoint });
+  const done = await finished(task.id, 90_000);
+  expect(done.status, JSON.stringify(done.result)).toBe('completed');
+  expect((done.result as any).phases.map((item: any) => item.phase)).not.toContain('capture_entities');
+  expect((done.result as any).phases.map((item: any) => item.phase)).not.toContain('embed');
+  const [job] = await engine.executeRaw<{ retired: any }>("SELECT data->'task'->'input'->'checkpoint'->'retiredCapture'->'default' AS retired FROM minion_jobs WHERE id=$1", [Number(task.id.slice(5))]);
+  expect(job.retired.phases[0].details.pages_remaining).toBe(8);
+  expect(job.retired.phases.find((item: any) => item.phase === 'embed').details.remainingChunks).toBe(50);
+  expect(job.retired.report.phases.some((item: any) => item.phase === 'capture_entities')).toBe(true);
+  expect(calls).toBe(0);
+  expect(embeddingCalls).toBe(0);
+}, 180_000);
+
+test('关闭自动提及匹配时快速维护遵循现有设置', async () => {
+  await engine.setConfig('mentions.auto_link', 'false');
+  try {
+    await engine.putPage('people/zhang', { type: 'person', title: '张三', compiled_truth: '张三在星河公司任职。', timeline: '', frontmatter: {} }, { sourceId: 'default' });
+    await engine.putPage('companies/example', { type: 'company', title: '星河公司', compiled_truth: '已有公司。', timeline: '', frontmatter: {} }, { sourceId: 'default' });
+    const report = await runQuickMaintenance(engine, { brainDir: null, sourceId: 'default' });
+    expect(report.status).not.toBe('failed');
+    const links = await engine.executeRaw("SELECT l.id FROM links l JOIN pages f ON f.id=l.from_page_id WHERE f.source_id='default' AND l.link_source='mentions'");
+    expect(links).toHaveLength(0);
+    expect(calls).toBe(0);
+    expect(embeddingCalls).toBe(0);
+  } finally {
+    await engine.setConfig('mentions.auto_link', 'true');
+  }
+}, 90_000);
+
+test('快速维护尊重现有排除项目类型的设置', async () => {
+  await engine.setConfig('mentions.entity_types', '-project');
+  try {
+    await engine.putPage('projects/water', { type: 'project', title: '智慧水务项目', compiled_truth: '已有项目。', timeline: '', frontmatter: {} }, { sourceId: 'default' });
+    await engine.putPage('notes/project', { type: 'note', title: '项目资料', compiled_truth: '智慧水务项目已经开始。', timeline: '', frontmatter: {} }, { sourceId: 'default' });
+    const report = await runQuickMaintenance(engine, { brainDir: null, sourceId: 'default' });
+    expect(report.status).not.toBe('failed');
+    const links = await engine.executeRaw("SELECT l.id FROM links l JOIN pages f ON f.id=l.from_page_id JOIN pages t ON t.id=l.to_page_id WHERE f.slug='notes/project' AND t.slug='projects/water'");
+    expect(links).toHaveLength(0);
+    expect(calls).toBe(0);
+  } finally {
+    await engine.executeRaw("DELETE FROM config WHERE key='mentions.entity_types'");
+  }
+}, 90_000);
 
 test('后台任务单资料八轮耗尽仍处理后续资料，原任务继续只重试失败资料',async()=>{
   const directory=join(root,'turn-limit-source');mkdirSync(directory);
@@ -215,7 +363,7 @@ test('旧版显式排队兼容函数保留Source归属且不抢占同步父任�
   expect(await engine.getConfig('dream.entity_capture.pending.default')).toBeNull();
 });
 
-test('快速维护从文件同步到识别：相同备份只请求一次，不同备份仍请求',async()=>{
+test('快速维护跳过备份目录且不调用模型',async()=>{
   const repo=join(root,'duplicate-backups');mkdirSync(join(repo,'backups'),{recursive:true});mkdirSync(join(repo,'备份'),{recursive:true});
   const body='---\ntitle: 重复资料\ntype: note\n---\n这是一份用于核对备份重复识别的工作资料。';
   writeFileSync(join(repo,'original.md'),body);
@@ -225,11 +373,15 @@ test('快速维护从文件同步到识别：相同备份只请求一次，不�
   const run=await runtime.submitDream({preset:'quick',sourceId:'default'});
   const done=await finished(run.id,180000);
   expect(done.status,JSON.stringify(done.result)).toBe('completed');
-  expect(calls).toBe(2);
+  expect(calls).toBe(0);
+  expect(embeddingCalls).toBe(0);
   const jobs=await engine.executeRaw<{quick:string}>("SELECT data->'ingest_context'->>'quickEntitiesOnly' quick FROM minion_jobs WHERE data ? 'ingest_context'");
-  expect(jobs).toHaveLength(2);expect(jobs.every(job=>job.quick==='true')).toBe(true);
+  expect(jobs).toHaveLength(0);
+  expect(await engine.getPage('original',{sourceId:'default'})).not.toBeNull();
+  expect(await engine.getPage('backups/copy',{sourceId:'default'})).toBeNull();
+  expect(await engine.getPage('备份/new',{sourceId:'default'})).toBeNull();
   const repeat=await runtime.submitDream({preset:'quick',sourceId:'default'});
-  expect((await finished(repeat.id,180000)).status).toBe('completed');expect(calls).toBe(2);
+  expect((await finished(repeat.id,180000)).status).toBe('completed');expect(calls).toBe(0);
 },360000);
 
 test('历史跳过记录读成未执行失败，不能绿色完成，也不改写历史记录', async () => {

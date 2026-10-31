@@ -17,6 +17,7 @@ def run(args):
     reject = False
     date = '2026-10-03T14:30:00.000Z'
     steps = [{'id': key, 'label': label, 'status': 'completed' if index < 2 else 'running' if index == 2 else 'pending', 'phases': [key]} for index, (key, label) in enumerate([('check', '检查知识'), ('sync', '同步资料'), ('relations', '建立知识关联'), ('embed', '更新搜索索引'), ('finish', '完成检查')])]
+    quick_steps = [{'id': key, 'label': label, 'status': 'completed' if index < 3 else 'running', 'phases': [phase]} for index, (key, label, phase) in enumerate([('sync', '同步资料', 'sync'), ('fence_repair', '整理事实栏', 'fence_repair'), ('content_repair', '核对页面标记', 'content_repair'), ('relations', '建立知识关联', 'extract')])]
 
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(channel='msedge', headless=True)
@@ -49,7 +50,7 @@ def run(args):
                     requests.append(body)
                     quick = body['preset'] == 'quick'
                     name = '快速维护' if quick else 'AI 深度整理'
-                    task = dict(id=f'task-{len(rows) + 1}', kind='dream_quick' if quick else 'dream_full', status='queued' if quick else 'running', command=[], stdout='[pmbrain phase] hidden', stderr='', error=None, exitCode=None, startedAt=date, completedAt=None, durationMs=185000, product=dict(name=name, stage='等待执行' if quick else '建立知识关联', percent=0 if quick else 40, phasePercent=None if quick else 63, completedSteps=2, steps=json.loads(json.dumps(steps)), total=None, processed=None, file=None, metrics=[], errorReason=None))
+                    task = dict(id=f'task-{len(rows) + 1}', kind='dream_quick' if quick else 'dream_full', status='queued' if quick else 'running', command=[], stdout='[pmbrain phase] hidden', stderr='', error=None, exitCode=None, startedAt=date, completedAt=None, durationMs=185000, product=dict(name=name, stage='等待执行' if quick else '建立知识关联', percent=0 if quick else 40, phasePercent=None if quick else 63, completedSteps=2, steps=json.loads(json.dumps(quick_steps if quick else steps)), total=None, processed=None, file=None, metrics=[], errorReason=None))
                     rows.insert(0, task)
                     data = {'runId': task['id'], 'status': task['status']}
             elif '/runs/' in path:
@@ -62,7 +63,7 @@ def run(args):
                 elif path.endswith('/retry'):
                     retry_ids.append(task['id'])
                     task.update(status='running', completedAt=None)
-                    task['product'].update(stage='建立知识关联', percent=40, steps=json.loads(json.dumps(steps)))
+                    task['product'].update(stage='建立知识关联', percent=40, steps=json.loads(json.dumps(quick_steps if task['kind'] == 'dream_quick' else steps)))
                     data = {'runId': task['id'], 'status': task['status']}
                 elif path.endswith('/cancel'):
                     task.update(status='cancelled', completedAt=date)
@@ -88,7 +89,7 @@ def run(args):
         rows[0]['status'] = 'running'
         rows[0]['product'].update(stage='建立知识关联', percent=40, phasePercent=63, syncScan={'scanned': 64, 'unchanged': 4}, syncFiles={'total': 60, 'completed': 58, 'failed': 1, 'remaining': 1})
         expect(task).to_contain_text('执行中', timeout=10000)
-        assert task.locator('.maintenance-state-running svg').count() == 1
+        expect(task.locator('.maintenance-state-running')).to_have_text('执行中')
         assert page.locator('.maintenance-task-dialog[open]').count() == 0
         page.screenshot(path=str(output / 'list-dark.png'), full_page=True)
         task.click()
@@ -117,6 +118,8 @@ def run(args):
         task.focus()
         page.keyboard.press('Enter')
         page.get_by_role('button', name='停止任务', exact=True).click()
+        page.get_by_role('button', name='确认停止', exact=True).click()
+        expect(page.locator('.maintenance-stop-dialog')).to_have_count(0)
         expect(page.get_by_role('dialog')).to_contain_text('已停止')
         assert page.get_by_role('button', name='停止任务', exact=True).count() == 0
         assert page.get_by_role('dialog').locator('.product-task-progress').evaluate("element => [...element.querySelectorAll('.product-task-steps svg')].every(icon => getComputedStyle(icon).animationName === 'none')")
@@ -124,6 +127,8 @@ def run(args):
         page.get_by_role('button', name='继续未完成任务', exact=True).click()
         expect(page.get_by_role('dialog')).to_contain_text('执行中')
         page.get_by_role('button', name='停止任务', exact=True).click()
+        page.get_by_role('button', name='确认停止', exact=True).click()
+        expect(page.locator('.maintenance-stop-dialog')).to_have_count(0)
         expect(page.get_by_role('dialog')).to_contain_text('已停止')
         page.keyboard.press('Escape')
         expect(page.locator('.maintenance-task-dialog[open]')).to_have_count(0)
@@ -144,6 +149,8 @@ def run(args):
         expect(deep_dialog).to_contain_text('large.docx')
         page.screenshot(path=str(output / 'deep-sync-writing.png'), full_page=True)
         deep_dialog.get_by_role('button', name='停止任务', exact=True).click()
+        page.get_by_role('button', name='确认停止', exact=True).click()
+        expect(page.locator('.maintenance-stop-dialog')).to_have_count(0)
         deep_dialog.get_by_role('button', name='继续未完成任务', exact=True).click()
         expect(deep_dialog).to_contain_text('执行中')
         assert retry_ids[-1] == current['id']
@@ -180,11 +187,11 @@ def run(args):
         page.set_viewport_size({'width': 1440, 'height': 1000})
         page.evaluate("document.documentElement.setAttribute('data-theme','dark')")
         partial_row = page.locator('.maintenance-run-row').first
-        expect(partial_row).to_contain_text('本轮已完成')
+        expect(partial_row).to_contain_text('部分完成')
         expect(partial_row).to_contain_text('长期判断 5')
         expect(partial_row).to_contain_text('待处理：待检查项 2939')
-        assert '部分完成' not in partial_row.inner_text() and '0%' not in partial_row.inner_text()
-        assert partial_row.locator('.maintenance-state-completed').count() == 1
+        assert '0%' not in partial_row.inner_text()
+        expect(partial_row.locator('.maintenance-state-completed')).to_have_text('部分完成')
         page.screenshot(path=str(output / 'round-list.png'), full_page=True)
         partial_row.click()
         dialog = page.get_by_role('dialog', name='AI 深度整理详情', exact=True)
@@ -193,8 +200,7 @@ def run(args):
         expect(dialog).to_contain_text('创建实体 4')
         expect(dialog).to_contain_text('剩余页面 1482')
         expect(dialog).to_contain_text('目标未保存')
-        badge = dialog.locator('.product-task-state.state-completed')
-        assert badge.evaluate("element => { const values=getComputedStyle(element).color.match(/\\d+/g).map(Number); return values[1]>values[0] && values[1]>values[2]; }")
+        expect(dialog.locator('.product-task-state.state-partial')).to_have_text('部分完成')
         expect(dialog.locator('[role=progressbar]')).to_have_count(0)
         expect(dialog).to_contain_text('已处理 0 / 1482 份资料')
         dialog.get_by_role('heading', name='本轮成果', exact=True).click()
@@ -209,7 +215,9 @@ def run(args):
         rows[-1].update(status='completed', completedAt=date)
         rows[-1]['product'].update(stage='部分完成，请查看未完成步骤', percent=0)
         page.reload()
-        page.locator('.maintenance-run-row').filter(has_text='快速维护').click()
+        quick_row = page.locator('.maintenance-run-row').filter(has_text='快速维护')
+        expect(quick_row.locator('.maintenance-state-partial')).to_have_text('部分完成')
+        quick_row.click()
         expect(page.get_by_role('button', name='继续未完成任务', exact=True)).to_be_visible()
         page.keyboard.press('Escape')
         failed = json.loads(json.dumps(partial))
@@ -224,18 +232,18 @@ def run(args):
         expect(page.get_by_role('dialog').get_by_role('alert')).to_contain_text('数据库执行失败')
         page.mouse.click(70, 90)
         page.get_by_role('button', name='任务中心', exact=True).click()
-        task_row = page.locator('.task-table tbody tr').filter(has_text='长期判断 5').filter(has_text='本轮已完成')
+        task_row = page.locator('.task-table tbody tr').filter(has_text='AI 深度整理').filter(has_text='部分完成')
         expect(task_row).to_have_count(1)
-        expect(task_row).to_contain_text('待检查项 2939')
-        assert '0%' not in task_row.inner_text() and '部分完成' not in task_row.inner_text()
+        assert '0%' not in task_row.inner_text()
         page.screenshot(path=str(output / 'round-task-center.png'), full_page=True)
         task_row.get_by_role('button', name='查看详情', exact=True).click()
         expect(page.get_by_label('任务详情', exact=True)).to_contain_text('本轮成果')
+        expect(page.get_by_label('任务详情', exact=True)).to_contain_text('待检查项 2939')
         page.locator('.drawer-overlay').click(position={'x': 300, 'y': 90})
         expect(page.get_by_label('任务详情', exact=True)).to_have_count(0)
         assert partial['product']['percent'] == 0 and partial['status'] == 'completed'
         assert not errors, errors
-        (output / 'result.json').write_text(json.dumps({'passed': True, 'checks': ['quick_create', 'queued_to_running', 'full_main_source', 'deep_sync_file_and_batches', 'deep_stop_and_same_task_resume', 'list_spinner', 'click_details', 'keyboard_details', 'reload_details', 'cancel_stops_spinners', 'explicit_retry', 'completed_result', 'reload_history', 'filters', 'native_submit_error', 'dark_light', '1100_layout', 'green_round_result', 'outcomes_and_remaining', 'zero_pages_preserved', 'outside_click_close', 'inside_click_stays', 'unfinished_filter_and_retry', 'real_failure_red', 'task_center_round_parity'], 'browser_errors': errors}), encoding='utf-8')
+        (output / 'result.json').write_text(json.dumps({'passed': True, 'checks': ['quick_create', 'queued_to_running', 'full_main_source', 'deep_sync_file_and_batches', 'deep_stop_and_same_task_resume', 'list_running_status', 'click_details', 'keyboard_details', 'reload_details', 'cancel_stops_spinners', 'explicit_retry', 'completed_result', 'reload_history', 'filters', 'native_submit_error', 'dark_light', '1100_layout', 'partial_round_result', 'outcomes_and_remaining', 'zero_pages_preserved', 'outside_click_close', 'inside_click_stays', 'unfinished_filter_and_retry', 'real_failure_red', 'task_center_round_parity'], 'browser_errors': errors}), encoding='utf-8')
         browser.close()
 
 

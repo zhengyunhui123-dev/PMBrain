@@ -135,7 +135,12 @@ setCliOptions({ ...DEFAULT_CLI_OPTIONS, progressJson: true });
 
 async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { type: 'dream' }>['input'], progressPrefix:string[] = []) {
   const checkpoint: MaintenanceCheckpoint = input.checkpoint ?? { phases: {}, reports: {} };
-  if (input.phase !== 'capture_entities' && !input.incrementalIngest) {
+  const legacyQuickSources = input.preset === 'quick' ? [...new Set([...Object.keys(checkpoint.phases), ...Object.keys(checkpoint.reports)])].filter(sourceId => {
+    const report = checkpoint.reports[sourceId];
+    return (checkpoint.phases[sourceId] ?? []).some(phase => phase.phase === 'capture_entities' || phase.phase === 'embed')
+      || (Array.isArray(report?.phases) && report.phases.some((phase: { phase?: string }) => phase.phase === 'capture_entities' || phase.phase === 'embed'));
+  }) : [];
+  if (input.preset === 'quick' || (input.phase !== 'capture_entities' && !input.incrementalIngest)) {
     retireAutomaticCapture(checkpoint);
     if (Object.keys(checkpoint.retiredCapture ?? {}).length) {
       console.log('旧版自动实体识别阶段已退出本次整理，历史结果和失败记录保留在原任务检查点。');
@@ -143,7 +148,18 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
       await checkDreamBudget();
     }
   }
-  const capturesImported = !input.phase || input.phase==='all' || !!input.preset;
+  for (const sourceId of legacyQuickSources) {
+    const phases = checkpoint.phases[sourceId] ?? [];
+    const previous = checkpoint.retiredCapture?.[sourceId];
+    const report = checkpoint.reports[sourceId] ?? previous?.report;
+    checkpoint.retiredCapture = { ...checkpoint.retiredCapture, [sourceId]: {
+      phases: [...(previous?.phases ?? []), ...phases.filter(phase => phase.phase === 'embed')],
+      ...(report ? { report } : {}),
+    } };
+    checkpoint.phases[sourceId] = (checkpoint.phases[sourceId] ?? []).filter(phase => phase.phase !== 'extract' && phase.phase !== 'embed');
+    delete checkpoint.reports[sourceId];
+  }
+  const capturesImported = input.preset !== 'quick' && (!input.phase || input.phase==='all' || !!input.preset);
   const automaticEnabled=await engine.getConfig('dream.entity_capture.enabled')!=='false';
   const captureModel = input.phase === 'capture_entities' || (capturesImported && automaticEnabled) ? await chooseCaptureModel(engine, {}) : null;
   const ingestEnabled=automaticEnabled&&captureModel?.ok===true;
@@ -154,7 +170,7 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
   const roots = new Map<string, string>();
   const fileRuntime: SyncFileRuntime | undefined = usesSyncFileQueue(input) ? {
     signal: abort.signal,
-    workingTree: input.preset === 'quick' || (await engine.getConfig('sync.include_working_tree')) === 'true',
+    workingTree: (await engine.getConfig('sync.include_working_tree')) === 'true',
     importFile: async (path, relativePath, options) => {
       options={...options,deferDocumentOcr:true,deferredOcrVectors:input.phase==='sync',deferredOcrMaintenanceOwnerId:input.phase==='sync'?undefined:ownerJobId??undefined};
       abort.signal.throwIfAborted();
@@ -173,7 +189,8 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
         originalSize: snapshot.size, originalMtime: snapshot.mtimeMs, hash,
         modelFingerprint: taskModelFingerprint(),
         modelMayRun: options.documentOcr === true && (isOfficeFilePath(relativePath) || isImageFilePath(relativePath)),
-        fingerprint: syncFileContentFingerprint(options), options,
+        fingerprint: syncFileContentFingerprint(options),
+        ...(input.preset === 'quick' ? { compatibleFingerprints: [syncFileContentFingerprint({ ...options, documentOcr: true })] } : {}), options,
       }]) as import('../../core/import-file.ts').ImportResult & { deferred?: boolean; unchanged?: boolean; capacityReached?:boolean };
       if (result.deferred) pendingFiles = true;
       if(result.capacityReached)capacityReached=true;
@@ -247,7 +264,7 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
     : resolveDreamPresetPhases(input.preset ?? 'full');
   send({ type: 'progress', phases: [...progressPrefix,...phases] });
   const phaseOptions=async(sourceId:string)=>{
-    if(usesSyncFileQueue(input)&&input.phase!=='sync'){
+    if(usesSyncFileQueue(input)&&input.phase!=='sync'&&input.preset!=='quick'){
     await engine.executeRaw(`UPDATE minion_jobs SET status='waiting',result=NULL,error_text=NULL,finished_at=NULL,data=jsonb_set(data-'ocrOwnerCancelled','{authorizedAttempt}',to_jsonb(attempts_started+1)),updated_at=now()
       WHERE name='pmbrain-document-ocr' AND data->'task'->'input'->'ocrOnly'->>'maintenanceOwnerId'=$1 AND status='cancelled' AND data->>'ocrOwnerCancelled'='true'`,[String(ownerJobId)]);
     const waiting=await engine.executeRaw("SELECT 1 FROM pages p JOIN minion_jobs j ON j.id=(p.frontmatter->>'document_ocr_task_id')::int WHERE p.source_id=$1 AND p.deleted_at IS NULL AND p.frontmatter->>'document_ocr_deferred'='true' AND (j.status IN ('waiting','active','delayed') OR j.data->'task'->'input'->'ocrOnly'->>'maintenanceOwnerId'=$2) LIMIT 1",[sourceId,String(ownerJobId)]);
@@ -294,6 +311,7 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
     yieldBetweenPhases:async()=>{await yieldExecution();if(constrained)Bun.gc(false);},
     yieldDuringPhase:async()=>{abort.signal.throwIfAborted();await yieldExecution();if(constrained)Bun.gc(false);},
   };
+  if (input.preset === 'quick') console.log('快速维护仅同步变化并关联已有实体；新实体建档、图片识别和向量化不属于本次维护。');
   if (input.preset === 'quick' && input.allSources) {
     const reports = [];
     const startedAt = new Date();

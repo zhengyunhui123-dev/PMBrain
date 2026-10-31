@@ -81,6 +81,7 @@ export interface ImportOptions {
     managedBookmark?: boolean;
     /** Sync exclusion globs, matched against the import-root-relative path. */
     exclude?: string[];
+    excludePathPattern?: string;
     runtime?: {
       signal: AbortSignal;
       onFile: (result: Record<string, unknown>) => Promise<void>;
@@ -301,6 +302,10 @@ export async function runStructuredImport(
     if (before > 0 && allFiles.length === 0) {
       console.warn(`[pmbrain sync] No files matched after applying ${opts.exclude.length} exclude pattern(s).`);
     }
+  }
+  if (opts.excludePathPattern) {
+    const excluded = new RegExp(opts.excludePathPattern, 'i');
+    allFiles = allFiles.filter(path => !excluded.test(relative(dir, path).replace(/\\/g, '/')));
   }
   const fileTypeLabel = strategy === 'code' ? 'code'
     : strategy === 'auto' ? 'syncable' : 'markdown';

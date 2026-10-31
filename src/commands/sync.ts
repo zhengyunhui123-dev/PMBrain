@@ -210,6 +210,7 @@ export interface SyncOpts {
   documentOcr?: boolean;
   /** Glob patterns excluded from indexing; unioned with persisted sync.exclude. */
   exclude?: string[];
+  excludePathPattern?: string;
   /** Import uncommitted edits/untracked files. Default false; config fallback is sync.include_working_tree. */
   workingTree?: boolean;
   /**
@@ -492,6 +493,7 @@ function filteredWorkingTreeCounts(manifest: SyncManifest, opts: SyncOpts): { ad
     includeOffice: opts.includeOffice,
     includeImages: opts.includeImages,
     exclude: opts.exclude,
+    excludePathPattern: opts.excludePathPattern,
   };
   return {
     added: manifest.added.filter((path) => isSyncable(path, syncOpts)).length
@@ -1373,6 +1375,7 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
     includeOffice: opts.includeOffice,
     includeImages: opts.includeImages,
     exclude: opts.exclude,
+    excludePathPattern: opts.excludePathPattern,
   };
   // Older Quick Maintenance runs filtered Office/PDF but still advanced the
   // Git bookmark. Reconcile committed document paths against the Source so a
@@ -1380,7 +1383,7 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
   // HEAD. Only missing tracked documents join the incremental manifest; this
   // avoids a full Source reimport on every Quick run.
   const missingTrackedOfficeFiles = opts.includeOffice
-    ? await findMissingTrackedOfficeFiles(engine, repoPath, opts.sourceId, opts.strategy)
+    ? (await findMissingTrackedOfficeFiles(engine, repoPath, opts.sourceId, opts.strategy)).filter(path => isSyncable(path, syncOpts))
     : [];
   if (missingTrackedOfficeFiles.length > 0) {
     slog(`[sync] backfilling ${missingTrackedOfficeFiles.length} committed Office/PDF file(s) missing from Source.`);
@@ -1464,11 +1467,13 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
   }
 
   // Filter to syncable files (strategy-aware)
+  const excludedFrom = (path: string) => !!opts.excludePathPattern && new RegExp(opts.excludePathPattern, 'i').test(path.replace(/\\/g, '/'));
+  const movedFromExcluded = new Set(manifest.renamed.filter(r => excludedFrom(r.from) && isSyncable(r.to, syncOpts)).map(r => r.to));
   const filtered: SyncManifest = {
-    added: manifest.added.filter(p => isSyncable(p, syncOpts)),
+    added: unique([...manifest.added.filter(p => isSyncable(p, syncOpts)), ...movedFromExcluded]),
     modified: manifest.modified.filter(p => isSyncable(p, syncOpts)),
     deleted: manifest.deleted.filter(p => isSyncable(p, syncOpts)),
-    renamed: manifest.renamed.filter(r => isSyncable(r.to, syncOpts)),
+    renamed: manifest.renamed.filter(r => isSyncable(r.to, syncOpts) && !excludedFrom(r.from)),
   };
 
   // Delete pages that became un-syncable (modified but filtered out).
@@ -1500,6 +1505,7 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
   // pages in sources B/C/D.
   const pageOpts = opts.sourceId ? { sourceId: opts.sourceId } : undefined;
   for (const path of unsyncableModified) {
+    if (opts.excludePathPattern && new RegExp(opts.excludePathPattern, 'i').test(path.replace(/\\/g, '/'))) continue;
     // v0.41.13 #1433: never delete on metafile classification.
     const reason = unsyncableReason(path, syncOpts);
     if (reason === 'metafile') continue;
@@ -1947,13 +1953,14 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
         // / addLink) target (sourceId, slug). Pre-fix the schema DEFAULT
         // 'default' was applied even for non-default sources, fabricating
         // duplicate rows that crashed bare-slug subqueries with Postgres 21000.
+        const forceRechunk = movedFromExcluded.has(path);
         const runImport = () => opts.fileRuntime
-          ? opts.fileRuntime.importFile(filePath, path, { noEmbed, sourceId: opts.sourceId, includeOffice: opts.includeOffice, includeImages: opts.includeImages, documentOcr: opts.documentOcr, activePack: syncActivePack })
+          ? opts.fileRuntime.importFile(filePath, path, { noEmbed, forceRechunk, sourceId: opts.sourceId, includeOffice: opts.includeOffice, includeImages: opts.includeImages, documentOcr: opts.documentOcr, activePack: syncActivePack })
           : opts.includeOffice && isOfficeFilePath(path)
-          ? importOfficeFile(eng, filePath, path, { noEmbed, sourceId: opts.sourceId, documentOcr: opts.documentOcr, activePack: syncActivePack })
+          ? importOfficeFile(eng, filePath, path, { noEmbed, forceRechunk, sourceId: opts.sourceId, documentOcr: opts.documentOcr, activePack: syncActivePack })
           : opts.includeImages && isImageFilePath(path)
             ? importImageFile(eng, filePath, path, { noEmbed, sourceId: opts.sourceId, forceOcr: opts.documentOcr })
-          : importFile(eng, filePath, path, { noEmbed, sourceId: opts.sourceId, activePack: syncActivePack });
+          : importFile(eng, filePath, path, { noEmbed, forceRechunk, sourceId: opts.sourceId, activePack: syncActivePack });
         const importWithIndexRepair = async () => {
           try {
             return await runImport();
@@ -1982,8 +1989,8 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
             path,
             error: result.error ?? 'large document embedding partially completed; retry will resume',
           });
-        } else if (result.status === 'skipped' && (result as any).error) {
-          failedFiles.push({ path, error: String((result as any).error) });
+        } else if ((opts.excludePathPattern && result.status === 'error') || (result.status === 'skipped' && result.error)) {
+          failedFiles.push({ path, error: String(result.error) });
         } else {
           await checkpointImportedPath(path);
         }
@@ -2337,6 +2344,7 @@ async function performFullSync(
         includeOffice: opts.includeOffice,
         includeImages: opts.includeImages,
         exclude: opts.exclude,
+        excludePathPattern: opts.excludePathPattern,
       })),
   );
   // Dry-run: walk the repo, count syncable files, return without writing.
@@ -2360,6 +2368,7 @@ async function performFullSync(
         includeOffice: opts.includeOffice,
         includeImages: opts.includeImages,
         exclude: opts.exclude,
+        excludePathPattern: opts.excludePathPattern,
       }));
     }
     slog(
@@ -2430,6 +2439,7 @@ async function performFullSync(
       runtime: opts.fileRuntime ? { signal: opts.fileRuntime.signal, onFile: async () => {} } : undefined,
       managedBookmark: true,
       exclude: opts.exclude,
+      excludePathPattern: opts.excludePathPattern,
     });
   } finally {
     committedSnapshot?.cleanup();
@@ -2509,6 +2519,7 @@ async function performFullSync(
         includeOffice: opts.includeOffice,
         includeImages: opts.includeImages,
         exclude: opts.exclude,
+        excludePathPattern: opts.excludePathPattern,
       });
       return reason === null || (reason === 'malformed-path' && isPoisonedPath(path));
     });

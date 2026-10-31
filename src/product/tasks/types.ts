@@ -10,6 +10,7 @@ export interface SyncFileInput {
   originalMtime?: number;
   hash: string;
   fingerprint: string;
+  compatibleFingerprints?: string[];
   modelFingerprint: string;
   modelMayRun?: boolean;
   sourceRoot: string;

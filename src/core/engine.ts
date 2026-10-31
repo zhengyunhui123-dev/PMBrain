@@ -1205,12 +1205,13 @@ export interface BrainEngine {
    * A page is stale when links_extracted_at is NULL, older than versionTs,
    * or older than updated_at.
    */
-  countStalePagesForExtraction(opts?: { sourceId?: string; versionTs?: string }): Promise<number>;
+  countStalePagesForExtraction(opts?: { sourceId?: string; versionTs?: string; excludePathPattern?: string }): Promise<number>;
   listStalePagesForExtraction(opts: {
     batchSize: number;
     afterPageId?: number;
     sourceId?: string;
     versionTs?: string;
+    excludePathPattern?: string;
   }): Promise<import('./types.ts').StalePageRow[]>;
   markPagesExtractedBatch(
     refs: Array<{ slug: string; source_id: string; extractedAt?: string }>,
