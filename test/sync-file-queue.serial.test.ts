@@ -63,6 +63,77 @@ afterAll(async () => {
 }, 60000);
 
 describe('快速维护文件任务与恢复', () => {
+  test('快速维护不为无需模型的资料逐份初始化费用预算', async () => {
+    const dir=join(root,'quick-no-model-budget');mkdirSync(dir);
+    for(let i=0;i<6;i++)writeFileSync(join(dir,`note-${i}.md`),`# 资料 ${i}\n\n不调用模型的合成资料。`);
+    await engine.executeRaw("INSERT INTO sources (id,name,local_path,config) VALUES ($1,$2,$3,$4::jsonb)",['quick-no-model-budget','快速维护预算',dir,{syncEnabled:true}]);
+    const run=await finish((await runtime.submitDream({preset:'quick',sourceId:'quick-no-model-budget'})).id);
+    expect(run.status).toBe('completed');
+    const job=await new MinionQueue(engine).getJob(Number(run.id.slice(5)));
+    const budget=job?.data.taskBudget as {revision?:number;calls?:number}|undefined;
+    expect(budget?.calls).toBe(0);
+    expect(budget?.revision).toBe(job?.attempts_started);
+    for(let i=0;i<6;i++)expect(await engine.getPage(`note-${i}`,{sourceId:'quick-no-model-budget'})).not.toBeNull();
+  },120000);
+  test('快速维护的预算事务归属本轮任务并受数据库超时保护', async () => {
+    const dir=join(root,'quick-budget-context');mkdirSync(dir);
+    writeFileSync(join(dir,'note.md'),'# 预算上下文\n\n隔离测试资料。');
+    await engine.executeRaw("INSERT INTO sources (id,name,local_path,config) VALUES ($1,$2,$3,$4::jsonb)",['quick-budget-context','预算上下文',dir,{syncEnabled:true}]);
+    const observed:Array<number|undefined>=[];
+    const tracked=new Proxy(engine,{get(target,property){
+      if(property==='transaction')return (fn:(tx:BrainEngine)=>Promise<unknown>)=>target.transaction(tx=>fn(new Proxy(tx,{get(connection,key){
+        if(key==='executeRaw')return (sql:string,params?:unknown[])=>{
+          if(sql.startsWith('SELECT data,status,lock_token,lock_until'))observed.push(databaseRequestContext()?.taskId);
+          return connection.executeRaw(sql,params);
+        };
+        const value=Reflect.get(connection,key,connection);return typeof value==='function'?value.bind(connection):value;
+      }})));
+      const value=Reflect.get(target,property,target);return typeof value==='function'?value.bind(target):value;
+    }});
+    await runtime.close();runtime=new ProductTaskRuntime(tracked);await runtime.start();
+    try{
+      const run=await finish((await runtime.submitDream({preset:'quick',sourceId:'quick-budget-context'})).id);
+      expect(run.status).toBe('completed');
+      expect(observed.length).toBeGreaterThan(0);
+      expect(observed.every(id=>id===Number(run.id.slice(5)))).toBe(true);
+    }finally{await runtime.close();runtime=new ProductTaskRuntime(engine);await runtime.start();}
+  },120000);
+  test.skipIf(!!database || process.env.PMBRAIN_TASK_TEST_WORKER!=='1')('预算事务提交卡死时停止整轮并恢复，继续后处理剩余资料',async()=>{
+    const dir=join(root,'budget-commit-spin');mkdirSync(dir);
+    writeFileSync(join(dir,'note.md'),'# 合成资料\n\n预算事务恢复后继续。');
+    await engine.executeRaw("INSERT INTO sources (id,name,local_path,config) VALUES ($1,$2,$3,$4::jsonb)",['budget-commit-spin','预算提交恢复',dir,{syncEnabled:true}]);
+    await engine.putPage('retained',{type:'note',title:'保留',compiled_truth:'此前已保存'}, {sourceId:'budget-commit-spin'});
+    await engine.executeRaw(`CREATE FUNCTION synthetic_budget_commit_spin() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+      IF NEW.data->'taskBudget' IS DISTINCT FROM OLD.data->'taskBudget' AND NEW.data->'task'->'input'->>'preset'='quick' THEN LOOP PERFORM 1; END LOOP; END IF;
+      RETURN NEW; END $$`);
+    await engine.executeRaw('CREATE CONSTRAINT TRIGGER synthetic_budget_commit_spin AFTER UPDATE ON minion_jobs DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION synthetic_budget_commit_spin()');
+    const prototype=WorkerPgliteEngine.prototype as any;const original=prototype.runScoped;let injected=false;
+    const intercepted=spyOn(prototype,'runScoped').mockImplementation(function(this:unknown,...args:unknown[]){
+      const context=databaseRequestContext();
+      if(!injected&&context&&args[0]==='transaction'){
+        injected=true;
+        return withDatabaseRequest({...context,timeoutMs:150},()=>original.apply(this,args));
+      }
+      return original.apply(this,args);
+    });
+    let runId='';
+    try{
+      runId=(await runtime.submitDream({preset:'quick',sourceId:'budget-commit-spin'})).id;
+      const stopped=await finish(runId);
+      expect(injected).toBe(true);
+      expect(stopped.status).toBe('failed');
+      expect(stopped.error).toContain('数据库请求超时：@scope.close');
+      expect(stopped.product?.errorReason).toContain('数据库执行超时');
+    }finally{
+      intercepted.mockRestore();
+      await engine.executeRaw('DROP TRIGGER synthetic_budget_commit_spin ON minion_jobs');
+      await engine.executeRaw('DROP FUNCTION synthetic_budget_commit_spin()');
+    }
+    expect((await engine.getPage('retained',{sourceId:'budget-commit-spin'}))?.compiled_truth).toBe('此前已保存');
+    await runtime.retry(runId);
+    expect((await finish(runId)).status).toBe('completed');
+    expect(await engine.getPage('note',{sourceId:'budget-commit-spin'})).not.toBeNull();
+  },180000);
   test.skipIf(!database && process.env.PMBRAIN_TASK_TEST_WORKER!=='1')('文件数据库超时后保留整轮原因，继续时清理旧子任务停止标记并处理剩余资料', async () => {
     const dir = join(root, 'timeout-resume'); mkdirSync(dir);
     for (const name of ['01-before','02-timeout','03-after']) writeFileSync(join(dir, `${name}.md`), `# ${name}\n\n隔离测试资料。`);

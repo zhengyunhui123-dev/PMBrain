@@ -33,7 +33,7 @@ beforeAll(async()=>{
   }});
   writeFileSync(configPath(),JSON.stringify({engine:database?'postgres':'pglite',...(database?{database_url:database}:{database_path:join(root,'database')}),embedding_model:'custom-openai:audit-test',embedding_dimensions:dimensions,custom_openai_api_key:'isolated-only',provider_base_urls:{'custom-openai':server.url.origin+'/v1'},models:{default:'custom-openai:audit-test'},model_usage:{embedding_enabled:true,generative_enabled:true},desktop:{knowledge_directory:root}}));
   engine=(database?new PostgresEngine():new WorkerPgliteEngine()) as unknown as BrainEngine;if(database)assertSafeE2eDatabaseUrl(database);await engine.connect(database?{database_url:database}:{database_path:join(root,'database')});await engine.initSchema();
-  if(database)await resetPgliteState(engine as any);
+  if(database){const version=await engine.getConfig('version');await resetPgliteState(engine as any);if(version)await engine.setConfig('version',version);}
   await engine.executeRaw("UPDATE sources SET local_path=$1 WHERE id='default'",[directory]);await engine.setConfig('dream.entity_capture.enabled','false');
   await engine.setConfig('pricing.overrides',JSON.stringify({'custom-openai:audit-test':{input:1,output:0}}));
   await engine.setConfig('dream.knowledge.enabled','false');await engine.setConfig('dream.synthesize.enabled','false');await engine.setConfig('cycle.enrich_thin.enabled','false');

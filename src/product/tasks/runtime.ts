@@ -940,6 +940,11 @@ export class ProductTaskRuntime {
     };
     let cancelRequested = false;
     const gitController = new AbortController();
+    const timeoutOwner = quickTimeoutOwner ?? context.id;
+    const databaseContext = () => ({ taskId: context.id, token: record.lock_token!, signal: gitController.signal,
+      stage: activity?.stage ?? adapter.view.stage, file: activity?.path ?? adapter.view.file ?? undefined,
+      onTimeout: (error:Error) => { withoutDatabaseRequest(() => { void this.requestCancel(`task-${timeoutOwner}`, error.message).catch(reason => console.error('[tasks] database timeout:', reason)); }); },
+    });
     const gitOperations = new Set<Promise<unknown>>();
     let completed = false;
     let deferred = false;
@@ -1101,13 +1106,11 @@ export class ProductTaskRuntime {
             if (!rows.length) throw new Error('维护任务已停止或租约失效');
             return null;
           }
-          const timeoutOwner = quickTimeoutOwner ?? context.id;
-          return withDatabaseRequest({ taskId: context.id, token: record.lock_token!, signal: gitController.signal,
-            stage: activity?.stage ?? adapter.view.stage, file: activity?.path ?? adapter.view.file ?? undefined,
-            onTimeout: error => { withoutDatabaseRequest(() => { void this.requestCancel(`task-${timeoutOwner}`, error.message).catch(reason => console.error('[tasks] database timeout:', reason)); }); },
-          }, () => host.dispatch(message));
+          return withDatabaseRequest(databaseContext(), () => host.dispatch(message));
         };
-        void withDatabasePriority(['import','sync-file'].includes(structuredTask.type) ? 2 : 3, dispatch).then(value => {
+        const runDispatch = () => withDatabasePriority(['import','sync-file'].includes(structuredTask.type) ? 2 : 3, dispatch);
+        const quick = quickTimeoutOwner !== undefined || (structuredTask.type === 'dream' && structuredTask.input.preset === 'quick');
+        void (quick ? withDatabaseRequest(databaseContext(), runDispatch) : runDispatch()).then(value => {
           databaseOperations.delete(message.id);updateExecutionActivity();
           if(activity?.operation===message.method)updateActivity({operation:undefined,operationStartedAt:undefined});
           if (!cancelRequested) send({ type: 'reply', id: message.id, value });
@@ -1154,7 +1157,9 @@ export class ProductTaskRuntime {
       }
     });
     flush = setInterval(() => {if(progressDirty&&Date.now()-lastPersistedAt>=5000)void persist().catch(settleReject);}, 1000);
-    send({ type: 'start', kind: this.engine.kind, task: record.data.task, ownerJobId: context.id, ownerToken:record.lock_token, constrained:this.localPressure||this.externalPressure });
+    const skipBudget = quickTimeoutOwner !== undefined && structuredTask.type === 'sync-file' && structuredTask.input.options.noEmbed === true
+      && structuredTask.input.options.documentOcr !== true && structuredTask.input.modelMayRun !== true;
+    send({ type: 'start', kind: this.engine.kind, task: record.data.task, ownerJobId: context.id, ownerToken:record.lock_token, constrained:this.localPressure||this.externalPressure, skipBudget });
     let importVectorsQueued = false;
     const queueImportVectors = async () => {
       if (importVectorsQueued) return;

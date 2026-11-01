@@ -554,8 +554,8 @@ async function runQuickVector(engine: BrainEngine, input: Extract<ProductTask, {
   }
 }
 
-async function execute(task:ProductTask,kind:BrainEngine['kind']){
-  if(task.type!=='sync-file')return executeTask(task,kind);
+async function execute(task:ProductTask,kind:BrainEngine['kind'],skipBudget=false){
+  if(task.type!=='sync-file'||skipBudget)return executeTask(task,kind);
   const tracker=await openTaskBudget(request=>rpc('task.budget',[request]) as Promise<TaskBudgetReply>);
   return tracker?withTaskBudgetTracker(tracker,()=>executeTask(task,kind)):executeTask(task,kind);
 }
@@ -792,7 +792,7 @@ parentPort!.on('message', message => {
     abort = new AbortController();
     importFile = undefined;
     backgroundDocumentOcr=message.task.type==='import'&&!!message.task.input.ocrOnly;
-    void execute(message.task, message.kind).catch(error => {
+    void execute(message.task, message.kind, message.skipBudget === true).catch(error => {
       if(error instanceof DocumentOcrDeferred){send({type:'deferred',phase:message.task.type==='dream'?'maintenance_ocr':'document_ocr'});return;}
       if(error instanceof MaintenanceVectorizationDeferred){send({type:'deferred',phase:'maintenance_embed'});return;}
       if(error instanceof EntityCaptureWindowDeferred){send({type:'deferred',phase:'capture_entities'});return;}
