@@ -53,6 +53,7 @@ export class TaskEngineHost {
     private resources=new TaskResourceGuard(),
     private auditJobId = jobId,
     private operationGate?: (engine:BrainEngine)=>Promise<void>,
+    private skipUnchangedGitRecords = false,
   ) {this.cleanupOwner=owner;this.owner=withSqlCancellation(owner,this.abort.signal);}
 
   ownsLockedTransaction(): boolean {
@@ -194,7 +195,7 @@ export class TaskEngineHost {
         const manifest=await readDocumentChunkManifest(scope.engine,page.id);
         receipt.chunks=manifest.chunks;receipt.chunkHash=manifest.chunk_hash;
         if(this.syncFile)await (scope.engine as BrainEngine).setConfig(syncFileManifestKey(this.syncFile),JSON.stringify(syncFileManifest(this.syncFile,receipt.slug,receipt.pageHash,receipt.chunks,false,receipt.chunkHash)));
-        if(this.syncFile)await recordSyncedGitFile(scope.engine,this.auditJobId,receipt.sourceId,{path:this.syncFile.relativePath,hash:this.syncFile.hash});
+        if(this.syncFile)await recordSyncedGitFile(scope.engine,this.auditJobId,receipt.sourceId,{path:this.syncFile.relativePath,hash:this.syncFile.hash},this.skipUnchangedGitRecords);
         const rows = await scope.engine.executeRaw(`UPDATE minion_jobs SET result = $3::jsonb, updated_at = now()
           WHERE id = $1 AND status = 'active' AND lock_token = $2 RETURNING id`, [this.jobId, this.token, JSON.stringify(receipt)]);
         if (!rows.length) throw new Error('文件任务已停止或租约失效');
@@ -292,7 +293,7 @@ export class TaskEngineHost {
       if (method === 'softDeletePages') {
         const deleted = new Set(result as string[]);
         for (const page of deletedPages) if (deleted.has(page.slug)) await recordSyncedGitFile(target, this.auditJobId,
-          (args[1] as { sourceId: string }).sourceId, { path: page.source_path, deleted: true });
+          (args[1] as { sourceId: string }).sourceId, { path: page.source_path, deleted: true },this.skipUnchangedGitRecords);
       }
       if (method === 'executeRaw' && /INSERT\s+INTO\s+gbrain_cycle_locks/i.test(String(args[0]))) {
         for (const row of result as Array<{ id: string }>) this.cycleLocks.add(row.id);

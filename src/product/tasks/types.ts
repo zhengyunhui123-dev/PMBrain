@@ -13,6 +13,7 @@ export interface SyncFileInput {
   compatibleFingerprints?: string[];
   modelFingerprint: string;
   modelMayRun?: boolean;
+  quickMaintenance?: boolean;
   sourceRoot: string;
   options: SyncFileOptions;
   timeoutMs?: number;

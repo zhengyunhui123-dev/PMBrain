@@ -187,6 +187,7 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
       const hash = oversized?`oversize:${snapshot.size}:${snapshot.mtimeMs}`:await streamFileHash(path,abort.signal);
       const result = await rpc('task.syncFile', [{ path, relativePath, sourceRoot, originalPath,
         originalSize: snapshot.size, originalMtime: snapshot.mtimeMs, hash,
+        quickMaintenance:input.preset==='quick',
         modelFingerprint: taskModelFingerprint(),
         modelMayRun: options.documentOcr === true && (isOfficeFilePath(relativePath) || isImageFilePath(relativePath)),
         fingerprint: syncFileContentFingerprint(options),
@@ -560,7 +561,9 @@ async function execute(task:ProductTask,kind:BrainEngine['kind'],skipBudget=fals
   return tracker?withTaskBudgetTracker(tracker,()=>executeTask(task,kind)):executeTask(task,kind);
 }
 async function executeTask(task: ProductTask, kind: BrainEngine['kind']) {
-  const engine = proxyEngine(kind);
+  const rawEngine = proxyEngine(kind);
+  const engine = task.type==='sync-file'&&task.input.quickMaintenance
+    ? await (await import('./quick-config-snapshot.ts')).loadQuickConfigSnapshot(rawEngine) : rawEngine;
   if (loadConfig()) await reloadLiveGateway(engine);
   let result: Record<string, unknown>;
   if (task.type === 'sync-file') {

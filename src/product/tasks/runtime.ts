@@ -24,7 +24,7 @@ import { withDatabasePriority } from '../database/priority';
 import { SyncFileQueue, SYNC_FILE_QUEUE, SYNC_FILE_TASK } from './sync-file-queue.ts';
 import type { MaintenanceCheckpoint, SyncFileInput } from './types.ts';
 import { resolveSourceId } from '../../core/source-resolver.ts';
-import { recordSyncedGitFile, commitQuickMaintenanceSource } from './synced-git.ts';
+import { recordSyncedGitFile, recordSyncedGitFiles, commitQuickMaintenanceSource } from './synced-git.ts';
 import type { SyncResult } from '../../commands/sync.ts';
 import { maintenanceFailure } from './maintenance-orchestration.ts';
 import { claimMaintenanceCapture } from './maintenance-orchestration.ts';
@@ -102,6 +102,7 @@ export class ProductTaskRuntime {
   private idleFileThreads: Worker[] = [];
   private idleMaintenanceThreads: Worker[] = [];
   private sessionRefresh = new Map<number, { timer: ReturnType<typeof setTimeout>; file?: string }>();
+  private quickProgressPersistedAt = new Map<number,number>();
   private loop: Promise<void> | null = null;
   private stopped = false;
   private paused = false;
@@ -167,10 +168,10 @@ export class ProductTaskRuntime {
       this.dirtyFiles.get(sessionId)!.add(context.id);
       try {
         const parent = await this.queue.getJob(sessionId);
-        if (parent?.queue !== PRODUCT_TASK_QUEUE || parent.status !== 'waiting-children') throw new Error('同步会话已停止，文件尚未开始');
+        const parentTask = parent?.data.task as ProductTask;
+        const quickOwner = parent?.data.kind === 'dream_quick' || (parentTask?.type === 'dream' && parentTask.input.preset === 'quick') ? sessionId : undefined;
+        if (parent?.queue !== PRODUCT_TASK_QUEUE || (parent.status !== 'waiting-children' && !(quickOwner!==undefined&&parent.status==='active'))) throw new Error('同步会话已停止，文件尚未开始');
         this.scheduleSessionRefresh(sessionId, ((context.data.task as ProductTask).input as SyncFileInput).relativePath);
-        const parentTask = parent.data.task as ProductTask;
-        const quickOwner = parent.data.kind === 'dream_quick' || (parentTask?.type === 'dream' && parentTask.input.preset === 'quick') ? sessionId : undefined;
         return await withDatabasePriority(2, () => this.execute(context, quickOwner));
       } catch (error) {
         if (this.stopIntents.has(sessionId) || this.recoveringOwner) throw error;
@@ -874,7 +875,7 @@ export class ProductTaskRuntime {
       if(!activity)return;
       activity={...activity,...patch,updatedAt:new Date().toISOString()};
       adapter.view.activeFiles=[activity];adapter.view.file=activity.path;adapter.view.stage=activity.stage;
-      this.fileProjection.activity(Number(record.data.sessionId),context.id,activity);
+      this.fileProjection.activity(Number(record.data.sessionId),context.id,activity,quickTimeoutOwner!==undefined);
     };
     updateActivity({});
     let progressTail = Promise.resolve();
@@ -910,7 +911,7 @@ export class ProductTaskRuntime {
       const input=structuredTask.input;const message=new WorkbenchStore(input.root).get(input.conversationId).messages.find(row=>row.id===input.messageId);
       const sources=await tx.executeRaw('SELECT id FROM sources WHERE id=$1 AND archived=false FOR SHARE',[input.sourceId]);
       if(!wb.enabled||!sources.length||message?.memory?.hash!==input.hash||memoryVersion(message)!==input.hash||(wb.visibility==='private'&&message.memory.visibility==='world'))throw new Error('自动记忆已关闭、来源或会话已改变，任务停止写入');
-    }:undefined);
+    }:undefined,quickTimeoutOwner!==undefined || (structuredTask.type==='dream' && structuredTask.input.preset==='quick'));
     const workerPath = /\/(?:~BUN|\$bunfs)\//.test(decodeURIComponent(import.meta.url))
       ? './product/tasks/task-worker.ts'
       : new URL(import.meta.url.endsWith('.ts') ? './task-worker.ts' : './task-worker.js', import.meta.url);
@@ -946,6 +947,13 @@ export class ProductTaskRuntime {
       onTimeout: (error:Error) => { withoutDatabaseRequest(() => { void this.requestCancel(`task-${timeoutOwner}`, error.message).catch(reason => console.error('[tasks] database timeout:', reason)); }); },
     });
     const gitOperations = new Set<Promise<unknown>>();
+    const quickGitFiles=new Map<string,{sourceId:string;path:string;hash:string}>();
+    const flushQuickGitFiles=async()=>{
+      if(!quickGitFiles.size)return;
+      const batch=[...quickGitFiles.entries()];
+      await recordSyncedGitFiles(this.engine,context.id,batch.map(([,file])=>file));
+      for(const [key,file] of batch)if(quickGitFiles.get(key)===file)quickGitFiles.delete(key);
+    };
     let completed = false;
     let deferred = false;
     let deferredPhase:string|undefined;
@@ -990,7 +998,11 @@ export class ProductTaskRuntime {
     this.executions.set(context.id, { background: backgroundOcr || searchOptimize, pause: () => { record.data.searchOptimizePause = 'manual'; }, cancel, done: finished.catch(() => {}), ownsLockedTransaction: () => host.ownsLockedTransaction(), adjust:constrained=>send({type:'resource-pressure',constrained}), run: () => {
       progress.product = adapter.view;
       const run=toRun({ ...record, progress }, cancelRequested);
-      if (run.product && structuredTask.type==='dream' && usesSyncFileQueue(structuredTask.input)) run.product.activeFiles=this.fileProjection.active(context.id);
+      if (run.product && structuredTask.type==='dream' && usesSyncFileQueue(structuredTask.input)) {
+        run.product.activeFiles=this.fileProjection.active(context.id);
+        const counts=structuredTask.input.preset==='quick'?this.fileProjection.counts(context.id):null;
+        if(counts?.total){run.product.syncFiles=counts;run.product.processed=counts.completed+counts.failed;run.product.total=counts.total;}
+      }
       return run;
     } });
     this.applyResourcePressure();
@@ -1068,19 +1080,33 @@ export class ProductTaskRuntime {
           }
           if (message.method === 'task.syncFile') {
             const file = message.args[0] as SyncFileInput;
-            const result = await this.fileQueue.enqueue(context.id, record.lock_token!, file).catch(async error=>{
-              if(isSyncCapacityError(error) && !this.stopIntents.has(context.id) && !this.paused){
+            const quick=structuredTask.type==='dream'&&structuredTask.input.preset==='quick';
+            let result:import('../../core/import-file.ts').ImportResult & {deferred?:boolean;capacityReached?:boolean;childId?:number};
+            for(;;){
+              try{
+                result=await this.fileQueue.enqueue(context.id,record.lock_token!,file);
+                if(quick&&result.deferred&&result.childId)result=await this.waitForQuickFile(context.id,record.lock_token!,result.childId,gitController.signal);
+                break;
+              }catch(error){
+                if(!isSyncCapacityError(error)||this.stopIntents.has(context.id)||this.paused)throw error;
+                if(quick&&await this.waitForQuickCapacity(gitController.signal))continue;
                 const counts=await this.fileQueue.counts(context.id);
-                if(counts.remaining>0)return {slug:'',status:'skipped' as const,chunks:0,deferred:true,capacityReached:true};
+                if(counts.remaining>0){result={slug:'',status:'skipped',chunks:0,deferred:true,capacityReached:true};break;}
+                throw error;
               }
-              throw error;
-            });
-            if (!result.deferred && ['imported', 'skipped'].includes(result.status)) await recordSyncedGitFile(this.engine, context.id,
-              file.options.sourceId ?? 'default', { path: file.relativePath, hash: file.hash });
+            }
+            if (!result.deferred && ['imported', 'skipped'].includes(result.status)) {
+              const sourceId=file.options.sourceId??'default';
+              if(structuredTask.type==='dream'&&structuredTask.input.preset==='quick'){
+                quickGitFiles.set(JSON.stringify([sourceId,file.relativePath]),{sourceId,path:file.relativePath,hash:file.hash});
+                if(quickGitFiles.size>=32)await flushQuickGitFiles();
+              }else await recordSyncedGitFile(this.engine,context.id,sourceId,{path:file.relativePath,hash:file.hash});
+            }
             return result;
           }
           if (message.method === 'task.gitCommit') {
             if (structuredTask.type !== 'dream' || structuredTask.input.preset !== 'quick' || structuredTask.input.dryRun) throw new Error('无效的自动 Git 提交任务');
+            await flushQuickGitFiles();
             adapter.view.stage = '保存本地版本'; await persist();
             const sourceId = String(message.args[0]), root = String(message.args[1]);
             const operation = commitQuickMaintenanceSource(this.engine, context.id, sourceId, root, message.args[2] as SyncResult, {
@@ -1167,7 +1193,8 @@ export class ProductTaskRuntime {
       await this.queueDeferredImportVectors(structuredTask, progress.result, cancelRequested);
     };
     try {
-      const outcome = await finished;
+      let outcome = await finished;
+      if(structuredTask.type==='dream'&&structuredTask.input.preset==='quick')await flushQuickGitFiles();
       await queueImportVectors();
       if (structuredTask.type === 'import') await persist();
       if (structuredTask.type === 'embed' && structuredTask.input.searchOptimize === true && outcome !== MINION_DEFERRED && !cancelRequested) {
@@ -1211,6 +1238,10 @@ export class ProductTaskRuntime {
           const counts=await this.fileQueue.counts(context.id);
           if (counts.total>0) {
             adapter.view.syncFiles=counts;adapter.view.processed=counts.completed+counts.failed;adapter.view.total=counts.total;
+            if(structuredTask.input.preset==='quick'&&counts.remaining>0&&outcome&&typeof outcome==='object'){
+              const partial={...(outcome as Record<string,unknown>),status:'partial',syncFilesRemaining:counts.remaining};
+              outcome=partial;progress.result=partial;adapter.view.errorReason=`仍有 ${counts.remaining} 份资料尚未处理，请检查原路径后继续。`;
+            }
             adapter.view.activeFiles=[];await persist();
           }
         }
@@ -1437,13 +1468,66 @@ export class ProductTaskRuntime {
     if (!this.stopped) await this.start();
   }
 
+  private async waitForQuickCapacity(signal:AbortSignal):Promise<boolean> {
+    signal.throwIfAborted();
+    let wake:(()=>void)|undefined;
+    const onFinished=()=>wake?.();
+    this.fileWorker.on('job-finished',onFinished);
+    try{
+      const [row]=await this.engine.executeRaw<{runnable:boolean}>("SELECT EXISTS(SELECT 1 FROM minion_jobs WHERE queue=$1 AND status IN ('waiting','active')) AS runnable",[SYNC_FILE_QUEUE]);
+      if(!row?.runnable)return false;
+      await new Promise<void>((resolve,reject)=>{
+        const timer=setTimeout(()=>finish(),5000);
+        const finish=()=>{clearTimeout(timer);signal.removeEventListener('abort',aborted);wake=undefined;resolve();};
+        const aborted=()=>{clearTimeout(timer);signal.removeEventListener('abort',aborted);wake=undefined;reject(signal.reason??new Error('同步任务已停止'));};
+        wake=finish;signal.addEventListener('abort',aborted,{once:true});
+        if(signal.aborted)aborted();
+      });
+      return true;
+    }finally{this.fileWorker.off('job-finished',onFinished);}
+  }
+
+  private async waitForQuickFile(sessionId:number,token:string,childId:number,signal:AbortSignal):Promise<import('../../core/import-file.ts').ImportResult> {
+    let version=0;
+    let wake:(()=>void)|undefined;
+    const onFinished=(job:MinionJob)=>{if(job.id===childId){version++;wake?.();}};
+    this.fileWorker.on('job-finished',onFinished);
+    try{
+      await this.fileQueue.activateDuringQuickScan(sessionId,token,childId);
+      for(;;){
+        signal.throwIfAborted();
+        const seen=version;
+        const child=await this.queue.getJob(childId);
+        if(!child||child.parent_job_id!==sessionId)throw new Error('同步文件任务不存在或所属任务已改变');
+        if(child.status==='completed'){
+          const value=child.result as Record<string,unknown>|null;
+          if(!value)throw new Error('同步文件任务没有完成结果');
+          const status=value.status==='failed'?'error':value.status;
+          if(!['imported','skipped','partial','error'].includes(String(status)))throw new Error('同步文件任务结果无效');
+          return {...value,status} as import('../../core/import-file.ts').ImportResult;
+        }
+        if(['dead','failed','cancelled','paused'].includes(child.status))throw new Error(child.error_text??'同步文件任务已停止');
+        if(version!==seen)continue;
+        await new Promise<void>((resolve,reject)=>{
+          const timer=setTimeout(()=>finish(),5000);
+          const finish=()=>{clearTimeout(timer);signal.removeEventListener('abort',aborted);wake=undefined;resolve();};
+          const aborted=()=>{clearTimeout(timer);signal.removeEventListener('abort',aborted);wake=undefined;reject(signal.reason??new Error('同步任务已停止'));};
+          wake=finish;signal.addEventListener('abort',aborted,{once:true});
+          if(signal.aborted)aborted();
+        });
+      }
+    }finally{this.fileWorker.off('job-finished',onFinished);}
+  }
+
   private async refreshSession(id: number, file?: string) {
     if(this.stopIntents.has(id)||this.recoveringOwner)return;
     const job = await this.queue.getJob(id);
-    if (!job || ['completed','cancelled','dead','failed','paused'].includes(job.status)) { this.sessionViews.delete(id); return; }
+    if (!job || ['completed','cancelled','dead','failed','paused'].includes(job.status)) { this.sessionViews.delete(id);this.quickProgressPersistedAt.delete(id);return; }
     const run = toRun(job);
-    const counts = await this.fileQueue.counts(id);
+    const task=job.data.task as ProductTask;
+    const quick=task?.type==='dream'&&task.input.preset==='quick';
     await this.hydrateFiles([id],true);
+    const counts = quick ? this.fileProjection.counts(id)??await this.fileQueue.counts(id) : await this.fileQueue.counts(id);
     if(this.stopIntents.has(id))return;
     if (run.product && counts.total > 0) {
       run.product.syncFiles = counts;
@@ -1456,7 +1540,11 @@ export class ProductTaskRuntime {
         if (file) run.product.file = file;
       }
       job.progress = { ...(job.progress as Record<string, unknown> ?? {}), product: run.product };
-      await this.engine.executeRaw(`UPDATE minion_jobs SET progress = $2::jsonb WHERE id = $1 AND status IN ('waiting-children','waiting')`, [id, job.progress]);
+      const now=Date.now();
+      if(!quick||(['waiting-children','waiting'].includes(job.status)&&now-(this.quickProgressPersistedAt.get(id)??0)>=5000)){
+        await this.engine.executeRaw(`UPDATE minion_jobs SET progress = $2::jsonb WHERE id = $1 AND status IN ('waiting-children','waiting')`, [id, job.progress]);
+        if(quick)this.quickProgressPersistedAt.set(id,now);
+      }
     }
     this.sessionViews.set(id, run);
     this.cached = [run, ...this.cached.filter(row => row.id !== run.id)].slice(0, 120);
@@ -1601,6 +1689,7 @@ export class ProductTaskRuntime {
     for(const id of ids){
       const selected=dirtyOnly?[...(this.dirtyFiles.get(id)??[])]:null;
       if(selected?.length===0)continue;
+      const seen=dirtyOnly?null:new Set<number>();
       let after=0;
       for(;;){
         const rows=await this.engine.executeRaw<import('../../../shared/task-progress.ts').SyncFileDetails['rows'][number]>(
@@ -1611,11 +1700,13 @@ export class ProductTaskRuntime {
            FROM minion_jobs WHERE queue=$1 AND (data->>'sessionId')::bigint=$2 AND id>$3
              AND data->>'superseded' IS DISTINCT FROM 'true' AND ($4::bigint[] IS NULL OR id=ANY($4::bigint[])) ORDER BY id LIMIT 200`,[SYNC_FILE_QUEUE,id,after,selected]);
           this.fileProjection.seed(id,rows);
+          if(seen)for(const row of rows)seen.add(row.id);
           await this.fileProjection.flush();
         for(const row of rows)if(row.status!=='running')this.dirtyFiles.get(id)?.delete(row.id);
         if(rows.length<200)break;
         after=rows.at(-1)!.id;
       }
+      if(seen)this.fileProjection.reconcile(id,seen);
     }
   }
 

@@ -8,8 +8,10 @@ import { TaskResourceGuard, TASK_LOG_MAX_BYTES } from './resource-guard.ts';
 import { randomUUID } from 'node:crypto';
 
 type Row = SyncFileDetails['rows'][number];
+type Counts = {total:number;completed:number;failed:number;remaining:number};
+type Session = {rows:Map<number,Row>;paths:Map<string,number>;updatedAt:string;activitySavedAt:Map<number,number>;dirtyActivity:Set<number>;counts:Counts};
 export class FileProjection {
-  private sessions = new Map<number, {rows:Map<number,Row>; paths:Map<string,number>; updatedAt:string}>();
+  private sessions = new Map<number, Session>();
   private tail = Promise.resolve();
   private failure: unknown;
   private pending=new Map<string,{id:number;row:Row}>();
@@ -18,15 +20,15 @@ export class FileProjection {
   private pinned=new Set<number>();
   private failedSessions=new Set<number>();
   constructor(private options:{maxBytes?:number;resources?:TaskResourceGuard}={}){}
-  pin(id:number,value=true){if(value)this.pinned.add(id);else this.pinned.delete(id);}
+  pin(id:number,value=true){if(value)this.pinned.add(id);else{this.pinned.delete(id);const session=this.sessions.get(id);if(session)this.flushActivity(id,session);}}
 
   private session(id:number) {
     if(!this.sessions.has(id)&&this.sessions.size>=16){
-      const victim=[...this.sessions].find(([key])=>key!==this.writing && !this.pinned.has(key) && ![...this.pending.values()].some(row=>row.id===key));
+      const victim=[...this.sessions].find(([key,session])=>key!==this.writing && !this.pinned.has(key) && !session.dirtyActivity.size && ![...this.pending.values()].some(row=>row.id===key));
       if(victim)this.sessions.delete(victim[0]);
       else throw new Error('资源保护：文件明细缓存容量已满，请等待已有任务完成。');
     }
-    if (!this.sessions.has(id)) this.sessions.set(id,{rows:new Map(),paths:new Map(),updatedAt:new Date().toISOString()});
+    if (!this.sessions.has(id)) this.sessions.set(id,{rows:new Map(),paths:new Map(),updatedAt:new Date().toISOString(),activitySavedAt:new Map(),dirtyActivity:new Set(),counts:{total:0,completed:0,failed:0,remaining:0}});
     const session=this.sessions.get(id)!;this.sessions.delete(id);this.sessions.set(id,session);return session;
   }
 
@@ -35,24 +37,54 @@ export class FileProjection {
     const session=this.session(id);
     const key=JSON.stringify([row.sourceId,row.path]);
     const old=session.paths.get(key);
-    if (old!==undefined && old!==row.id) session.rows.delete(old);
+    if (old!==undefined && old!==row.id) {
+      const previous=session.rows.get(old);if(previous)this.countRow(session,previous,-1);
+      session.rows.delete(old);session.activitySavedAt.delete(old);session.dirtyActivity.delete(old);
+    }
     session.paths.set(key,row.id);
     if(!session.rows.has(row.id)&&session.rows.size>=20000)throw new Error('资源保护：文件明细容量已达到 20000，已停止新增记录。');
+    const previous=session.rows.get(row.id);if(previous)this.countRow(session,previous,-1);
     session.rows.set(row.id,row);
+    this.countRow(session,row,1);
     session.updatedAt=new Date().toISOString();
+  }
+
+  private countRow(session:Session,row:Row,delta:number){
+    session.counts.total+=delta;
+    if(row.status==='completed')session.counts.completed+=delta;
+    else if(row.status==='failed')session.counts.failed+=delta;
+    else session.counts.remaining+=delta;
+  }
+
+  counts(id:number):Counts|null {
+    const session=this.sessions.get(id);
+    return session?{...session.counts}:null;
+  }
+
+  reconcile(id:number,seen:Set<number>){
+    const session=this.sessions.get(id);if(!session)return;
+    let changed=false;
+    for(const [child,row] of session.rows){
+      if(seen.has(child))continue;
+      this.countRow(session,row,-1);session.rows.delete(child);session.activitySavedAt.delete(child);session.dirtyActivity.delete(child);
+      const key=JSON.stringify([row.sourceId,row.path]);if(session.paths.get(key)===child)session.paths.delete(key);
+      changed=true;
+    }
+    if(changed)session.updatedAt=new Date().toISOString();
   }
 
   record(job:MinionJob) {
     const id=Number(job.data.sessionId);
     if (!Number.isSafeInteger(id)||id<1||job.data.superseded) return;
     const input=(job.data.task as {input:SyncFileInput}).input;
-    const previous=this.session(id).rows.get(job.id);
+    const session=this.session(id);
+    const previous=session.rows.get(job.id);
     const failed=['failed','partial','error'].includes(String(job.result?.status)) || ['dead','failed'].includes(job.status);
     const row:Row={id:job.id,sourceId:input.options.sourceId??'default',path:input.relativePath,
       status:failed?'failed':job.status==='completed'?'completed':job.status==='active'?'running':'pending',
       error:(job.result?.error as string|undefined)??job.error_text??null,
       activity:previous?.activity};
-    if (row.status!=='running') row.activity=undefined;
+    if (row.status!=='running') {row.activity=undefined;session.activitySavedAt.delete(job.id);session.dirtyActivity.delete(job.id);}
     if(JSON.stringify(previous)===JSON.stringify(row))return;
     this.apply(id,row); this.save(id,row);
   }
@@ -62,14 +94,29 @@ export class FileProjection {
     for(const row of rows){
       const previous=session.rows.get(row.id);
       const next={...row,activity:row.status==='running'?(previous?.activity??row.activity):undefined};
+      if(next.status!=='running'){session.activitySavedAt.delete(row.id);session.dirtyActivity.delete(row.id);}
       this.apply(id,next);
       if(JSON.stringify(previous)!==JSON.stringify(next))this.save(id,next);
     }
   }
-  activity(id:number,child:number,activity:SyncFileActivity) {
-    const row=this.session(id).rows.get(child);
-    if (!row) return;
-    const next={...row,activity}; this.apply(id,next); this.save(id,next);
+  activity(id:number,child:number,activity:SyncFileActivity,coalesce=false) {
+    const session=this.session(id);
+    const row=session.rows.get(child);
+    if (!row||(coalesce&&row.status!=='running')) return;
+    const next={...row,activity};this.apply(id,next);
+    if(!coalesce){this.save(id,next);return;}
+    const now=Date.now(),last=session.activitySavedAt.get(child);
+    if(row.activity?.stage!==activity.stage||last===undefined||now-last>=1000){
+      session.activitySavedAt.set(child,now);session.dirtyActivity.delete(child);this.save(id,next);
+    }else session.dirtyActivity.add(child);
+  }
+
+  private flushActivity(id:number,session:Session){
+    for(const child of session.dirtyActivity){
+      const row=session.rows.get(child);
+      if(row?.status==='running'&&row.activity){session.activitySavedAt.set(child,Date.now());this.save(id,row);}
+    }
+    session.dirtyActivity.clear();
   }
 
   private save(id:number,row:Row) {
@@ -150,5 +197,5 @@ export class FileProjection {
     }
     this.failedSessions.clear();this.failure=undefined;
   }
-  async flush(){await this.tail;if(this.failure)throw this.failure;}
+  async flush(){for(const [id,session] of this.sessions)this.flushActivity(id,session);await this.tail;if(this.failure)throw this.failure;}
 }
