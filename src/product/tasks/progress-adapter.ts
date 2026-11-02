@@ -359,6 +359,7 @@ export function finishTaskProgress(view: TaskProductProgress, status: string, re
   next.completedSteps = next.steps.filter(step => step.status === 'completed').length;
   const imported = next.name === '导入资料' ? importOutcome(data) : null;
   if (imported && ['completed', 'failed'].includes(status)) {
+    next.importCounts={processed:imported.processed,imported:Math.max(0,imported.processed-imported.unchanged-imported.failed-imported.partial),unchanged:imported.unchanged,failed:imported.failed,partial:imported.partial};
     next.metrics = next.metrics.map(metric => metric.label === '跳过资料' ? { ...metric, value: imported.unchanged }
       : metric.label === '新增资料' ? { ...metric, value: imported.imported }
       : metric.label === '失败文件' ? { ...metric, value: imported.failed } : metric);

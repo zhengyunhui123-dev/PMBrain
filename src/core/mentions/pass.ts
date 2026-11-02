@@ -76,6 +76,7 @@ export interface MentionPassResult {
 }
 
 export interface MentionPassOpts {
+  onPages?: (slugs: string[]) => Promise<void>;
   sourceId?: string;
   slugs?: string[];
   excludeSlugs?: string[];
@@ -475,6 +476,7 @@ async function reconcileSource(engine: BrainEngine, sourceId: string, gazetteer:
     result.skipped += pages.length - outcome.fresh;
     result.created += outcome.created;
     result.removed += outcome.removed;
+    await opts.onPages?.(outcome.processed.map(page=>page.slug));
   }
 }
 

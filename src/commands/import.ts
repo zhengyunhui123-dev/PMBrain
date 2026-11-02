@@ -72,6 +72,7 @@ export interface RunImportResult {
 }
 
 export interface ImportOptions {
+    preparedFiles?: string[];
     documentRuntime?:DocumentRuntime;
     fileRuntime?: SyncFileRuntime;
     commit?: string;
@@ -285,7 +286,7 @@ export async function runStructuredImport(
         ? [dirArg]
         : [];
     } else {
-      allFiles = collectSyncableFiles(dir, {
+      allFiles = opts.preparedFiles ?? collectSyncableFiles(dir, {
         strategy, includeOffice, includeImages, includeSessions: strategy !== 'code', strict: opts.strictPaths, excludePathPattern: opts.excludePathPattern,
       });
     }
@@ -531,7 +532,7 @@ export async function runStructuredImport(
       failures.push({ path: relativePath, error: msg });
     }
     processed++;
-    await opts.runtime?.onFile({ path: relativePath, completed: completed.has(relativePath), processed, imported, skipped, errors, chunksCreated, slug: savedSlug, vectorize });
+    await opts.runtime?.onFile({ path: relativePath, completed: completed.has(relativePath), processed, imported, skipped, errors, unchanged, partialFiles, chunksCreated, slug: savedSlug, vectorize });
     tickProgress();
     // Save checkpoint every 100 SUCCESSFUL adds (not every 100 processed).
     // Failed files never enter `completed`, so a flaky file can't push the

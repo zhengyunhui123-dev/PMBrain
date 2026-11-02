@@ -1541,6 +1541,7 @@ export async function extractTimelineFromDB(
 }
 
 export interface RunByMentionOpts {
+  onPages?: (slugs: string[]) => Promise<void>;
   signal?: AbortSignal;
   excludePathPattern?: string;
   singlePass?: boolean;
@@ -1595,7 +1596,7 @@ export async function runByMentionCore(
   const { runMentionPass, countMentionDuePages } = await import('../core/mentions/pass.ts');
   const { previewMentionPass } = await import('../core/mentions/stale.ts');
   const priority = [...new Set(opts.prioritySlugs ?? [])];
-  const common = { sourceId:opts.sourceIdFilter,signal:opts.signal,typeFilter:opts.typeFilter,since:opts.since,yieldDuringPhase:opts.yieldDuringPhase,excludePathPattern:opts.excludePathPattern,quickEntityTypes:opts.quickEntityTypes };
+  const common = { sourceId:opts.sourceIdFilter,signal:opts.signal,typeFilter:opts.typeFilter,since:opts.since,yieldDuringPhase:opts.yieldDuringPhase,excludePathPattern:opts.excludePathPattern,quickEntityTypes:opts.quickEntityTypes,onPages:opts.onPages };
   if (opts.dryRun) {
     const preview=await previewMentionPass(engine,opts.sourceIdFilter);
     const gazetteer=await buildGazetteer(engine,{strict:true});

@@ -47,6 +47,10 @@ export interface SyncFileActivity {
 }
 
 export interface TaskProductProgress {
+  maintenance?: import('./maintenance-progress').MaintenanceRoundProgress;
+  importCounts?: {processed:number;imported:number;unchanged:number;failed:number;partial:number};
+  database?: import('./maintenance-progress').TaskDatabaseStatistics;
+  vectorTotals?: { total: number; completed: number; pages: number; completedPages: number; windowMs: number; windowElapsedMs?: number; windowEnded?: boolean; lastWindow?: {total:number;completed:number;elapsedMs:number;finishedAt:string} };
   background?: Pick<import('./background-vectorization.js').VectorizationSchedule, 'mode' | 'reason'>;
   budget?:{capCny:number;spentCny:number;reservedCny:number;usdToCny:number;calls:number;reason?:string;historicalCostUnknown?:boolean;unpricedCostUnknown?:boolean;revision?:number};
   heartbeatAt?: string;

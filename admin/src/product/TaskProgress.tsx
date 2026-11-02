@@ -12,6 +12,7 @@ import { ImportTaskResult } from './ImportTaskResult';
 import { importOutcome } from '../../../shared/import-outcome';
 import { modelSetupIssue, taskModelSetupIssue } from './model-readiness';
 import { taskStopping, taskStatus, taskPercent, taskRoundCompleted, taskRoundSummary, taskHasRemaining, taskPhaseSummary } from './task-presentation';
+import { MaintenanceProgress, VectorRoundProgress } from './MaintenanceProgress';
 
 export { taskStopping, taskStatus } from './task-presentation';
 export const taskLink = (run: ConsoleRun) => { window.location.hash = `tasks?run=${encodeURIComponent(run.id)}`; };
@@ -44,7 +45,13 @@ function DatabaseWait({ active }: { active: boolean }) {
   return <p className="product-task-caption" role="status">数据库占用：{text}</p>;
 }
 
-export function TaskProgressCard({ run, link = true, timeline = false }: { run: ConsoleRun; link?: boolean; timeline?: boolean }) {
+export function TaskProgressCard({run,link=true,timeline=false,vectorRuns=[]}:{run:ConsoleRun;link?:boolean;timeline?:boolean;vectorRuns?:ConsoleRun[]}){
+  if(run.product?.maintenance||run.kind==='import_path'||run.kind==='dream_quick'&&['running','queued'].includes(run.status))return <MaintenanceProgress run={run} link={link} vectorRuns={vectorRuns}/>;
+  if(run.product?.vectorTotals)return <VectorRoundProgress runs={[run]} title="知识向量化"/>;
+  return <LegacyTaskProgressCard run={run} link={link} timeline={timeline}/>;
+}
+
+function LegacyTaskProgressCard({ run, link = true, timeline = false }: { run: ConsoleRun; link?: boolean; timeline?: boolean }) {
   const view = run.product;
   const active = run.status === 'running' || run.status === 'queued';
   const importResult = run.kind === 'import_path' && !active && run.status !== 'cancelled' ? importOutcome(run.result) : null;

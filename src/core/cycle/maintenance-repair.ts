@@ -24,6 +24,8 @@ export interface RepairPhaseResult {
   details: Record<string, unknown>;
 }
 
+interface RepairOptions { dryRun?: boolean; sourceId?: string; slugs?: string[]; signal?: AbortSignal; onPage?: (slug:string)=>Promise<void> }
+
 const BATCH = 40;
 const LOSSY = /MALFORMED|UNBALANCED|COLLISION/;
 
@@ -281,7 +283,7 @@ async function writePage(engine: BrainEngine, row: RepairRow, compiledTruth: str
 
 export async function runPhaseFenceRepair(
   engine: BrainEngine,
-  opts: { dryRun?: boolean; sourceId?: string; slugs?: string[] } = {},
+  opts: RepairOptions = {},
 ): Promise<RepairPhaseResult> {
   const started = Date.now();
   try {
@@ -292,7 +294,7 @@ export async function runPhaseFenceRepair(
       engine,
       opts.sourceId,
       'fences.repair.cursor_id',
-      `(compiled_truth LIKE '%gbrain:facts:%' OR compiled_truth LIKE '%gbrain:takes:%')`,
+      opts.slugs ? 'true' : `(compiled_truth LIKE '%gbrain:facts:%' OR compiled_truth LIKE '%gbrain:takes:%')`,
       opts.slugs,
     );
     let merged = 0;
@@ -301,6 +303,8 @@ export async function runPhaseFenceRepair(
     let refused = 0;
     let fileBacked = 0;
     for (const row of rows) {
+      opts.signal?.throwIfAborted();
+      try {
       if (row.source_path) {
         fileBacked += 1;
         continue;
@@ -318,6 +322,7 @@ export async function runPhaseFenceRepair(
         continue;
       }
       if (await writePage(engine, row, repaired.body, frontmatterOf(row.frontmatter))) written += 1;
+      } finally { await opts.onPage?.(row.slug); }
     }
     if (!opts.slugs) await advance(engine, 'fences.repair.cursor_id', rows, opts.dryRun === true);
     const status = refused > 0 ? 'warn' : rows.length === 0 ? 'skipped' : 'ok';
@@ -341,7 +346,7 @@ export async function runPhaseFenceRepair(
 
 export async function runPhaseContentRepair(
   engine: BrainEngine,
-  opts: { dryRun?: boolean; sourceId?: string; slugs?: string[] } = {},
+  opts: RepairOptions = {},
 ): Promise<RepairPhaseResult> {
   const started = Date.now();
   try {
@@ -352,12 +357,14 @@ export async function runPhaseContentRepair(
       engine,
       opts.sourceId,
       'fences.repair.slug_cursor_id',
-      `frontmatter ? 'slug'`,
+      opts.slugs ? 'true' : `frontmatter ? 'slug'`,
       opts.slugs,
     );
     let removed = 0;
     let fileBacked = 0;
     for (const row of rows) {
+      opts.signal?.throwIfAborted();
+      try {
       const frontmatter = frontmatterOf(row.frontmatter);
       if (row.source_path) {
         fileBacked += 1;
@@ -375,6 +382,7 @@ export async function runPhaseContentRepair(
       removed += 1;
       if (opts.dryRun) continue;
       await writePage(engine, row, row.compiled_truth ?? '', next);
+      } finally { await opts.onPage?.(row.slug); }
     }
     if (!opts.slugs) await advance(engine, 'fences.repair.slug_cursor_id', rows, opts.dryRun === true);
     return {

@@ -422,7 +422,7 @@ test('分批同步中主动停止后保持停止，重启后继续原任务完�
     const run=await runtime.submitDream({preset:'quick',sourceId:'live-stop'});runId=run.id;
     const id=Number(run.id.slice(5)),deadline=Date.now()+90_000;
     let waiting=false;
-    while(Date.now()<deadline){if((await queue.getJob(id))?.status==='waiting-children'){waiting=true;break;}await Bun.sleep(20);}
+    while(Date.now()<deadline){const current=await runtime.getRun(run.id);if(current?.status==='running'&&current.product?.maintenance?.scan.complete){waiting=true;break;}await Bun.sleep(20);}
     expect(waiting,JSON.stringify(await runtime.getRun(run.id))).toBe(true);
     expect((await runtime.cancel(run.id))?.status).toBe('cancelled');
     const old=await engine.executeRaw<{id:number}>("SELECT id FROM minion_jobs WHERE queue=$1 AND parent_job_id=$2",[SYNC_FILE_QUEUE,id]);

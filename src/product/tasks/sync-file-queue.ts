@@ -31,7 +31,11 @@ export class SyncFileQueue {
     return operation;
   }
 
-  private async enqueueCore(sessionId:number,token:string,file:SyncFileInput):Promise<ImportResult & {deferred?:boolean;unchanged?:boolean;childId?:number}>{
+  async inspect(sessionId:number,token:string,file:SyncFileInput) {
+    return this.enqueueCore(sessionId,token,file,true);
+  }
+
+  private async enqueueCore(sessionId:number,token:string,file:SyncFileInput,inspectOnly=false):Promise<ImportResult & {deferred?:boolean;unchanged?:boolean;childId?:number;preparedFile?:SyncFileInput}>{
     file={...file,options:{...file.options}};
     let sizeError:string|undefined;
     try{assertImportFileSize(file.relativePath,(await stat(file.path)).size);}catch(error){
@@ -46,6 +50,7 @@ export class SyncFileQueue {
     const existing=await this.engine.executeRaw<Record<string,unknown>>('SELECT * FROM minion_jobs WHERE idempotency_key=$1',[`sync-file:${key}`]);
     let job=existing.length?rowToMinionJob(existing[0]):undefined;
     if(sizeError){
+      if(inspectOnly)return {slug:'',status:'error',chunks:0,error:sizeError};
       const result={slug:'',status:'failed',chunks:0,error:sizeError,file:file.relativePath};
       if(!job){
         if(file.quickMaintenance)await this.reserveQuickCapacity(sessionId,token);
@@ -93,6 +98,7 @@ export class SyncFileQueue {
         if(job.status==='active')return { slug: '', status: 'skipped', chunks: 0, deferred: true,childId:job.id };
       }
     }
+    if(!file.scanValidated){
     const rawManifest=await this.engine.getConfig(syncFileManifestKey(file));
     const manifest=rawManifest?JSON.parse(rawManifest) as SyncFileManifest:null;
     if(manifest?.hash===file.hash && (manifest.fingerprint===file.fingerprint || file.compatibleFingerprints?.includes(manifest.fingerprint)) && !file.options.forceRechunk){
@@ -121,6 +127,8 @@ export class SyncFileQueue {
         await this.retireUnchanged(job);
         return { ...inspected, unchanged: true };
       }
+    }
+    if(inspectOnly)return {slug:'',status:'skipped',chunks:0,deferred:true,preparedFile:file};
     }
     const reusable=Boolean(job&&(['paused','delayed','waiting'].includes(job.status)||(job.status==='cancelled'&&job.data.capacityParked===true)));
     if(job && reusable){

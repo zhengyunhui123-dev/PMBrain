@@ -14,12 +14,15 @@ export interface SyncFileInput {
   modelFingerprint: string;
   modelMayRun?: boolean;
   quickMaintenance?: boolean;
+  scanValidated?: boolean;
   sourceRoot: string;
   options: SyncFileOptions;
   timeoutMs?: number;
 }
 
 export interface MaintenanceCheckpoint {
+  quickProgress?: import('../../../shared/maintenance-progress').MaintenanceRoundProgress;
+  quickSync?: { sourceIds?: string[]; sources: Record<string, { root: string; paths: string[]; checked: number; checkedPaths: string[]; unchanged: number; entries: SyncFileInput[]; complete: boolean }> };
   retiredCapture?: Record<string, { phases: PhaseResult[]; report?: Record<string, unknown> }>;
   captureWindows?:Record<string,PhaseResult>;
   embeddingWindows?:Record<string,PhaseResult>;
@@ -46,6 +49,7 @@ export interface ImportTaskInput {
 }
 
 export interface DreamTaskInput {
+  refreshPendingSync?: boolean;
   incrementalIngest?: boolean;
   slugs?: string[];
   checkpoint?: MaintenanceCheckpoint;
@@ -77,6 +81,9 @@ export type TaskWorkerMessage =
   | { type: 'deferred'; phase?: 'capture_entities' | 'search_optimize' | 'quick_vector' | 'maintenance_embed' | 'document_ocr' | 'maintenance_ocr'; error?: string }
   | { type: 'progress'; background?: import('../../../shared/task-progress.ts').TaskProductProgress['background']; largeDocument?: import('../../core/document/trusted-large-document.ts').LargeDocumentProgress; syncScan?: import('../../../shared/task-progress.ts').TaskProductProgress['syncScan']; page?: { slug: string; title: string; type: string }; event?: Parameters<import('./progress-adapter').TaskProgressAdapter['event']>[0]; phases?: string[]; scope?: { name: string; index: number; total: number } }
   | { type: 'rpc'; id: number; method: string; args: unknown[]; scope?: number }
+  | { type: 'maintenance'; value: import('../../../shared/maintenance-progress').MaintenanceRoundProgress }
+  | { type: 'vector-totals'; value: NonNullable<import('../../../shared/task-progress').TaskProductProgress['vectorTotals']> }
+  | { type: 'import-counts'; value: NonNullable<import('../../../shared/task-progress').TaskProductProgress['importCounts']> }
   | { type: 'log'; text: string }
   | { type: 'result'; result: Record<string, unknown> }
   | { type: 'error'; error: string; result?: Record<string, unknown> };

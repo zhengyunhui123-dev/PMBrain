@@ -1,9 +1,19 @@
 import type { ConsoleRun } from '../lib/shared';
 import { importOutcome } from '../../../shared/import-outcome';
+import {maintenancePercent} from '../../../shared/maintenance-progress';
 
 export function taskPhaseSummary(run: ConsoleRun, now = Date.now()) {
   const view=run.product,phase=view?.phaseProgress;
   const terminal=!['running','queued'].includes(run.status);
+  if(view?.maintenance||view?.importCounts){
+    const round=view.maintenance,counts=view.importCounts,files=view.syncFiles;
+    const total=round?round.scan.complete?round.scan.incremental:null:view.total;
+    const completed=round?files?.completed??0:counts?.imported??0,failed=round?files?.failed??0:counts?.failed??0;
+    const milliseconds=terminal?run.durationMs:Math.max(0,now-Date.parse(run.startedAt)),seconds=milliseconds==null?null:Math.floor(milliseconds/1000);
+    return {count:round&&!round.scan.complete?`已扫描 ${round.scan.scanned} 份`: `${completed} / ${total??'待统计'} 份资料${counts?.unchanged?` · 未变化 ${counts.unchanged}`:''}${failed?` · 失败 ${failed}`:''}`,
+      durationLabel:'任务总耗时',duration:seconds==null?'暂未记录':seconds<60?`${seconds} 秒`:`${Math.floor(seconds/60)} 分 ${seconds%60} 秒`,
+      remaining:round&&round.stage!=='sync'&&round.stage!=='done'?`${Math.max(0,(round.current?.total??0)-(round.current?.completed??0))} 个`:total==null?'待统计':`${Math.max(0,total-(round?completed+failed:counts?.processed??0))} 个`,active:run.status==='running'?view.activeFiles?.length??phase?.active:null,failed};
+  }
   const elapsed=terminal
     ?typeof run.durationMs==='number'&&Number.isFinite(run.durationMs)?Math.max(0,run.durationMs):null
     :phase?phase.elapsedMs+(run.status==='running'&&phase.startedAt?Math.max(0,now-Date.parse(phase.startedAt)):0):null;
@@ -26,7 +36,10 @@ const taskIsPartial=(run:ConsoleRun)=>(run.result as {status?:string}|undefined)
   || (run.kind==='import_path' && !['running','queued','cancelled'].includes(run.status) && importOutcome(run.result)?.outcome==='partial');
 export const taskCanRetry=(run:ConsoleRun)=>run.id.startsWith('task-')&&(['failed','cancelled'].includes(run.status)||(run.searchOptimize===true&&run.status==='paused')||(run.status==='completed'&&['import_path','dream_capture_entities','dream_quick','dream_full','dream_cycle','dream_sync'].includes(run.kind)&&taskIsPartial(run)));
 export const taskRoundCompleted = (run: ConsoleRun) => run.kind.startsWith('dream_') && run.status === 'completed' && !taskWasSkipped(run);
-export const taskPercent = (run: ConsoleRun) => taskRoundCompleted(run) ? null : run.status==='running'&&run.kind.startsWith('dream_')&&run.product?.phaseProgress ? run.product.phasePercent : run.product?.percent ?? null;
+export const taskPercent = (run: ConsoleRun) => run.product?.maintenance?maintenancePercent(run.product.maintenance,run.product.syncFiles)
+  :run.product?.importCounts&&run.product.total!=null?run.product.total?Math.min(100,Math.round((run.product.importCounts.imported+run.product.importCounts.unchanged)/run.product.total*1000)/10):100
+  :run.product?.vectorTotals?run.product.vectorTotals.total?Math.min(100,Math.round(run.product.vectorTotals.completed/run.product.vectorTotals.total*1000)/10):run.status==='completed'?100:null
+  :taskRoundCompleted(run) ? null : run.status==='running'&&run.kind.startsWith('dream_')&&run.product?.phaseProgress ? run.product.phasePercent : run.product?.percent ?? null;
 export const taskStatus = (run: ConsoleRun) => taskStopping(run) ? '正在停止' : run.searchOptimize&&run.status==='paused' ? '已暂停' : run.searchOptimize&&run.status==='queued'&&run.product?.background?.mode==='waiting' ? run.product.stage.includes('自动重试')?'等待重试':'等待空闲' : run.kind==='embed_stale'&&run.status==='cancelled' ? '已暂停' : taskWasSkipped(run) ? '未执行' : run.product?.stage.includes('AI 提炼未执行')?'AI 提炼未执行':(run.kind==='import_path'||run.status==='completed')&&taskIsPartial(run)?'部分完成':run.kind==='import_path'&&run.status==='completed'?'导入成功':taskRoundCompleted(run) ? '本轮已完成' : ({ queued:'排队中',running:'执行中',completed:'已完成',failed:'失败',cancelled:'已停止',paused:'已暂停' })[run.status];
 
 export function quickVectorSummary(run: ConsoleRun, runs: ConsoleRun[]): string | null {
@@ -69,6 +82,8 @@ export function taskHasRemaining(run: ConsoleRun): boolean {
 }
 
 export function taskRoundListSummary(run: ConsoleRun): string {
+  const round=run.product?.maintenance;
+  if(round)return `已导入 ${run.product?.syncFiles?.completed??0} / ${round.scan.incremental??'待统计'} 份 · 关联 ${round.entities.total} 个已有实体`;
   const summary=taskRoundSummary(run);
   return [summary.completed.slice(0,2).join(' · ')||'本轮没有新增知识成果',summary.remaining.length?`待处理：${summary.remaining.slice(0,2).join(' · ')}`:summary.reason?`未完成原因：${summary.reason}`:taskHasRemaining(run)?'还有未完成事项，可查看详情':''].filter(Boolean).join('；');
 }

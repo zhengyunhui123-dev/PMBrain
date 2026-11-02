@@ -402,6 +402,8 @@ export interface CycleOpts {
   syncFileRuntime?: SyncFileRuntime;
   afterSync?: (sourceId: string, root: string, result: import('../commands/sync.ts').SyncResult) => Promise<unknown>;
   completedPhases?: PhaseResult[];
+  phaseWindow?: CyclePhase[];
+  onMaintenancePages?: (slugs: string[]) => Promise<void>;
   phaseCheckpoint?: (phases: PhaseResult[]) => Promise<void>;
   /** If true, no writes to filesystem or DB. All phases honor this. */
   dryRun?: boolean;
@@ -1624,7 +1626,7 @@ export async function runCycle(
   const requestedPhases = opts.phases ?? DEFAULT_PHASES;
   const resolvedPhases = resolveCyclePhases(opts.phases, opts.sourceId);
   const restored = (opts.completedPhases ?? []).filter(item => resolvedPhases.includes(item.phase));
-  const phases = resolvedPhases.filter(phase => !restored.some(item => item.phase === phase));
+  const phases = resolvedPhases.filter(phase => !restored.some(item => item.phase === phase) && (!opts.phaseWindow || opts.phaseWindow.includes(phase)));
   const excludedPhases = requestedPhases.filter(phase => !resolvedPhases.includes(phase));
   const dryRun = !!opts.dryRun;
   const pull = !!opts.pull;
@@ -1876,7 +1878,7 @@ export async function runCycle(
           brainDir,
           dryRun,
           pull,
-          phases.includes('extract'),
+          opts.quickMaintenance === true || phases.includes('extract'),
           opts.includeOffice === true,
           opts.syncConcurrency,
           opts.syncFileRuntime,
@@ -1909,7 +1911,7 @@ export async function runCycle(
         progress.start(`cycle.${repairPhase}`);
         const repair = await import('./cycle/maintenance-repair.ts');
         const runRepair = repairPhase === 'fence_repair' ? repair.runPhaseFenceRepair : repair.runPhaseContentRepair;
-        const { result, duration_ms } = await timePhase(() => runRepair(engine, { dryRun, sourceId: cycleSourceId, ...(opts.quickMaintenance ? { slugs: syncPagesAffected ?? [] } : {}) }));
+        const { result, duration_ms } = await timePhase(() => runRepair(engine, { dryRun, sourceId: cycleSourceId, ...(opts.quickMaintenance ? { slugs: syncPagesAffected ?? [], onPage: async(slug:string)=>opts.onMaintenancePages?.([slug]), signal:opts.signal } : {}) }));
         result.duration_ms = duration_ms;
         phaseResults.push(result);
         progress.finish();
@@ -2042,6 +2044,7 @@ export async function runCycle(
             singlePass: opts.quickMaintenance,
             priorityOnly: opts.quickMaintenance,
             quickEntityTypes: opts.quickMaintenance,
+            onPages: opts.quickMaintenance ? opts.onMaintenancePages : undefined,
             excludePathPattern: opts.quickMaintenance ? (await import('./pmbrain-adapters/quick-maintenance-policy.ts')).QUICK_MAINTENANCE_EXCLUDED_PATH : undefined,
             maxHistoricalPages: limits && Object.prototype.hasOwnProperty.call(limits, 'maxHistoricalPages')
               ? limits.maxHistoricalPages

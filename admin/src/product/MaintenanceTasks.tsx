@@ -47,8 +47,8 @@ function MaintenanceTaskDetail({ run, vectorRuns, onClose, onAction, onStop, bus
     <header><div><h2>{name}</h2><p>{description(run)}</p></div><button type="button" aria-label="关闭整理详情" onClick={onClose}><X size={20} /></button></header>
     <div className="maintenance-detail-body">
       <div className="maintenance-detail-meta"><span>{run.trigger === 'scheduled' ? '自动任务' : '手动任务'}</span><span>开始于 {formatDate(run.startedAt, '—')}</span></div>
-      <TaskProgressCard run={run} link={false} timeline />
-      {vectorNotice && <p className="maintenance-muted">{vectorNotice}</p>}
+      <TaskProgressCard run={run} link={false} timeline vectorRuns={vectorRuns}/>
+      {!run.product?.maintenance&&vectorNotice && <p className="maintenance-muted">{vectorNotice}</p>}
       {taskUsesFileQueue(run.kind) && run.product?.syncFiles && <details onToggle={event => {setFilesOpen(event.currentTarget.open); if (event.currentTarget.open && !files && !loadingFiles) void readFiles(); }}><summary>查看同步文件明细</summary>
         {files?.updatedAt && <p className="maintenance-muted">状态更新于 {new Date(files.updatedAt).toLocaleTimeString()}</p>}
         {files?.rows.map(file => <p key={file.id}><b>{file.path}</b> · {file.sourceId} · {({ completed: '已完成', failed: '失败', running: '处理中', pending: '未处理' })[file.status]}{file.activity && <span> · {formatFileBytes(file.activity.bytes)} · {file.activity.stage}</span>}{file.error && <span> · {file.error}</span>}</p>)}

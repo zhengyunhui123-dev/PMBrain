@@ -43,6 +43,10 @@ import { isGinRepairAbortText } from '../../core/pglite-gin-repair.ts';
 import type { SyncStrategy } from '../../core/sync.ts';
 import { isOfficeFilePath } from '../../core/sync.ts';
 import { isImageFilePath } from '../../core/import-file.ts';
+import { QuickSyncPlan } from './quick-sync-plan';
+import type { MaintenanceRoundProgress, MaintenanceStageId, MaintenanceStageResult } from '../../../shared/maintenance-progress';
+import {QuickVectorProgress} from './vector-progress';
+import {importOutcome} from '../../../shared/import-outcome';
 
 let sequence = 0;
 const pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
@@ -135,6 +139,9 @@ setCliOptions({ ...DEFAULT_CLI_OPTIONS, progressJson: true });
 
 async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { type: 'dream' }>['input'], progressPrefix:string[] = []) {
   const checkpoint: MaintenanceCheckpoint = input.checkpoint ?? { phases: {}, reports: {} };
+  const round: MaintenanceRoundProgress = checkpoint.quickProgress ?? { scan: { scanned: 0, unchanged: 0, complete: false }, stage: 'sync', stages: [], entities: { total: 0, person: 0, project: 0, organization: 0, company: 0, links: 0 } };
+  const notifyRound = () => { checkpoint.quickProgress=round; send({type:'maintenance',value:round}); };
+  const quickPlan = input.preset==='quick'&&!input.dryRun ? new QuickSyncPlan(checkpoint,()=>rpc('task.maintenanceCheckpoint',[checkpoint]),scan=>{round.scan=scan;notifyRound();}) : undefined;
   const legacyQuickSources = input.preset === 'quick' ? [...new Set([...Object.keys(checkpoint.phases), ...Object.keys(checkpoint.reports)])].filter(sourceId => {
     const report = checkpoint.reports[sourceId];
     return (checkpoint.phases[sourceId] ?? []).some(phase => phase.phase === 'capture_entities' || phase.phase === 'embed')
@@ -170,8 +177,18 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
   const roots = new Map<string, string>();
   const fileRuntime: SyncFileRuntime | undefined = usesSyncFileQueue(input) ? {
     signal: abort.signal,
+    get collectOnly(){return quickPlan?.preparing;},
+    listFiles: quickPlan ? (root,discover)=>quickPlan.list(root,discover) : undefined,
+    importFiles: quickPlan ? ()=>quickPlan.imports() : undefined,
     workingTree: input.preset === 'quick' || (await engine.getConfig('sync.include_working_tree')) === 'true',
     importFile: async (path, relativePath, options) => {
+      if(quickPlan&&!quickPlan.preparing){
+        const file=quickPlan.file(path);
+        if(!file)throw new Error('资料不属于本轮固定清单');
+        const result=await rpc('task.syncFile',[file]) as import('../../core/import-file.ts').ImportResult & {deferred?:boolean};
+        if(result.deferred)pendingFiles=true;
+        return result;
+      }
       options={...options,deferDocumentOcr:true,deferredOcrVectors:input.phase==='sync',deferredOcrMaintenanceOwnerId:input.phase==='sync'?undefined:ownerJobId??undefined};
       abort.signal.throwIfAborted();
       if(capacityReached)return {slug:'',status:'skipped',chunks:0,deferred:true};
@@ -185,14 +202,18 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
       try{assertImportFileSize(relativePath,snapshot.size);}catch{oversized=true;}
       send({type:'progress',syncScan:{scanned,unchanged,path:relativePath,bytes:snapshot.size,updatedAt:new Date().toISOString(),active:true}});
       const hash = oversized?`oversize:${snapshot.size}:${snapshot.mtimeMs}`:await streamFileHash(path,abort.signal);
-      const result = await rpc('task.syncFile', [{ path, relativePath, sourceRoot, originalPath,
+      const file: import('./types').SyncFileInput = { path, relativePath, sourceRoot, originalPath,
         originalSize: snapshot.size, originalMtime: snapshot.mtimeMs, hash,
         quickMaintenance:input.preset==='quick',
         modelFingerprint: taskModelFingerprint(),
         modelMayRun: options.documentOcr === true && (isOfficeFilePath(relativePath) || isImageFilePath(relativePath)),
         fingerprint: syncFileContentFingerprint(options),
         ...(input.preset === 'quick' ? { compatibleFingerprints: [syncFileContentFingerprint({ ...options, documentOcr: true })] } : {}), options,
-      }]) as import('../../core/import-file.ts').ImportResult & { deferred?: boolean; unchanged?: boolean; capacityReached?:boolean };
+      };
+      let result: import('../../core/import-file.ts').ImportResult & { deferred?: boolean; unchanged?: boolean; capacityReached?:boolean;preparedFile?:import('./types').SyncFileInput };
+      try { result=await rpc(quickPlan?.preparing?'task.inspectSyncFile':'task.syncFile',[file]) as typeof result; }
+      catch(error){if(quickPlan?.preparing)await quickPlan.record(file,false);throw error;}
+      if(quickPlan?.preparing)await quickPlan.record(result.preparedFile??file,result.unchanged===true);
       if (result.deferred) pendingFiles = true;
       if(result.capacityReached)capacityReached=true;
       scanned++;
@@ -200,7 +221,7 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
       send({ type: 'progress', syncScan: { scanned, unchanged,path:relativePath,bytes:snapshot.size,updatedAt:new Date().toISOString(),active:true } });
       return result;
     },
-    finish: async () => { if (pendingFiles) throw new SyncFilesDeferred(); },
+    finish: async () => { if(quickPlan?.preparing){await quickPlan.finish();throw new SyncFilesDeferred();} if (pendingFiles) throw new SyncFilesDeferred(); },
   } : undefined;
   const resumeOptions = async (sourceId: string) => {
     let captureEntitySlugs: string[] | undefined;
@@ -320,13 +341,111 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
     try {
       const receipt = await rpc('task.quickVectors', [id, slugs, Math.min(1_800_000, (input.windowSeconds ?? 1800) * 1000)]) as { taskId?: string; pages: number; paused?: boolean };
       Object.assign(report, { quickVector: { ...receipt, sourceId: id } });
+      if(quickPlan){round.vectors=[...(round.vectors??[]).filter(item=>item.sourceId!==id),{...receipt,sourceId:id}];notifyRound();}
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       Object.assign(report, { quickVector: { sourceId: id, pages: 0, error: message } });
+      if(quickPlan){round.vectors=[...(round.vectors??[]).filter(item=>item.sourceId!==id),{sourceId:id,pages:0,error:message}];notifyRound();}
       console.error(`本轮资料的后台向量任务未能提交：${message}`);
     }
   };
   if (input.preset === 'quick') console.log('快速维护同步变化并关联已有实体；本轮资料向量化在后台进行，新实体建档和图片识别不属于本次维护。');
+  if(quickPlan){
+    const startedAt=new Date();
+    if(input.refreshPendingSync){
+      const completed=await rpc('task.quickCompletedFiles',[]) as Array<{sourceId:string;relativePath:string;hash:string}>;
+      const saved=new Set(completed.map(file=>JSON.stringify([file.sourceId,file.relativePath,file.hash])));
+      for(const [sourceId,plan] of Object.entries(quickPlan.sources))for(const file of plan.entries){
+        if(saved.has(JSON.stringify([sourceId,file.relativePath,file.hash])))continue;
+        abort.signal.throwIfAborted();
+        const info=await stat(file.path);
+        file.originalSize=info.size;file.originalMtime=info.mtimeMs;
+        let oversized=false;try{assertImportFileSize(file.relativePath,info.size);}catch{oversized=true;}
+        file.hash=oversized?`oversize:${info.size}:${info.mtimeMs}`:await streamFileHash(file.path,abort.signal);
+      }
+      input.refreshPendingSync=false;await rpc('task.maintenanceCheckpoint',[checkpoint,true]);
+    }
+    const available=(await loadAllSources(engine)).filter(source=>parseSourceConfig(source.config).syncEnabled!==false);
+    const ids=checkpoint.quickSync!.sourceIds??(input.allSources?available.map(source=>source.id):[sourceId??'default']);
+    checkpoint.quickSync!.sourceIds=ids;
+    const sources=ids.map(id=>{const source=available.find(source=>source.id===id);if(!source)throw new Error(`知识源 ${id} 已停用或不存在，不能继续本轮任务`);return source;});
+    if(!sources.length)throw new Error('没有可同步的知识源');
+    for(const source of sources){
+      abort.signal.throwIfAborted();quickPlan.sourceId=source.id;
+      if(quickPlan.current?.complete)continue;
+      send({type:'progress',scope:{name:source.name,index:sources.indexOf(source),total:sources.length}});
+      try{
+        const report=await runQuickMaintenance(engine,{...common,sourceId:source.id,brainDir:await quickBrainDir(source.id),
+          syncFileRuntime:fileRuntime,phaseWindow:['sync'],afterSync:undefined});
+        const failure=report.phases.find(phase=>phase.status==='fail');
+        if(failure)throw new Error(failure.error?.message??failure.summary);
+        if(report.reason==='cycle_already_running')return report;
+      }catch(error){if(!(error instanceof SyncFilesDeferred))throw error;}
+    }
+    quickPlan.preparing=false;pendingFiles=false;capacityReached=false;
+    round.scan=quickPlan.scan(true);notifyRound();
+    await rpc('task.maintenanceCheckpoint',[checkpoint]);
+    const reports=new Map<string,import('../../core/cycle').CycleReport>();
+    const scopeSlugs=(id:string)=>[...new Set((checkpoint.phases[id]?.find(phase=>phase.phase==='sync') as import('../../core/cycle').PhaseResult&{pagesAffected?:string[]}|undefined)?.pagesAffected??[])];
+    const scopes=()=>sources.map(source=>({sourceId:source.id,slugs:scopeSlugs(source.id)}));
+    const groups:Array<{id:MaintenanceStageId;phases:CyclePhase[]}>= [{id:'sync',phases:['sync']},{id:'relations',phases:['extract']},{id:'check',phases:['fence_repair','content_repair']}];
+    for(const group of groups){
+      const savedStage=round.stages.find(stage=>stage.id===group.id);
+      if(savedStage&&['completed','skipped'].includes(savedStage.status)&&sources.every(source=>group.phases.every(phase=>checkpoint.phases[source.id]?.some(saved=>saved.phase===phase))))continue;
+      const previousDone=round.stage===group.id?round.current?.completed??0:0;
+      round.stage=group.id;round.current={completed:previousDone,total:group.id==='sync'?round.scan.incremental??0:scopes().reduce((sum,scope)=>sum+scope.slugs.length,0)};notifyRound();
+      let completed=0;
+      for(const [index,source] of sources.entries()){
+        abort.signal.throwIfAborted();quickPlan.sourceId=source.id;
+        send({type:'progress',scope:{name:source.name,index,total:sources.length}});
+        const before=Date.now();
+        const options=await phaseOptions(source.id);
+        const previous=new Set((checkpoint.phases[source.id]??[]).map(phase=>phase.phase));
+        const processedPages=new Set<string>();
+        const report=await runQuickMaintenance(engine,{...common,sourceId:source.id,brainDir:await quickBrainDir(source.id),...options,
+          phaseWindow:group.phases,
+          onMaintenancePages:async slugs=>{
+            for(const slug of slugs)processedPages.add(slug);
+            round.current={completed:Math.max(round.current!.completed,completed+processedPages.size),total:round.current!.total,file:slugs.at(-1)};
+            if(group.id==='relations')round.entities=await rpc('task.quickEntityStats',[scopes()]) as MaintenanceRoundProgress['entities'];
+            notifyRound();
+          },
+        });
+        if(report.reason==='cycle_already_running')return report;
+        const extracted=report.phases.find(phase=>phase.phase==='extract');
+        if(group.id==='relations'&&extracted&&!previous.has('extract'))extracted.duration_ms=Date.now()-before;
+        reports.set(source.id,report);
+        completed+=group.id==='sync'?quickPlan.current.entries.length:scopeSlugs(source.id).length;
+        round.current={completed:Math.max(round.current!.completed,completed),total:round.current!.total};
+        if(group.id==='relations')round.entities=await rpc('task.quickEntityStats',[scopes()]) as MaintenanceRoundProgress['entities'];
+        notifyRound();
+      }
+      const phases=sources.flatMap(source=>(checkpoint.phases[source.id]??[]).filter(phase=>group.phases.includes(phase.phase)));
+      const number=(key:string)=>phases.reduce((sum,phase)=>sum+Number(phase.details[key]??0),0);
+      const partial=phases.some(phase=>phase.status==='fail'||['relationScopeRemaining','mentionScopeRemaining','refused'].some(key=>Number(phase.details[key]??0)>0)||phase.details.reason==='repair_failed');
+      const result:MaintenanceStageResult={id:group.id,status:partial?'partial':phases.every(phase=>phase.status==='skipped')?'skipped':'completed',completed,total:round.current!.total,durationMs:phases.reduce((sum,phase)=>sum+phase.duration_ms,0)};
+      if(group.id==='sync'){
+        const counts=await rpc('task.quickFileCounts',[]) as {completed:number;failed:number;remaining:number};
+        Object.assign(result,{added:number('added'),modified:number('modified'),failed:counts.failed,completed:counts.completed});
+        if(counts.failed||counts.remaining)result.status='partial';
+      }
+      if(group.id==='relations')Object.assign(result,{links:round.entities.links,entities:round.entities.total});
+      if(group.id==='check')result.repaired=number('merged')+number('closed')+number('removed');
+      round.stages=[...round.stages.filter(stage=>stage.id!==group.id),result];notifyRound();
+      await rpc('task.maintenanceCheckpoint',[checkpoint]);
+    }
+    for(const source of sources){
+      const report=reports.get(source.id)??await runQuickMaintenance(engine,{...common,sourceId:source.id,brainDir:await quickBrainDir(source.id),...await phaseOptions(source.id),phaseWindow:[]});
+      reports.set(source.id,report);
+      await queueQuickVectors(report,source.id);
+      checkpoint.reports[source.id]={...report};
+    }
+    round.stage='done';round.current=undefined;notifyRound();await rpc('task.maintenanceCheckpoint',[checkpoint]);
+    const entries=[...reports].map(([sourceId,report])=>({sourceId,report}));
+    const combined=combineQuickMaintenanceReports(entries,startedAt);
+    const vectors=entries.flatMap(({report})=>{const receipt=(report as typeof report&{quickVector?:unknown}).quickVector;return receipt?[receipt]:[];});
+    return {...combined,quickVector:vectors};
+  }
   if (input.preset === 'quick' && input.allSources) {
     const reports = [];
     const startedAt = new Date();
@@ -501,8 +620,17 @@ async function runQuickVector(engine: BrainEngine, input: Extract<ProductTask, {
   let lastBatchAt = 0;
   let done = 0;
   let embedded = 0;
+  const vectorProgress=await QuickVectorProgress.load(engine,sourceId,selected,windowMs);
+  const vectorSnapshot=(file?:string,finish=false)=>{
+    const value=vectorProgress.snapshot(windowAbort.signal.aborted);
+    send({type:'vector-totals',value});
+    send({type:'progress',background:schedule,event:{phase:'embed',event:finish?'finish':undefined,done:value.completed,total:value.total,unit:'个分块',file,
+      stage:value.windowEnded?'本次运行窗口已结束，已保存结果保留':undefined}});
+    return value;
+  };
   try {
-    send({ type: 'progress', event: { phase: 'embed', event: 'start', done: 0, total: selected.length, unit: '份资料' } });
+    const initial=vectorSnapshot();
+    send({ type: 'progress', event: { phase: 'embed', event: 'start', done: initial.completed, total: initial.total, unit: '个分块' } });
     for (const slug of selected) {
       if (signal.aborted) break;
       await rpc('task.searchOptimizeForgetPage', [sourceId, slug]);
@@ -519,12 +647,13 @@ async function runQuickVector(engine: BrainEngine, input: Extract<ProductTask, {
         },
         onProgress: (processed, chunks) => {
           lastBatchAt = Date.now();
-          send({ type: 'progress', background: schedule, event: { phase: 'embed', done, total: selected.length, unit: '份资料', file: slug, stage: `当前资料 ${processed}/${chunks} 段已保存` } });
+          vectorProgress.page(slug,processed);vectorSnapshot(slug);
         },
       });
       embedded += result.embedded;
       if (result.incomplete || signal.aborted) {
         if (abort.signal.aborted) throw abort.signal.reason;
+        vectorSnapshot(slug);
         send({ type: 'deferred', phase: 'quick_vector' });
         return;
       }
@@ -535,17 +664,19 @@ async function runQuickVector(engine: BrainEngine, input: Extract<ProductTask, {
         return;
       }
       done++;
-      send({ type: 'progress', event: { phase: 'embed', done, total: selected.length, unit: '份资料', file: slug } });
+      vectorProgress.complete(slug);vectorSnapshot(slug);
     }
     if (abort.signal.aborted) throw abort.signal.reason;
     if (windowAbort.signal.aborted) {
+      vectorSnapshot();
       send({ type: 'deferred', phase: 'quick_vector' });
       return;
     }
-    send({ type: 'progress', event: { phase: 'embed', event: 'finish', done, total: selected.length, unit: '份资料' } });
+    vectorSnapshot(undefined,true);
     send({ type: 'result', result: { quickVector: true, status: 'ok', pages: done, embedded } });
   } catch (error) {
     if (windowAbort.signal.aborted && !abort.signal.aborted) {
+      vectorSnapshot();
       send({ type: 'deferred', phase: 'quick_vector' });
       return;
     }
@@ -681,6 +812,8 @@ async function executeTask(task: ProductTask, kind: BrainEngine['kind']) {
           }
         },
         onFile: async progress => {
+          const outcome=importOutcome(progress);
+          if(outcome)send({type:'import-counts',value:{processed:outcome.processed,imported:Math.max(0,outcome.processed-outcome.failed-outcome.partial-outcome.unchanged),unchanged:outcome.unchanged,failed:outcome.failed,partial:outcome.partial}});
           send({ type: 'progress', event: { phase: 'import.files', done: Number(progress.processed) } });
           importFile = undefined;
           const slug = typeof progress.slug === 'string' ? progress.slug : '';

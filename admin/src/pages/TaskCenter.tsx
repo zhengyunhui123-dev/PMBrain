@@ -140,7 +140,7 @@ function PgliteRecoveryCard({
   );
 }
 
-function TaskDetailDrawer({ run, onClose, onCancel, onRetry, busy }: { run: ConsoleRun; onClose: () => void; onCancel: () => void; onRetry: () => void; busy: boolean }) {
+function TaskDetailDrawer({ run, onClose, onCancel, onRetry, busy, vectorRuns }: { vectorRuns: ConsoleRun[]; run: ConsoleRun; onClose: () => void; onCancel: () => void; onRetry: () => void; busy: boolean }) {
   const dream=run.kind.startsWith('dream_');
   const needsDetail = dream || run.kind === 'import_path' || run.kind === 'document_ocr';
   const [detail,setDetail]=useState<ConsoleRun|null>(null);
@@ -161,7 +161,7 @@ function TaskDetailDrawer({ run, onClose, onCancel, onRetry, busy }: { run: Cons
   return <><div className="drawer-overlay" onClick={onClose} /><aside className="drawer task-detail-drawer" aria-label="任务详情">
     <button type="button" className="drawer-close" aria-label="关闭任务详情" onClick={onClose}>×</button>
     <h2>{run.product?.name ?? taskName(run.kind)}</h2><p className="pm-hint">{formatDate(run.startedAt, '-')} · {taskTriggerLabel(run)}</p>
-    <TaskProgressCard run={current} link={false} />
+    <TaskProgressCard run={current} link={false} vectorRuns={vectorRuns}/>
     {!dream && detailError && <p role="alert">{detailError}</p>}
     {dream&&(detailError?<p role="alert">{detailError}</p>:detail?<React.Suspense fallback={<p role="status">正在读取整理内容…</p>}><DreamRunContent run={current} expanded /></React.Suspense>:<p role="status">正在读取整理内容…</p>)}
     <div className="task-run-card-actions">{isActive(run) && <button type="button" className="pm-ghost" disabled={busy || taskStopping(run)} onClick={onCancel}>{taskStopping(run) ? '正在停止…' : isSearchOptimize(run) ? '暂停' : '停止任务'}</button>}{taskCanRetry(run) && <button type="button" className="pm-ghost" disabled={busy} onClick={onRetry}>{isSearchOptimize(run) ? '继续' : taskUsesFileQueue(run.kind)||run.kind==='import_path'||run.status==='completed'?'继续未完成任务':'重新执行'}</button>}</div>
@@ -377,7 +377,7 @@ export function TaskCenterPage() {
       </section>
 
       {showOcr&&!selectedRun&&<DocumentOcrDrawer summary={ocrSummary} onClose={()=>{setShowOcr(false);window.history.replaceState(null,'','#tasks');}} onOpen={run=>setSelectedRun(run)} onCancel={cancel} onRetry={retry} busyId={cancelling||retrying} />}
-      {selectedRun && <TaskDetailDrawer run={selectedRun} onClose={() => { setSelectedRun(null); window.history.replaceState(null, '', showOcr?'#tasks?ocr=1':'#tasks'); }} onCancel={() => void cancel(selectedRun)} onRetry={() => void retry(selectedRun)} busy={cancelling === selectedRun.id || retrying === selectedRun.id} />}
+      {selectedRun && <TaskDetailDrawer run={selectedRun} vectorRuns={rows} onClose={() => { setSelectedRun(null); window.history.replaceState(null, '', showOcr?'#tasks?ocr=1':'#tasks'); }} onCancel={() => void cancel(selectedRun)} onRetry={() => void retry(selectedRun)} busy={cancelling === selectedRun.id || retrying === selectedRun.id} />}
     </div>
   );
 }

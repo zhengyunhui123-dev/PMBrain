@@ -1212,13 +1212,18 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
   }
 
   if (opts.localPathOnly || (!existsSync(join(repoPath, '.git')) && opts.sourceId && !remoteUrl)) {
-    const files = collectSyncableFiles(repoPath, {
+    const discover = () => collectSyncableFiles(repoPath, {
       strategy: opts.strategy ?? 'markdown',
       includeOffice: opts.includeOffice,
       includeImages: opts.includeImages,
       strict: opts.localPathOnly,
       excludePathPattern: opts.excludePathPattern,
-    })
+    });
+    const discovered = opts.fileRuntime?.listFiles ? await opts.fileRuntime.listFiles(repoPath, discover) : discover();
+    if(opts.localPathOnly&&opts.fileRuntime?.listFiles){
+      return performFullSync(engine,repoPath,`directory:${fingerprint({paths:discovered})}`,opts,false);
+    }
+    const files = discovered
       .map(path => ({
         path: relative(repoPath, path).replace(/\\/g, '/'),
         size: statSync(path).size,
@@ -2443,14 +2448,16 @@ async function performFullSync(
   // Capture the authoritative path set while a materialized Git snapshot is
   // still alive. The snapshot is cleaned immediately after runImport, but
   // reconciliation below must use the exact same baseline that was imported.
-  const authoritativePaths = new Set(
-    collectSyncableFiles(importPath, {
+  const discover = () => collectSyncableFiles(importPath, {
       strategy: opts.strategy ?? 'markdown',
       includeOffice: opts.includeOffice,
       includeImages: opts.includeImages,
       strict: opts.localPathOnly,
       excludePathPattern: opts.excludePathPattern,
-    })
+    });
+  const authoritativeFiles = opts.fileRuntime?.listFiles ? await opts.fileRuntime.listFiles(importPath, discover) : discover();
+  const authoritativePaths = new Set(
+    authoritativeFiles
       .map(abs => relative(importPath, abs).replace(/\\/g, '/'))
       .filter(path => isSyncable(path, {
         strategy: opts.strategy,
@@ -2512,7 +2519,7 @@ async function performFullSync(
   // PGLite stays serial because its engine is single-connection. Routes the
   // policy through autoConcurrency() so it stays consistent with incremental
   // sync and the jobs handler.
-  const movedSlugs = await reconcileQuickRenames(engine, repoPath, authoritativePaths, opts);
+  const movedSlugs = opts.fileRuntime?.collectOnly ? [] : await reconcileQuickRenames(engine, repoPath, authoritativePaths, opts);
   const FULL_SYNC_LARGE_MARKER = Number.MAX_SAFE_INTEGER;
   const fullConcurrency = autoConcurrency(engine, FULL_SYNC_LARGE_MARKER, opts.concurrency);
   slog(
@@ -2552,6 +2559,7 @@ async function performFullSync(
       sourceId: opts.sourceId,
       checkpointKey: fullCheckpointKey,
       fileRuntime: opts.fileRuntime,
+      preparedFiles: opts.fileRuntime?.importFiles?.(importPath) ?? (opts.localPathOnly ? authoritativeFiles : undefined),
       runtime: opts.fileRuntime ? { signal: opts.fileRuntime.signal, onFile: async () => {} } : undefined,
       managedBookmark: true,
       exclude: opts.exclude,

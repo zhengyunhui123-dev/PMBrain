@@ -265,10 +265,16 @@ test('本轮向量窗口到期后自动续跑同一任务并复用已保存分�
   const jobs = await engine.executeRaw<{ id: number; window_ms: string }>("SELECT id,data->'task'->'input'->>'windowMs' AS window_ms FROM minion_jobs WHERE data->'task'->'input'->>'quickVector'='true'");
   expect(jobs).toHaveLength(1);
   expect(Number(jobs[0]?.window_ms)).toBe(1500);
+  const windowRun=await runtime.getRun(`task-${jobs[0]!.id}`);
+  expect(windowRun?.product?.vectorTotals?.lastWindow?.total).toBeGreaterThan(0);
+  expect(windowRun?.product?.vectorTotals?.lastWindow?.elapsedMs).toBeLessThanOrEqual(1500);
   release();
   await until(async () => (await runtime.getRun(`task-${jobs[0]!.id}`))?.status === 'completed', 30_000);
   const saved = await engine.executeRaw<{ n: number }>("SELECT count(*)::int n FROM content_chunks c JOIN pages p ON p.id=c.page_id WHERE p.slug='window' AND p.source_id='default' AND c.embedding IS NOT NULL");
   expect(Number(saved[0]?.n)).toBeGreaterThan(0);
+  const finalVector=await runtime.getRun(`task-${jobs[0]!.id}`);
+  expect(finalVector?.product?.vectorTotals?.completed).toBe(finalVector?.product?.vectorTotals?.total);
+  expect(finalVector?.product?.vectorTotals?.lastWindow).toBeDefined();
   expect(calls).toBe(0);
 }, 180_000);
 

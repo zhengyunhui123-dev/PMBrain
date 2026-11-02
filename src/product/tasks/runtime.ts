@@ -45,6 +45,9 @@ import { BackgroundVectorizationScheduler } from './background-vectorization';
 import { documentResourcePlan } from '../../core/document/resource-policy';
 import type { BackgroundResourceSample, VectorizationSchedule } from '../../../shared/background-vectorization';
 import {DOCUMENT_OCR_TASK,DOCUMENT_OCR_QUEUE} from '../../core/pmbrain-adapters/deferred-document-ocr';
+import {addDatabaseStatistic} from '../../../shared/database-occupancy';
+import type {TaskDatabaseStatistics} from '../../../shared/maintenance-progress';
+import {QuickVectorProgress} from './vector-progress';
 
 export const PRODUCT_TASK_QUEUE = 'pmbrain-product';
 const TASK_NAME = 'pmbrain-product-task';
@@ -56,6 +59,7 @@ function toRun(job: MinionJob, stopping = false): ConsoleRun {
   const adapter = new TaskProgressAdapter(String(job.data.kind), progress.product);
   if (!progress.product) adapter.write(progress.output ?? '');
   const task = job.data.task as ProductTask;
+  if(task?.type==='embed'&&task.input.quickVector&&!adapter.view.vectorTotals&&job.data.initialVectorTotals)adapter.view.vectorTotals=job.data.initialVectorTotals as TaskProductProgress['vectorTotals'];
   const searchOptimize = task?.type === 'embed' && (task.input.searchOptimize === true || task.input.quickVector === true);
   const status: ConsoleRun['status'] = stopping ? 'running' : failure ? 'failed' : job.status === 'completed' ? 'completed'
     : job.status === 'cancelled' ? 'cancelled' : searchOptimize && job.status === 'paused' ? 'paused'
@@ -97,6 +101,7 @@ export class ProductTaskRuntime {
   private stopAcknowledgements = new Map<number, Promise<void>>();
   private stopIntents = new Set<number>();
   private fileProjection = new FileProjection();
+  private databaseStatistics=new Map<number,TaskDatabaseStatistics>();
   private recoveringOwner: Promise<void> | null = null;
   private dirtyFiles = new Map<number,Set<number>>();
   private idleFileThreads: Worker[] = [];
@@ -253,7 +258,8 @@ export class ProductTaskRuntime {
     if (this.failure) throw this.failure;
     if (this.stopped || this.paused) throw new Error('数据库维护期间暂不能提交新任务');
     await this.resources.assertImportDisk();
-    const job = await queue.add(TASK_NAME, { task, kind, trigger, relations: {}, fileSession: task.type === 'dream' && usesSyncFileQueue(task.input) }, {
+    const initialVectorTotals=task.type==='embed'&&task.input.quickVector?(await QuickVectorProgress.load(this.engine,task.input.sourceId??'default',task.input.slugs??[],Math.max(1,Math.min(1800000,task.input.windowMs??1800000)))).snapshot():undefined;
+    const job = await queue.add(TASK_NAME, { task, kind, trigger, relations: {}, ...(initialVectorTotals?{initialVectorTotals}:{}),fileSession: task.type === 'dream' && usesSyncFileQueue(task.input) }, {
       queue: PRODUCT_TASK_QUEUE, max_attempts: 1, maxQueueSize: PRODUCT_QUEUE_CAPACITY,
       timeout_ms: task.input.timeoutMs ?? DEFAULT_PRODUCT_TASK_TIMEOUT_MS,
       idempotency_key: idempotencyKey ?? `product:${randomUUID()}`,
@@ -747,6 +753,7 @@ export class ProductTaskRuntime {
       await Promise.allSettled([...this.fileSessions].filter(([, owner]) => owner === jobId).map(([child]) => this.executions.get(child)?.done));
       await this.reconcileMaintenanceChildren(jobId);
       const checkpoint = task.input.checkpoint;
+      if(task.input.preset==='quick'&&checkpoint?.quickSync)task.input.refreshPendingSync=true;
       delete record!.data.resourceStopReason;
       const progress=(record!.progress??{}) as Progress;
       delete progress.result;
@@ -942,9 +949,12 @@ export class ProductTaskRuntime {
     let cancelRequested = false;
     const gitController = new AbortController();
     const timeoutOwner = quickTimeoutOwner ?? context.id;
+    const databaseStatistics=this.databaseStatistics.get(timeoutOwner)??adapter.view.database??{supported:this.engine.kind==='pglite'&&'inspectOccupancy' in this.engine,requests:0,writes:0,waitedMs:0,stages:{}};
+    this.databaseStatistics.set(timeoutOwner,databaseStatistics);adapter.view.database=databaseStatistics;
     const databaseContext = () => ({ taskId: context.id, token: record.lock_token!, signal: gitController.signal,
       stage: activity?.stage ?? adapter.view.stage, file: activity?.path ?? adapter.view.file ?? undefined,
       onTimeout: (error:Error) => { withoutDatabaseRequest(() => { void this.requestCancel(`task-${timeoutOwner}`, error.message).catch(reason => console.error('[tasks] database timeout:', reason)); }); },
+      onComplete:((stage:string)=>(value:{waitedMs:number;write:boolean})=>{addDatabaseStatistic(databaseStatistics,stage,value);progressDirty=true;})(quickTimeoutOwner!==undefined?'sync':adapter.view.maintenance?.stage??adapter.view.phaseProgress?.id??'prepare'),
     });
     const gitOperations = new Set<Promise<unknown>>();
     const quickGitFiles=new Map<string,{sourceId:string;path:string;hash:string}>();
@@ -991,7 +1001,7 @@ export class ProductTaskRuntime {
             if (task.type === 'import' && task.input.stagingDir && completed) {
               await removeAdminUploadTempDir(task.input.stagingDir);
             }
-          } finally { this.executions.delete(context.id); this.applyResourcePressure(); }
+          } finally { this.executions.delete(context.id);if(timeoutOwner===context.id)this.databaseStatistics.delete(context.id);this.applyResourcePressure(); }
         }
       }
     })();
@@ -1104,6 +1114,34 @@ export class ProductTaskRuntime {
             }
             return result;
           }
+          if(message.method==='task.inspectSyncFile'){
+            if(structuredTask.type!=='dream'||structuredTask.input.preset!=='quick')throw new Error('无效的增量扫描任务');
+            return this.fileQueue.inspect(context.id,record.lock_token!,message.args[0] as SyncFileInput);
+          }
+          if(message.method==='task.quickEntityStats'){
+            if(structuredTask.type!=='dream'||structuredTask.input.preset!=='quick')throw new Error('无效的实体关联统计');
+            const scopes=message.args[0] as Array<{sourceId:string;slugs:string[]}>;
+            const rows=await this.engine.executeRaw<{type:string;entities:number;links:number}>(`WITH affected AS (
+              SELECT p.id FROM pages p JOIN jsonb_to_recordset($1::jsonb) AS s("sourceId" text,slugs jsonb)
+                ON p.source_id=s."sourceId" AND s.slugs ? p.slug WHERE p.deleted_at IS NULL
+              ), linked AS (SELECT DISTINCT l.id,t.id AS entity_id,t.type FROM affected a JOIN links l ON l.from_page_id=a.id
+                JOIN pages t ON t.id=l.to_page_id WHERE t.deleted_at IS NULL AND t.type=ANY($2::text[]))
+              SELECT type,count(DISTINCT entity_id)::int AS entities,count(*)::int AS links FROM linked GROUP BY type`,[scopes,['person','project','organization','company']]);
+            const value={total:0,person:0,project:0,organization:0,company:0,links:0};
+            for(const row of rows){value[row.type as 'person']=Number(row.entities);value.total+=Number(row.entities);value.links+=Number(row.links);}
+            return value;
+          }
+          if(message.method==='task.quickFileCounts'){
+            if(structuredTask.type!=='dream'||structuredTask.input.preset!=='quick')throw new Error('无效的文件统计');
+            return this.fileQueue.counts(context.id);
+          }
+          if(message.method==='task.quickCompletedFiles'){
+            if(structuredTask.type!=='dream'||structuredTask.input.preset!=='quick')throw new Error('无效的增量续跑校验');
+            return this.engine.executeRaw<{sourceId:string;path:string;hash:string}>(`SELECT COALESCE(data->'task'->'input'->'options'->>'sourceId','default') AS "sourceId",
+              data->'task'->'input'->>'path' AS path,data->'task'->'input'->>'relativePath' AS "relativePath",data->'task'->'input'->>'hash' AS hash
+              FROM minion_jobs WHERE queue=$1 AND parent_job_id=$2 AND status='completed' AND result->>'status' IN ('imported','skipped')
+                AND data->>'superseded' IS DISTINCT FROM 'true'`,[SYNC_FILE_QUEUE,context.id]);
+          }
           if (message.method === 'task.gitCommit') {
             if (structuredTask.type !== 'dream' || structuredTask.input.preset !== 'quick' || structuredTask.input.dryRun) throw new Error('无效的自动 Git 提交任务');
             await flushQuickGitFiles();
@@ -1128,6 +1166,7 @@ export class ProductTaskRuntime {
           }
           if (message.method === 'task.maintenanceCheckpoint') {
             setMaintenanceCheckpoint(structuredTask, message.args[0] as MaintenanceCheckpoint);
+            if(message.args[1]===true&&structuredTask.type==='dream')structuredTask.input.refreshPendingSync=false;
             const rows = await this.engine.executeRaw(`UPDATE minion_jobs SET data = data || ($3::jsonb - 'relations' - 'gitFiles' - 'gitResults' - 'taskBudget'), updated_at = now() WHERE id = $1 AND status = 'active' AND lock_token = $2 RETURNING id`, [context.id, record.lock_token, record.data]);
             if (!rows.length) throw new Error('维护任务已停止或租约失效');
             return null;
@@ -1145,6 +1184,14 @@ export class ProductTaskRuntime {
           if(activity?.operation===message.method)updateActivity({operation:undefined,operationStartedAt:undefined});
           if (!cancelRequested) send({ type: 'reply', id: message.id, error: error instanceof Error ? error.message : String(error) });
         });
+      } else if(message.type==='maintenance'){
+        adapter.view.maintenance=message.value;progressDirty=true;
+        if(message.value.scan.complete&&adapter.view.syncScan)adapter.view.syncScan.active=false;
+      } else if(message.type==='vector-totals'){
+        const lastWindow=message.value.windowEnded?{total:message.value.total,completed:message.value.completed,elapsedMs:message.value.windowElapsedMs??message.value.windowMs,finishedAt:new Date().toISOString()}:adapter.view.vectorTotals?.lastWindow;
+        adapter.view.vectorTotals={...message.value,...(lastWindow?{lastWindow}:{})};progressDirty=true;
+      } else if(message.type==='import-counts'){
+        adapter.view.importCounts=message.value;progressDirty=true;
       } else if (message.type === 'log') {
         progressDirty=true;
         adapter.write(message.text);
@@ -1441,6 +1488,7 @@ export class ProductTaskRuntime {
     await this.refreshingRuns;
     await this.ocrOverviewRefreshing;
     await Promise.allSettled([...this.executions.values()].map(execution => execution.done));
+    this.databaseStatistics.clear();
     if (interrupted.length) {
       await this.engine.executeRaw(
         `UPDATE minion_jobs SET status = 'paused', error_text = '软件退出，任务已中断。请查看已完成内容后手动继续；模型请求可能已产生费用。'
