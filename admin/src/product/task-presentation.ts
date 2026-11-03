@@ -1,5 +1,6 @@
 import type { ConsoleRun } from '../lib/shared';
 import { importOutcome } from '../../../shared/import-outcome';
+import { deepOrganizePercent, deepStageTitle } from '../../../shared/deep-organize-progress';
 import {maintenancePercent} from '../../../shared/maintenance-progress';
 
 export function taskPhaseSummary(run: ConsoleRun, now = Date.now()) {
@@ -36,7 +37,9 @@ const taskIsPartial=(run:ConsoleRun)=>(run.result as {status?:string}|undefined)
   || (run.kind==='import_path' && !['running','queued','cancelled'].includes(run.status) && importOutcome(run.result)?.outcome==='partial');
 export const taskCanRetry=(run:ConsoleRun)=>run.id.startsWith('task-')&&(['failed','cancelled'].includes(run.status)||(run.searchOptimize===true&&run.status==='paused')||(run.status==='completed'&&['import_path','dream_capture_entities','dream_quick','dream_full','dream_cycle','dream_sync'].includes(run.kind)&&taskIsPartial(run)));
 export const taskRoundCompleted = (run: ConsoleRun) => run.kind.startsWith('dream_') && run.status === 'completed' && !taskWasSkipped(run);
-export const taskPercent = (run: ConsoleRun) => run.product?.maintenance?maintenancePercent(run.product.maintenance,run.product.syncFiles)
+export const taskLiveStage = (run: ConsoleRun) => run.product?.deep ? deepStageTitle(run.product.deep) : run.product?.stage;
+export const taskPercent = (run: ConsoleRun) => run.product?.deep?deepOrganizePercent(run.product.deep)
+  :run.product?.maintenance?maintenancePercent(run.product.maintenance,run.product.syncFiles)
   :run.product?.importCounts&&run.product.total!=null?run.product.total?Math.min(100,Math.round((run.product.importCounts.imported+run.product.importCounts.unchanged)/run.product.total*1000)/10):100
   :run.product?.vectorTotals?run.product.vectorTotals.total?Math.min(100,Math.round(run.product.vectorTotals.completed/run.product.vectorTotals.total*1000)/10):run.status==='completed'?100:null
   :taskRoundCompleted(run) ? null : run.status==='running'&&run.kind.startsWith('dream_')&&run.product?.phaseProgress ? run.product.phasePercent : run.product?.percent ?? null;
@@ -82,6 +85,11 @@ export function taskHasRemaining(run: ConsoleRun): boolean {
 }
 
 export function taskRoundListSummary(run: ConsoleRun): string {
+  const deep=run.product?.deep;
+  if(deep){
+    const files=deep.stages.find(stage=>stage.id==='sync'),knowledge=deep.stages.find(stage=>stage.id==='knowledge'),entities=deep.stages.find(stage=>stage.id==='entities');
+    return `同步 ${files?.imported??0} 份 · 知识点 ${knowledge?.knowledge??0} · 实体 ${entities?.entities??0}`;
+  }
   const round=run.product?.maintenance;
   if(round)return `已导入 ${run.product?.syncFiles?.completed??0} / ${round.scan.incremental??'待统计'} 份 · 关联 ${round.entities.total} 个已有实体`;
   const summary=taskRoundSummary(run);

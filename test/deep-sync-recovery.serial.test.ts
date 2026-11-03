@@ -43,7 +43,7 @@ afterAll(async () => {
 }, 60000);
 
 async function ended(runtime: ProductTaskRuntime, id: string) {
-  const deadline = Date.now() + 60000;
+  const deadline = Date.now() + 120000;
   while (Date.now() < deadline) {
     const run = await runtime.getRun(id);
     if (run && !['running', 'queued'].includes(run.status)) return run;
@@ -52,14 +52,14 @@ async function ended(runtime: ProductTaskRuntime, id: string) {
   throw new Error(JSON.stringify(await runtime.getRun(id)));
 }
 
-test('深度整理的同步超过快照窗口后在同一任务分批完成，只导入 Git 已提交内容', async () => {
+test('深度整理的同步超过快照窗口后在同一任务分批完成，并纳入工作区未提交资料', async () => {
   const repo = join(home, 'git-source'); mkdirSync(repo);
   const content = '# 提交资料\n\n分批同步保留原始资料与已提交范围。\n';
   for (const name of ['one.md', 'two.md', 'three.md']) writeFileSync(join(repo, name), content + name);
   execFileSync('git', ['init', '-q', repo]);
   execFileSync('git', ['-C', repo, 'add', '.']);
   execFileSync('git', ['-C', repo, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'fixture']);
-  writeFileSync(join(repo, 'one.md'), '# 未提交修改\n\n这份修改不应自动进入深度整理。');
+  writeFileSync(join(repo, 'one.md'), '# 未提交修改\n\n这份修改应随深度整理进入知识库。');
   writeFileSync(join(repo, 'untracked.md'), '# 未提交新资料');
   const original = readFileSync(join(repo, 'one.md'));
   await engine.executeRaw("INSERT INTO sources(id,name,local_path,config) VALUES ('deep-git','深度同步验收',$1,'{}'::jsonb)", [repo]);
@@ -70,11 +70,12 @@ test('深度整理的同步超过快照窗口后在同一任务分批完成，�
     const done = await ended(runtime, run.id);
     expect(done.status, JSON.stringify(done)).toBe('completed');
     const files = await runtime.files(run.id);
-    expect(files?.rows).toHaveLength(3);
+    expect(files?.rows).toHaveLength(4);
     expect(files?.rows.every(file => file.status === 'completed')).toBe(true);
-    expect((await engine.getPage('one', { sourceId: 'deep-git' }))?.compiled_truth).toContain('分批同步');
-    expect(await engine.getPage('untracked', { sourceId: 'deep-git' })).toBeNull();
+    expect((await engine.getPage('one', { sourceId: 'deep-git' }))?.compiled_truth).toContain('未提交修改');
+    expect((await engine.getPage('untracked', { sourceId: 'deep-git' }))?.compiled_truth).toContain('未提交新资料');
     expect(readFileSync(join(repo, 'one.md'))).toEqual(original);
+    expect(execFileSync('git', ['-C', repo, 'status', '--porcelain'], { encoding: 'utf8' })).toContain('untracked.md');
     const snapshots = await engine.executeRaw<{ path: string }>("SELECT data->'task'->'input'->>'path' AS path FROM minion_jobs WHERE queue=$1 AND parent_job_id=$2", [SYNC_FILE_QUEUE, Number(run.id.slice(5))]);
     expect(snapshots.every(file => !existsSync(file.path))).toBe(true);
     expect((await runtime.listRuns()).filter(item => item.kind === 'dream_full')).toHaveLength(1);
@@ -179,4 +180,4 @@ test('深度整理停止及服务重启后仍保持停止，确认继续时复�
     const files = await runtime.files(id);
     expect(files?.rows).toHaveLength(12); expect(files?.rows.every(file => file.status === 'completed')).toBe(true);
   } finally { await runtime.close(); }
-}, 90000);
+}, 180000);

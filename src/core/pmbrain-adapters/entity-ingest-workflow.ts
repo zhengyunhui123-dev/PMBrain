@@ -10,6 +10,9 @@ import { inferLinkTypeFromPack } from '../schema-pack/link-inference.ts';
 import { lineGrammarOptions } from '../line-grammar.ts';
 import { UnrecoverableError } from '../minions/types.ts';
 import type { SubagentHandlerData, SubagentResult } from '../minions/types.ts';
+import { legalEntityCore } from '../cycle/entity-capture-budget.ts';
+
+const BLOCKED_LEGAL_CORES = new Set(['系统', '项目', '模型', '平台', '方案', '功能', '问题', '数据', '内容', '工作', '研究', '产品', '用户', '技术', '公司', '大学', '银行', '科技', '信息', '网络', '国际', '中国', '发展', '建设', '投资', '控股', '集团']);
 import {annotateIngestContent} from './ingest-provenance.ts';
 import matter from 'gray-matter';
 import {parseLlmJson} from '../llm-json.ts';
@@ -214,7 +217,10 @@ export async function validateIngestWrite(engine:BrainEngine,context:EntityInges
     if(!existing){
       const name=surfaceName(title);
       const nearby=pages.filter(p=>[context.sourceId,'default'].includes(p.source_id)&&p.type===String(metadata.type)&&surfaceName(p.title)!==name&&(surfaceName(p.title).includes(name)||name.includes(surfaceName(p.title))));
-      if(nearby.length)throw new UnrecoverableError(`ingest verify existing entity before creating a name variant: ${nearby.map(p=>`${p.source_id}:${p.slug} (${p.title})`).join(', ')}. Read these pages and reuse only a confirmed identity. New project aliases require an explicit same-entity declaration in the original source. No automatic fuzzy merge is permitted.`);
+      const proposedCore=(entityType==='company'||entityType==='organization')?legalEntityCore(title):'';
+      const legalNearby=proposedCore&&proposedCore!==title?pages.filter(p=>[context.sourceId,'default'].includes(p.source_id)&&['company','organization'].includes(p.type)&&p.slug!==slug&&legalEntityCore(p.title??'')===proposedCore&&!BLOCKED_LEGAL_CORES.has(proposedCore)):[] ;
+      const variants=[...new Map([...nearby,...legalNearby].map(p=>[`${p.source_id}:${p.slug}`,p])).values()];
+      if(variants.length)throw new UnrecoverableError(`ingest verify existing entity before creating a name variant: ${variants.map(p=>`${p.source_id}:${p.slug} (${p.title})`).join(', ')}. Read these pages and reuse only a confirmed identity. New project aliases require an explicit same-entity declaration in the original source. No automatic fuzzy merge is permitted.`);
     }
   }else if(name==='add_timeline_entry'){
     await resolveEntity(engine,context,String(input.slug??''));

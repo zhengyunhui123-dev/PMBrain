@@ -16,6 +16,10 @@ export function maintenanceFailure(result: unknown): string | null {
   return report.status==='failed'?'整理执行失败，请查看任务详情。':null;
 }
 
+export function selectCaptureClaim(slugs: string[], allowedSlugs: string[] | undefined, owners: Record<string, number> | undefined, jobId: number): string[] {
+  return slugs.filter(slug => !allowedSlugs || allowedSlugs.includes(slug) || owners?.[slug] === jobId);
+}
+
 export async function claimMaintenanceCapture(engine: BrainEngine, id: number, token: string, sourceId: string, allowedSlugs?:string[]): Promise<string[] | undefined> {
   return engine.transaction(async tx => {
     await tx.executeRaw('SELECT pg_advisory_xact_lock(hashtext($1))', [`entity-capture:${sourceId}`]);
@@ -27,7 +31,7 @@ export async function claimMaintenanceCapture(engine: BrainEngine, id: number, t
     const key = ENTITY_CAPTURE_PENDING_PREFIX + sourceId;
     const [pending] = await tx.executeRaw<{ value: string }>('SELECT value FROM config WHERE key=$1 FOR UPDATE', [key]);
     const request = pending ? JSON.parse(pending.value) as { slugs?: string[];owners?:Record<string,number> } : undefined;
-    const claimed=(request?.slugs??[]).filter(slug=>!allowedSlugs || allowedSlugs.includes(slug) || task.type==='import'&&request?.owners?.[slug]===id);
+    const claimed=selectCaptureClaim(request?.slugs??[], allowedSlugs, request?.owners, id);
     const slugs = [...new Set([...(checkpoint.captureRequests?.[sourceId] ?? []), ...claimed])];
     if (!slugs.length) return undefined;
     checkpoint.captureRequests = { ...checkpoint.captureRequests, [sourceId]: slugs };

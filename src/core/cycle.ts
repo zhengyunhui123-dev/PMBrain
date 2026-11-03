@@ -394,6 +394,8 @@ export interface CycleReport {
 
 export interface CycleOpts {
   quickMaintenance?: boolean;
+  localPathOnly?: boolean;
+  deferInlineExtract?: boolean;
   quickEntitiesOnly?: boolean;
   reuseDuplicateKnowledgeSources?: boolean;
   captureEntitySlugs?: string[];
@@ -946,6 +948,15 @@ interface SyncPhaseResult extends PhaseResult {
   pagesAffected?: string[];
 }
 
+export function syncPhasePages(phase: PhaseResult | undefined): string[] | undefined {
+  if (!phase || phase.phase !== 'sync') return undefined;
+  const listed = (phase as SyncPhaseResult).pagesAffected;
+  if (Array.isArray(listed)) return listed.filter((item): item is string => typeof item === 'string');
+  const nested = phase.details?.pages_affected;
+  if (Array.isArray(nested)) return nested.filter((item): item is string => typeof item === 'string');
+  return undefined;
+}
+
 /**
  * Resolve the source id for a brain directory by looking up the sources
  * table. Returns undefined when no registered source matches (falls back
@@ -1042,12 +1053,14 @@ async function runPhaseSync(
   signal?: AbortSignal,
   afterSync?: CycleOpts['afterSync'],
   quickMaintenance?: boolean,
+  localPathOnly?: boolean,
 ): Promise<SyncPhaseResult> {
   try {
     const { performSync } = await import('../commands/sync.ts');
     const gateway = await import('./ai/gateway.ts');
     const ocrEnabled = gateway.isOcrEnabled();
     const documentOcr = !quickMaintenance && ocrEnabled;
+    const useLocalPath = quickMaintenance === true || localPathOnly === true;
     // Resolve the per-source id so sync reads source-scoped last_commit
     // instead of the global config key. The global key can drift out of
     // git history (force push, GC) causing a full reimport of all files.
@@ -1055,7 +1068,7 @@ async function runPhaseSync(
     const result = await performSync(engine, {
       repoPath: brainDir,
       sourceId,
-      localPathOnly: quickMaintenance,
+      localPathOnly: useLocalPath,
       dryRun,
       noPull: !pull,
       noEmbed: true,                       // embed is a separate phase
@@ -1065,7 +1078,7 @@ async function runPhaseSync(
       includeOffice,
       includeImages: ocrEnabled,
       documentOcr,
-      excludePathPattern: quickMaintenance ? (await import('./pmbrain-adapters/quick-maintenance-policy.ts')).QUICK_MAINTENANCE_EXCLUDED_PATH : undefined,
+      excludePathPattern: useLocalPath ? (await import('./pmbrain-adapters/quick-maintenance-policy.ts')).QUICK_MAINTENANCE_EXCLUDED_PATH : undefined,
       concurrency,
       fileRuntime,
       workingTree: fileRuntime ? fileRuntime.workingTree ?? true : undefined,
@@ -1095,6 +1108,7 @@ async function runPhaseSync(
         dryRun,
         ...(git ? { git } : {}),
         ...(result.uncommitted ? { uncommitted: result.uncommitted } : {}),
+        pages_affected: result.pagesAffected ?? [],
       },
       pagesAffected: result.pagesAffected,
     };
@@ -1836,9 +1850,12 @@ export async function runCycle(
     // Track which slugs sync touched so extract can run incrementally,
     // and which slugs synthesize wrote so recompute_emotional_weight can
     // pick up the union of (sync ∪ synthesize) for v0.29 incremental mode.
-    let syncPagesAffected: string[] | undefined = (restored.find(item => item.phase === 'sync') as SyncPhaseResult | undefined)?.pagesAffected;
+    let syncPagesAffected: string[] | undefined = syncPhasePages(restored.find(item => item.phase === 'sync'));
     let syncAttempted = restored.some(item => item.phase === 'sync');
-    let synthesizeWrittenSlugs: string[] | undefined;
+    const restoredSynthesize = restored.find(item => item.phase === 'synthesize');
+    let synthesizeWrittenSlugs: string[] | undefined = Array.isArray(restoredSynthesize?.details.written_slugs)
+      ? restoredSynthesize.details.written_slugs.filter((item): item is string => typeof item === 'string')
+      : undefined;
     const restoredCapture=restored.find(item=>item.phase==='capture_entities');
     let entityCaptureSlugs: string[] = restoredCapture?['written_slugs','source_slugs','relation_slugs'].flatMap(key=>Array.isArray(restoredCapture.details[key])?restoredCapture.details[key] as string[]:[]):[];
     let stopDbWrites = false;
@@ -1879,17 +1896,18 @@ export async function runCycle(
           brainDir,
           dryRun,
           pull,
-          opts.quickMaintenance === true || phases.includes('extract'),
+          opts.quickMaintenance === true || opts.deferInlineExtract === true || phases.includes('extract'),
           opts.includeOffice === true,
           opts.syncConcurrency,
           opts.syncFileRuntime,
           opts.signal,
           opts.afterSync,
           opts.quickMaintenance,
+          opts.localPathOnly,
         ));
         result.duration_ms = duration_ms;
         // Capture changed slugs for incremental extract.
-        syncPagesAffected = (result as SyncPhaseResult).pagesAffected;
+        syncPagesAffected = syncPhasePages(result);
         phaseResults.push(result);
         noteSearchIndexAbort(result);
         progress.finish();
@@ -2239,6 +2257,17 @@ export async function runCycle(
         }
 
         await refreshRelations(engine, result, resolveIncrementalExtractSlugs(syncPagesAffected, synthesizeWrittenSlugs));
+        if (!opts.quickMaintenance && engine && synthesizeWrittenSlugs?.length) {
+          try {
+            const { auditDreamLinks } = await import('./cycle/dream-link-audit.ts');
+            const audit = await auditDreamLinks(engine, filesystemSourceId, synthesizeWrittenSlugs);
+            const synthesized = [...phaseResults].reverse().find(item => item.phase === 'synthesize');
+            if (synthesized && synthesized.status !== 'fail' && synthesized.status !== 'skipped') {
+              synthesized.details = { ...synthesized.details, unresolved_links: audit.unresolved, new_orphans: audit.unlinked };
+              if (audit.unresolved.length > 0 && synthesized.status === 'ok') synthesized.status = 'warn';
+            }
+          } catch {}
+        }
 
         phaseResults.push(result);
         noteSearchIndexAbort(result);
@@ -2326,18 +2355,17 @@ export async function runCycle(
         // v0.41.2.1 (D9 #5): union sync + synthesize affected slugs so the
         // incremental discovery path doesn't miss pages just-written by the
         // synthesize phase that ran earlier in the same cycle.
-        const xaAffectedSlugs =
-          syncPagesAffected || synthesizeWrittenSlugs
-            ? [
-                ...(syncPagesAffected ?? []),
-                ...(synthesizeWrittenSlugs ?? []),
-              ]
+        const syncFailedOpen = phaseResults.some(item => item.phase === 'sync' && item.status === 'fail') && syncPagesAffected === undefined;
+        const xaAffectedSlugs = syncFailedOpen
+          ? []
+          : syncPagesAffected !== undefined || synthesizeWrittenSlugs !== undefined
+            ? [...new Set([...(syncPagesAffected ?? []), ...(synthesizeWrittenSlugs ?? [])])]
             : undefined;
         const { result, duration_ms } = await timePhase(() => runPhaseExtractAtoms(engine, {
           brainDir: brainDir ?? undefined,
           sourceId: xaSourceId,
           dryRun,
-          affectedSlugs: opts.includePendingKnowledge||opts.knowledgeSince?undefined:xaAffectedSlugs,
+          affectedSlugs: syncFailedOpen ? [] : (opts.includePendingKnowledge || opts.knowledgeSince ? undefined : xaAffectedSlugs),
           schemaPack:opts.schemaPack,
           since:opts.knowledgeSince,
           requireSourceQuotes:opts.includePendingKnowledge,
@@ -2400,7 +2428,7 @@ export async function runCycle(
         progress.start('cycle.capture_entities');
         let captureReportedDone = 0;
         const { runPhaseCaptureEntities } = await import('./cycle/capture-entities.ts');
-        const captureSlugs=opts.prepareEntityCapture?await opts.prepareEntityCapture():opts.captureEntitySlugs;
+        const captureSlugs=opts.prepareEntityCapture?(await opts.prepareEntityCapture())??[]:opts.captureEntitySlugs;
         const { result, duration_ms } = await timePhase(() => runPhaseCaptureEntities(engine, {
           sourceId: cycleSourceId,
           quickEntitiesOnly:opts.quickEntitiesOnly,
@@ -2867,7 +2895,8 @@ export async function runCycle(
       await checkpoint();
     }
 
-    if (opts.refreshRelationsAfterGeneration && engine && !dryRun && resolvedPhases.includes('extract')) {
+    const generatedRelationsThisCycle = phases.includes('extract') || phases.includes('capture_entities') || phases.includes('synthesize');
+    if (opts.refreshRelationsAfterGeneration && engine && !dryRun && generatedRelationsThisCycle) {
       checkAborted(opts.signal);
       const extract = phaseResults.find(result => result.phase === 'extract');
       if (extract && !skipIfSearchIndexUnusable('extract')) {
@@ -3098,7 +3127,7 @@ function emptyTotals(): CycleReport['totals'] {
   };
 }
 
-function extractTotals(phases: PhaseResult[]): CycleReport['totals'] {
+export function extractTotals(phases: PhaseResult[]): CycleReport['totals'] {
   const t = emptyTotals();
   for (const p of phases) {
     if (p.phase === 'lint' && p.details) {
@@ -3154,7 +3183,7 @@ function extractTotals(phases: PhaseResult[]): CycleReport['totals'] {
   return t;
 }
 
-function deriveStatus(phases: PhaseResult[], totals: CycleReport['totals']): CycleStatus {
+export function deriveStatus(phases: PhaseResult[], totals: CycleReport['totals']): CycleStatus {
   // Scope exclusions are bookkeeping, not attempted work. Ignoring them also
   // prevents six failed freshness phases plus many exclusions from looking
   // merely partial and incorrectly stamping a Source fresh.

@@ -5,10 +5,9 @@ import { loadConfig } from '../../core/config.ts';
 import { reloadLiveGateway } from '../../core/ai/reload-live-gateway.ts';
 import { DEFAULT_CLI_OPTIONS, setCliOptions } from '../../core/cli-options.ts';
 import { runStructuredImport, importSyncFile } from '../../commands/import.ts';
-import { runCycle, type CyclePhase } from '../../core/cycle.ts';
+import { runCycle, ALL_PHASES, extractTotals, deriveStatus, type CyclePhase, type CycleReport } from '../../core/cycle.ts';
 import { resolveDreamPresetPhases, resolveDreamRelationOptions, resolveBrainDir } from '../../commands/dream.ts';
 import { runQuickMaintenance, combineQuickMaintenanceReports, resolveQuickMaintenancePhases } from '../../core/quick-maintenance.ts';
-import { ALL_PHASES } from '../../core/cycle.ts';
 import { chooseCaptureModel, configuredCnyPrices } from '../../core/cycle/capture-entities.ts';
 import { readEntityCaptureCostCap } from '../../core/cycle/entity-capture-budget.ts';
 import {runWithDreamBudget,checkDreamBudget} from './dream-budget';
@@ -45,6 +44,7 @@ import type { SyncStrategy } from '../../core/sync.ts';
 import { isOfficeFilePath } from '../../core/sync.ts';
 import { isImageFilePath } from '../../core/import-file.ts';
 import { QuickSyncPlan } from './quick-sync-plan';
+import { DEEP_ORGANIZE_STAGES, deepOrganizePhaseNames, isStagedDeepOrganize, summarizeDeepStage, type DeepRoundProgress } from '../../../shared/deep-organize-progress';
 import { classifyQuickScanHash, classifyQuickScanStat } from './quick-scan-index';
 import type { MaintenanceRoundProgress, MaintenanceStageId, MaintenanceStageResult } from '../../../shared/maintenance-progress';
 import {QuickVectorProgress} from './vector-progress';
@@ -140,10 +140,18 @@ for (const method of ['log', 'error', 'warn', 'info', 'debug'] as const) {
 setCliOptions({ ...DEFAULT_CLI_OPTIONS, progressJson: true });
 
 async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { type: 'dream' }>['input'], progressPrefix:string[] = []) {
+  const stagedFull = isStagedDeepOrganize(input);
   const checkpoint: MaintenanceCheckpoint = input.checkpoint ?? { phases: {}, reports: {} };
   const round: MaintenanceRoundProgress = checkpoint.quickProgress ?? { scan: { scanned: 0, unchanged: 0, complete: false }, stage: 'sync', stages: [], entities: { total: 0, person: 0, project: 0, organization: 0, company: 0, links: 0 } };
   const notifyRound = () => { checkpoint.quickProgress=round; send({type:'maintenance',value:round}); };
-  const quickPlan = input.preset==='quick'&&!input.dryRun ? new QuickSyncPlan(checkpoint,()=>rpc('task.maintenanceCheckpoint',[checkpoint]),scan=>{round.scan=scan;notifyRound();},ownerJobId) : undefined;
+  const deepRound: DeepRoundProgress | undefined = stagedFull ? checkpoint.deepProgress ?? { stage: 'check', stages: [], scan: { scanned: 0, unchanged: 0, complete: false } } : undefined;
+  const notifyDeep = () => { if (!deepRound) return; checkpoint.deepProgress = deepRound; send({ type: 'deep', value: deepRound }); };
+  const syncPlan = ((input.preset==='quick' || stagedFull) && !input.dryRun) ? new QuickSyncPlan(checkpoint,()=>rpc('task.maintenanceCheckpoint',[checkpoint]),scan=>{
+    if (input.preset==='quick') { round.scan=scan; notifyRound(); }
+    if (deepRound) { deepRound.scan=scan; if (deepRound.stage==='sync') deepRound.current={...deepRound.current,result:`已扫描 ${scan.scanned}，未变化 ${scan.unchanged}`}; notifyDeep(); }
+  },ownerJobId) : undefined;
+  const quickPlan = input.preset==='quick' ? syncPlan : undefined;
+  let pauseForDocumentOcr = true;
   const legacyQuickSources = input.preset === 'quick' ? [...new Set([...Object.keys(checkpoint.phases), ...Object.keys(checkpoint.reports)])].filter(sourceId => {
     const report = checkpoint.reports[sourceId];
     return (checkpoint.phases[sourceId] ?? []).some(phase => phase.phase === 'capture_entities' || phase.phase === 'embed')
@@ -179,20 +187,20 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
   const roots = new Map<string, string>();
   const fileRuntime: SyncFileRuntime | undefined = usesSyncFileQueue(input) ? {
     signal: abort.signal,
-    get collectOnly(){return quickPlan?.preparing;},
-    listFiles: quickPlan ? async (root,discover)=>{
-      const paths=await quickPlan.list(root,discover);
-      if(quickPlan.preparing&&!quickPlan.current?.complete){
-        const sourceRoot=(await fetchSource(engine,quickPlan.sourceId))?.local_path??'';
-        await quickPlan.loadFingerprints(engine,sourceRoot,root,paths);
+    get collectOnly(){return syncPlan?.preparing;},
+    listFiles: syncPlan ? async (root,discover)=>{
+      const paths=await syncPlan.list(root,discover);
+      if(syncPlan.preparing&&!syncPlan.current?.complete){
+        const sourceRoot=(await fetchSource(engine,syncPlan.sourceId))?.local_path??'';
+        await syncPlan.loadFingerprints(engine,sourceRoot,root,paths);
       }
       return paths;
     } : undefined,
-    importFiles: quickPlan ? ()=>quickPlan.imports() : undefined,
-    workingTree: input.preset === 'quick' || (await engine.getConfig('sync.include_working_tree')) === 'true',
+    importFiles: syncPlan ? ()=>syncPlan.imports() : undefined,
+    workingTree: input.preset === 'quick' || stagedFull || (await engine.getConfig('sync.include_working_tree')) === 'true',
     importFile: async (path, relativePath, options) => {
-      if(quickPlan&&!quickPlan.preparing){
-        const file=quickPlan.file(path);
+      if(syncPlan&&!syncPlan.preparing){
+        const file=syncPlan.file(path);
         if(!file)throw new Error('资料不属于本轮固定清单');
         const result=await rpc('task.syncFile',[file]) as import('../../core/import-file.ts').ImportResult & {deferred?:boolean};
         if(result.deferred)pendingFiles=true;
@@ -210,7 +218,7 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
       let oversized=false;
       try{assertImportFileSize(relativePath,snapshot.size);}catch{oversized=true;}
       send({type:'progress',syncScan:{scanned,unchanged,path:relativePath,bytes:snapshot.size,updatedAt:new Date().toISOString(),active:true}});
-      if(quickPlan?.preparing){
+      if(syncPlan?.preparing){
         const fingerprint=syncFileContentFingerprint(options);
         const compatible=[syncFileContentFingerprint({...options,documentOcr:true})];
         const base: import('./types').SyncFileInput = { path, relativePath, sourceRoot, originalPath,
@@ -220,22 +228,22 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
           fingerprint, compatibleFingerprints: compatible, options,
         };
         const remember=async(file: import('./types').SyncFileInput, fileUnchanged: boolean)=>{
-          const known=quickPlan.stored(sourceRoot,relativePath);
+          const known=syncPlan!.stored(sourceRoot,relativePath);
           const prepared=!fileUnchanged&&!isOfficeFilePath(relativePath)&&!known?.chunkHash?{...file,options:{...file.options,forceRechunk:true}}:file;
-          await quickPlan.record(prepared,fileUnchanged);
+          await syncPlan!.record(prepared,fileUnchanged);
           scanned++; if(fileUnchanged)unchanged++;
           send({type:'progress',syncScan:{scanned,unchanged,path:relativePath,bytes:snapshot.size,updatedAt:new Date().toISOString(),active:true}});
           return {slug:'',status:'skipped' as const,chunks:0,deferred:true};
         };
         if(oversized)return remember({...base,hash:`oversize:${snapshot.size}:${snapshot.mtimeMs}`},false);
-        const stored=quickPlan.stored(sourceRoot,relativePath);
+        const stored=syncPlan!.stored(sourceRoot,relativePath);
         const statDecision=classifyQuickScanStat(stored,snapshot.size,snapshot.mtimeMs,fingerprint,compatible);
         if(statDecision==='unchanged')return remember({...base,hash:stored!.hash},true);
         if(statDecision==='same-bytes')return remember({...base,hash:stored!.hash},false);
         const hash=await streamFileHash(path,abort.signal);
         const hashed=classifyQuickScanHash(stored,hash,fingerprint,compatible,snapshot.size,snapshot.mtimeMs);
         if(hashed.unchanged){
-          if(hashed.refresh)quickPlan.noteRefresh(sourceRoot,relativePath,snapshot.size,snapshot.mtimeMs);
+          if(hashed.refresh)syncPlan!.noteRefresh(sourceRoot,relativePath,snapshot.size,snapshot.mtimeMs);
           return remember({...base,hash},true);
         }
         return remember({...base,hash},false);
@@ -257,14 +265,16 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
       send({ type: 'progress', syncScan: { scanned, unchanged,path:relativePath,bytes:snapshot.size,updatedAt:new Date().toISOString(),active:true } });
       return result;
     },
-    finish: async () => { if(quickPlan?.preparing){await quickPlan.flushRefreshes(engine);await quickPlan.finish();throw new SyncFilesDeferred();} if (pendingFiles) throw new SyncFilesDeferred(); },
+    finish: async () => { if(syncPlan?.preparing){await syncPlan.flushRefreshes(engine);await syncPlan.finish();throw new SyncFilesDeferred();} if (pendingFiles) throw new SyncFilesDeferred(); },
   } : undefined;
   const resumeOptions = async (sourceId: string) => {
     let captureEntitySlugs: string[] | undefined;
     let captureEntityBudget: import('../../core/cycle/capture-entities.ts').CaptureEntitiesOpts['budget'];
-    if(capturesImported && ingestEnabled && !input.dryRun){
+    if(capturesImported && ingestEnabled && !input.dryRun && !stagedFull){
       captureEntitySlugs=await rpc('task.captureRequest',[sourceId]) as string[]|undefined;
       if(captureEntitySlugs)checkpoint.captureRequests={...checkpoint.captureRequests,[sourceId]:captureEntitySlugs};
+    }else if(stagedFull){
+      captureEntitySlugs=checkpoint.captureRequests?.[sourceId];
     }else if(input.phase==='capture_entities'){
       captureEntitySlugs=input.slugs;
       if(input.slugs?.length&&!input.dryRun){
@@ -322,7 +332,7 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
     : resolveDreamPresetPhases(input.preset ?? 'full');
   send({ type: 'progress', phases: [...progressPrefix,...phases] });
   const phaseOptions=async(sourceId:string)=>{
-    if(usesSyncFileQueue(input)&&input.phase!=='sync'&&input.preset!=='quick'){
+    if(pauseForDocumentOcr&&usesSyncFileQueue(input)&&input.phase!=='sync'&&input.preset!=='quick'){
     await engine.executeRaw(`UPDATE minion_jobs SET status='waiting',result=NULL,error_text=NULL,finished_at=NULL,data=jsonb_set(data-'ocrOwnerCancelled','{authorizedAttempt}',to_jsonb(attempts_started+1)),updated_at=now()
       WHERE name='pmbrain-document-ocr' AND data->'task'->'input'->'ocrOnly'->>'maintenanceOwnerId'=$1 AND status='cancelled' AND data->>'ocrOwnerCancelled'='true'`,[String(ownerJobId)]);
     const waiting=await engine.executeRaw("SELECT 1 FROM pages p JOIN minion_jobs j ON j.id=(p.frontmatter->>'document_ocr_task_id')::int WHERE p.source_id=$1 AND p.deleted_at IS NULL AND p.frontmatter->>'document_ocr_deferred'='true' AND (j.status IN ('waiting','active','delayed') OR j.data->'task'->'input'->'ocrOnly'->>'maintenanceOwnerId'=$2) LIMIT 1",[sourceId,String(ownerJobId)]);
@@ -516,6 +526,132 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
       return value ? [value] : [];
     });
     return { ...combined, quickVector: vectors };
+  }
+  if (stagedFull && syncPlan && deepRound) {
+    const startedAt = new Date();
+    const dreamKnowledge = await import('./dream-knowledge');
+    const knowledgeEnabled = await dreamKnowledge.prepareDreamKnowledge(engine);
+    await dreamKnowledge.prepareProductEnrichThin(engine);
+    const currentPack = loadConfig()?.schema_pack ?? 'gbrain-base';
+    const knowledgePack = knowledgeEnabled ? (currentPack === 'gbrain-base-v2' ? 'pmbrain-knowledge' : currentPack === 'gbrain-base' ? 'gbrain-creator' : undefined) : undefined;
+    const deepPhases = deepOrganizePhaseNames() as CyclePhase[];
+    const available = (await loadAllSources(engine)).filter(source => parseSourceConfig(source.config).syncEnabled !== false);
+    const ids = checkpoint.quickSync!.sourceIds ?? (input.allSources ? available.map(source => source.id) : [sourceId ?? 'default']);
+    checkpoint.quickSync!.sourceIds = ids;
+    const sources = ids.map(id => {
+      const source = available.find(item => item.id === id);
+      if (!source) throw new Error(`知识源 ${id} 已停用或不存在，不能继续本轮任务`);
+      return source;
+    });
+    if (!sources.length) throw new Error('没有可同步的知识源');
+    let lastReport: CycleReport | undefined;
+    const stageReady = (stage: typeof DEEP_ORGANIZE_STAGES[number]) => {
+      const saved = deepRound.stages.find(item => item.id === stage.id);
+      if (!saved || !['completed', 'skipped'].includes(saved.status)) return false;
+      if (stage.id === 'sync' && !Object.values(syncPlan.sources).every(plan => plan.complete)) return false;
+      return sources.every(source => (stage.phases as readonly string[]).every(phase => checkpoint.phases[source.id]?.some(savedPhase => savedPhase.phase === phase)));
+    };
+    const publish = (): CycleReport => {
+      const phases = sources.flatMap(source => checkpoint.phases[source.id] ?? []);
+      const totals = extractTotals(phases);
+      let status = deriveStatus(phases, totals);
+      if (!['failed', 'skipped'].includes(status) && deepRound.stages.some(stage => stage.status === 'partial' || stage.status === 'failed')) status = 'partial';
+      return { schema_version: '1', timestamp: startedAt.toISOString(), duration_ms: Date.now() - startedAt.getTime(), status, brain_dir: lastReport?.brain_dir ?? null, phases, totals };
+    };
+    notifyDeep();
+    for (const stage of DEEP_ORGANIZE_STAGES) {
+      if (stageReady(stage)) continue;
+      abort.signal.throwIfAborted();
+      deepRound.stage = stage.id;
+      deepRound.current = { result: stage.detail, startedAt: new Date().toISOString() };
+      notifyDeep();
+      await rpc('task.maintenanceCheckpoint', [checkpoint]);
+      pauseForDocumentOcr = stage.id !== 'check' && stage.id !== 'sync';
+      try {
+        if (stage.id === 'sync') {
+          syncPlan.preparing = true;
+          for (const [index, source] of sources.entries()) {
+            abort.signal.throwIfAborted();
+            syncPlan.sourceId = source.id;
+            await syncPlan.restore(source.id);
+            if (syncPlan.current?.complete) continue;
+            send({ type: 'progress', scope: { name: source.name, index, total: sources.length } });
+            try {
+              const report = await runCycle(engine, {
+                ...common, sourceId: source.id, brainDir: await quickBrainDir(source.id), syncFileRuntime: fileRuntime,
+                phases: ['sync'], phaseWindow: ['sync'], localPathOnly: true, deferInlineExtract: true, quickMaintenance: false, includeOffice: true,
+              });
+              lastReport = report;
+              if (report.reason === 'cycle_already_running') return report;
+              const failure = report.phases.find(phase => phase.phase === 'sync' && phase.status === 'fail');
+              if (failure) throw new Error(failure.error?.message ?? failure.summary);
+              const syncPhase = report.phases.find(phase => phase.phase === 'sync');
+              if (syncPhase && syncPhase.status !== 'fail') {
+                const saved = checkpoint.phases[source.id] ?? [];
+                checkpoint.phases[source.id] = [...saved.filter(phase => phase.phase !== 'sync'), syncPhase];
+              }
+            } catch (error) { if (!(error instanceof SyncFilesDeferred)) throw error; }
+          }
+          syncPlan.preparing = false; pendingFiles = false; capacityReached = false;
+          deepRound.scan = syncPlan.scan(true);
+          notifyDeep();
+          await rpc('task.maintenanceCheckpoint', [checkpoint]);
+          await syncPlan.discardLog();
+        }
+        if (stage.id === 'entities' && !ingestEnabled) {
+          const summary = automaticEnabled ? '未配置可用的实体识别模型' : '实体识别已关闭';
+          const reason = automaticEnabled ? 'model_unavailable' : 'disabled';
+          for (const source of sources) {
+            const saved = checkpoint.phases[source.id] ?? [];
+            if (!saved.some(phase => phase.phase === 'capture_entities')) checkpoint.phases[source.id] = [...saved, { phase: 'capture_entities', status: 'skipped', duration_ms: 0, summary, details: { reason, pages_submitted: 0 } }];
+          }
+        } else {
+          for (const [index, source] of sources.entries()) {
+            abort.signal.throwIfAborted();
+            syncPlan.sourceId = source.id;
+            send({ type: 'progress', scope: { name: source.name, index, total: sources.length } });
+            const options = await phaseOptions(source.id);
+            const report = await runCycle(engine, {
+              ...resolveDreamRelationOptions('full', null),
+              ...common, sourceId: source.id, brainDir: await quickBrainDir(source.id), ...options,
+              phases: deepPhases, phaseWindow: [...stage.phases] as CyclePhase[],
+              quickMaintenance: false, quickEntitiesOnly: true, reuseDuplicateKnowledgeSources: true,
+              schemaPack: knowledgePack, includePendingKnowledge: knowledgeEnabled,
+              enrichThinWhenUnset: true, enrichThinTypesWhenUnset: ['person', 'company', 'project'],
+              ...(stage.id === 'sync' ? { localPathOnly: true, deferInlineExtract: true } : {}),
+              ...(stage.id === 'entities' && !options.prepareEntityCapture ? { captureEntitySlugs: options.captureEntitySlugs ?? [] } : {}),
+            });
+            lastReport = report;
+            if (report.reason === 'cycle_already_running') return report;
+          }
+        }
+        if (stage.id === 'check') {
+          for (const source of sources) {
+            checkpoint.phases[source.id] = (checkpoint.phases[source.id] ?? []).map(phase => {
+              if ((phase.phase !== 'lint' && phase.phase !== 'backlinks') || phase.status !== 'fail') return phase;
+              const message = phase.error?.message;
+              return { ...phase, status: 'warn', error: undefined, details: { ...phase.details, check_advisory: true, ...(message ? { check_error: message } : {}) } };
+            });
+          }
+        }
+        const snapshots = sources.flatMap(source => (checkpoint.phases[source.id] ?? []).filter(phase => (stage.phases as readonly string[]).includes(phase.phase)));
+        const summary = summarizeDeepStage(stage.id, snapshots, deepRound.scan);
+        deepRound.stages = [...deepRound.stages.filter(item => item.id !== stage.id), summary];
+        deepRound.current = { ...deepRound.current, result: summary.result };
+        notifyDeep();
+        await rpc('task.maintenanceCheckpoint', [checkpoint]);
+        if (stage.id !== 'check' && snapshots.some(phase => phase.status === 'fail')) return publish();
+      } catch (error) {
+        notifyDeep();
+        await rpc('task.maintenanceCheckpoint', [checkpoint]);
+        throw error;
+      }
+    }
+    deepRound.stage = 'done';
+    deepRound.current = undefined;
+    notifyDeep();
+    await rpc('task.maintenanceCheckpoint', [checkpoint]);
+    return publish();
   }
   const brainDir = input.preset === 'quick' ? await quickBrainDir(sourceId) : await resolveBrainDir(engine, null, sourceId);
   if (input.preset === 'quick') {

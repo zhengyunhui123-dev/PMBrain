@@ -174,7 +174,9 @@ export class ProductTaskRuntime {
       try {
         const parent = await this.queue.getJob(sessionId);
         const parentTask = parent?.data.task as ProductTask;
-        const quickOwner = parent?.data.kind === 'dream_quick' || (parentTask?.type === 'dream' && parentTask.input.preset === 'quick') ? sessionId : undefined;
+        const childTask = context.data.task as ProductTask;
+        const inlineFile = childTask?.type === 'sync-file' && childTask.input.quickMaintenance === true;
+        const quickOwner = parent?.data.kind === 'dream_quick' || (parentTask?.type === 'dream' && parentTask.input.preset === 'quick') || inlineFile ? sessionId : undefined;
         if (parent?.queue !== PRODUCT_TASK_QUEUE || (parent.status !== 'waiting-children' && !(quickOwner!==undefined&&parent.status==='active'))) throw new Error('同步会话已停止，文件尚未开始');
         this.scheduleSessionRefresh(sessionId, ((context.data.task as ProductTask).input as SyncFileInput).relativePath);
         return await withDatabasePriority(2, () => this.execute(context, quickOwner));
@@ -1014,7 +1016,7 @@ export class ProductTaskRuntime {
       const run=toRun({ ...record, progress }, cancelRequested);
       if (run.product && structuredTask.type==='dream' && usesSyncFileQueue(structuredTask.input)) {
         run.product.activeFiles=this.fileProjection.active(context.id);
-        const counts=structuredTask.input.preset==='quick'?this.fileProjection.counts(context.id):null;
+        const counts=this.fileProjection.counts(context.id);
         if(counts?.total){run.product.syncFiles=counts;run.product.processed=counts.completed+counts.failed;run.product.total=counts.total;}
       }
       return run;
@@ -1095,15 +1097,16 @@ export class ProductTaskRuntime {
           if (message.method === 'task.syncFile') {
             const file = message.args[0] as SyncFileInput;
             const quick=structuredTask.type==='dream'&&structuredTask.input.preset==='quick';
+            const inlineSync=quick||file.quickMaintenance===true;
             let result:import('../../core/import-file.ts').ImportResult & {deferred?:boolean;capacityReached?:boolean;childId?:number};
             for(;;){
               try{
                 result=await this.fileQueue.enqueue(context.id,record.lock_token!,file);
-                if(quick&&result.deferred&&result.childId)result=await this.waitForQuickFile(context.id,record.lock_token!,result.childId,gitController.signal);
+                if(inlineSync&&result.deferred&&result.childId)result=await this.waitForQuickFile(context.id,record.lock_token!,result.childId,gitController.signal);
                 break;
               }catch(error){
                 if(!isSyncCapacityError(error)||this.stopIntents.has(context.id)||this.paused)throw error;
-                if(quick&&await this.waitForQuickCapacity(gitController.signal))continue;
+                if(inlineSync&&await this.waitForQuickCapacity(gitController.signal))continue;
                 const counts=await this.fileQueue.counts(context.id);
                 if(counts.remaining>0){result={slug:'',status:'skipped',chunks:0,deferred:true,capacityReached:true};break;}
                 throw error;
@@ -1190,6 +1193,9 @@ export class ProductTaskRuntime {
         });
       } else if(message.type==='maintenance'){
         adapter.view.maintenance=message.value;progressDirty=true;
+        if(message.value.scan.complete&&adapter.view.syncScan)adapter.view.syncScan.active=false;
+      } else if(message.type==='deep'){
+        adapter.view.deep=message.value;progressDirty=true;
         if(message.value.scan.complete&&adapter.view.syncScan)adapter.view.syncScan.active=false;
       } else if(message.type==='vector-totals'){
         const lastWindow=message.value.windowEnded?{total:message.value.total,completed:message.value.completed,elapsedMs:message.value.windowElapsedMs??message.value.windowMs,finishedAt:new Date().toISOString()}:adapter.view.vectorTotals?.lastWindow;

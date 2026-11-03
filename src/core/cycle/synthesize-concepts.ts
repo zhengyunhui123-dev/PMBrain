@@ -1,9 +1,11 @@
-// v0.41 T6 — synthesize_concepts cycle phase (minimal-viable implementation).
+// v0.41 T6 — synthesize_concepts cycle phase.
 //
-// v0.41 ships a working concept synthesis path: group atoms by simple
-// frontmatter tag/concept references, tier by count (T1 ≥10, T2 ≥5,
-// T3 ≥2, T4 ≥1), Sonnet-synthesize T1/T2 narratives. Voice gate
-// integration + dedup-by-embedding-similarity ship in v0.42+.
+// Groups atoms by frontmatter concept labels. Labels that differ only by
+// case, spacing, or punctuation share one group. A longer label with one
+// known suffix collapses onto a unique shorter label or an existing concept
+// title. Ambiguous or generic short cores stay separate. Embedding
+// similarity is not used. T1 ≥10 and T2 ≥5 ask the model for a narrative;
+// T3 uses a deterministic narrative. Model failures keep that narrative.
 //
 // Sequencing:
 //   1. Query all atom-typed pages from DB (excluding imported_from
@@ -36,6 +38,52 @@ const DEFAULT_BUDGET_USD = 1.5;
 const TIER_T1_MIN = 10;
 const TIER_T2_MIN = 5;
 const TIER_T3_MIN = 2;
+const CONCEPT_SUFFIXES = ['流程', '方法', '模式', '机制', '概念', '股份', '公司'];
+const GENERIC_CONCEPT_CORES = new Set(['系统', '项目', '模型', '平台', '方案', '功能', '问题', '数据', '内容', '工作', '研究', '产品', '用户', '技术', '公司']);
+
+export function conceptLabelKey(label: string): string {
+  return label.normalize('NFKC').toLowerCase().replace(/[\s_·.。\-]+/gu, '');
+}
+
+export function collapseConceptLabels(labels: string[], existingTitles: string[] = []): Map<string, string> {
+  const display = new Map<string, string>();
+  const keys = new Set<string>();
+  const remember = (raw: string) => {
+    const trimmed = raw.normalize('NFKC').trim();
+    const key = conceptLabelKey(trimmed);
+    if (!key) return;
+    keys.add(key);
+    if (!display.has(key)) display.set(key, trimmed);
+  };
+  for (const label of labels) remember(label);
+  for (const title of existingTitles) {
+    const trimmed = title.normalize('NFKC').trim();
+    const key = conceptLabelKey(trimmed);
+    if (!key) continue;
+    keys.add(key);
+    display.set(key, trimmed);
+  }
+  const longerByCore = new Map<string, string[]>();
+  for (const key of keys) {
+    const suffix = CONCEPT_SUFFIXES.find(item => key.endsWith(item) && key.length > item.length);
+    if (!suffix) continue;
+    const core = key.slice(0, -suffix.length);
+    if (core.length < 2 || GENERIC_CONCEPT_CORES.has(core)) continue;
+    const list = longerByCore.get(core) ?? [];
+    list.push(key);
+    longerByCore.set(core, list);
+  }
+  for (const [core, longers] of longerByCore) {
+    if (longers.length !== 1 || !display.has(core)) continue;
+    display.set(longers[0]!, display.get(core)!);
+  }
+  const result = new Map<string, string>();
+  for (const label of labels) {
+    const key = conceptLabelKey(label.normalize('NFKC').trim());
+    result.set(label, key ? display.get(key) ?? label.normalize('NFKC').trim() : label);
+  }
+  return result;
+}
 
 export interface SynthesizeConceptsOpts {
   brainDir?: string;
@@ -136,6 +184,22 @@ export async function runPhaseSynthesizeConcepts(
     } catch(error) {
       throw error;
     }
+  }
+  let existingConceptTitles: string[] = [];
+  if (opts._atoms === undefined) {
+    try {
+      const titles = await engine.executeRaw<{ title: string | null }>(
+        `SELECT title FROM pages WHERE type = 'concept' AND deleted_at IS NULL AND ($1::text IS NULL OR source_id = $1 OR source_id = 'default')`,
+        [opts.sourceId ?? null],
+      );
+      existingConceptTitles = titles.map(row => row.title ?? '').filter(title => title.trim().length > 0);
+    } catch { /* keep the labels already on the atoms */ }
+  }
+  const canonicalConcepts = collapseConceptLabels(atoms.flatMap(atom => atom.concept_refs), existingConceptTitles);
+  for (const atom of atoms) atom.concept_refs = atom.concept_refs.map(label => canonicalConcepts.get(label) ?? label);
+  for (const concept of [...touchedConcepts]) {
+    const canonical = canonicalConcepts.get(concept);
+    if (canonical) touchedConcepts.add(canonical);
   }
 
   if (atoms.length === 0) {
@@ -443,9 +507,19 @@ export async function runPhaseSynthesizeConcepts(
     });
   }
 
+  let unresolvedLinks: Array<{ slug: string; targets: string[] }> = [];
+  let unlinkedPages: string[] = [];
+  if (!opts.dryRun && conceptSlugs.length) {
+    try {
+      const audit = await (await import('./dream-link-audit.ts')).auditDreamLinks(engine, opts.sourceId ?? 'default', conceptSlugs.map(slug => `${opts.sourceId ?? 'default'}:${slug}`));
+      unresolvedLinks = audit.unresolved;
+      unlinkedPages = audit.unlinked;
+    } catch { /* a link check must not discard concept pages already written */ }
+  }
+  const conceptStatus = failures.length > 0 || deferredConcepts > 0 || unresolvedLinks.length > 0 ? 'warn' : 'ok';
   return {
     phase: 'synthesize_concepts',
-    status: failures.length > 0||deferredConcepts>0 ? 'warn' : 'ok',
+    status: conceptStatus,
     duration_ms: 0,
     summary:
       `synthesize_concepts: ${conceptsWritten} concepts ` +
@@ -459,6 +533,8 @@ export async function runPhaseSynthesizeConcepts(
       concepts_deterministic:deterministicConcepts,
       concepts_remaining:deferredConcepts+failures.filter(row=>!row.error.includes('budget')).length,
       concept_slugs: conceptSlugs,
+      unresolved_links: unresolvedLinks,
+      new_orphans: unlinkedPages,
       tier_counts: tierCounts,
       groups_found: atomGroups.length,
       atoms_seen: atoms.length,

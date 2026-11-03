@@ -13,8 +13,12 @@ import {
   captureServiceReady,
   deltaCaptureNeedles,
   parseEntityCaptureCostCapInput,
+  captureFailureDisposition,
+  legalCoreVariants,
   rankCaptureCandidates,
   readEntityCaptureCostCap,
+  uniqueCaptureAliases,
+  uniqueNearEntity,
   readModelCnyPrices,
   selectReadyCaptureModel,
   usageFromJobResult,
@@ -121,6 +125,71 @@ test('候选只取正文里相关的实体，不把全库塞进去', () => {
   const ranked = rankCaptureCandidates('张老师参加了评审。系统只是普通用词。', entities, { sourceId: 'vault' });
   expect(ranked.map(item => item.slug)).toEqual(['people/zhang-san', 'concepts/system']);
   expect(ranked[0]).toMatchObject({ type: 'person', title: '张三', aliases: ['张老师'] });
+});
+
+test('正文里的简称能召回带公司后缀的已有实体，精确称呼仍排在前面', () => {
+  const entities = [
+    { slug: 'companies/caixun', sourceId: 'vault', type: 'company', title: '彩讯股份', aliases: [] },
+    { slug: 'companies/beijing', sourceId: 'vault', type: 'company', title: '北京彩讯股份有限公司', aliases: [] },
+    { slug: 'companies/xinghe', sourceId: 'vault', type: 'company', title: '星河公司', aliases: [] },
+    { slug: 'companies/huawei', sourceId: 'vault', type: 'company', title: '华为技术', aliases: [] },
+    { slug: 'people/zhang-san', sourceId: 'vault', type: 'person', title: '张三', aliases: ['张老师'] },
+    { slug: 'concepts/system', sourceId: 'vault', type: 'concept', title: '系统', aliases: [] },
+  ];
+  const ranked = rankCaptureCandidates('彩讯发布了年度报告。', entities, { sourceId: 'vault' });
+  expect(ranked.map(item => item.slug)).toEqual(['companies/caixun', 'companies/beijing']);
+  const exact = rankCaptureCandidates('张老师参加了评审。系统只是普通用词。', entities, { sourceId: 'vault' });
+  expect(exact.map(item => item.slug)).toEqual(['people/zhang-san', 'concepts/system']);
+  expect(rankCaptureCandidates('这里只出现技术两个字。', entities, { sourceId: 'vault' })).toEqual([]);
+});
+
+test('同一简称对应多家公司时都作为候选，但不自动写别名或并页', () => {
+  const entities = [
+    { slug: 'companies/a', sourceId: 'vault', type: 'company', title: '彩讯股份', aliases: [] },
+    { slug: 'companies/b', sourceId: 'vault', type: 'company', title: '彩讯有限公司', aliases: [] },
+  ];
+  expect(rankCaptureCandidates('彩讯参加了会议。', entities, { sourceId: 'vault' }).map(item => item.slug).sort())
+    .toEqual(['companies/a', 'companies/b']);
+  expect(uniqueCaptureAliases('彩讯参加了会议。', entities)).toEqual([]);
+  expect(uniqueNearEntity('彩讯', 'company', entities)).toBeNull();
+  expect(legalCoreVariants('彩讯', 'company', entities).map(item => item.slug).sort()).toEqual(['companies/a', 'companies/b']);
+});
+
+test('只有一家公司时，简称记成别名并指向原来的页', () => {
+  const caixun = { slug: 'companies/caixun', sourceId: 'vault', type: 'company', title: '彩讯股份', aliases: [] as string[] };
+  const named = { slug: 'companies/short', sourceId: 'vault', type: 'company', title: '彩讯', aliases: [] as string[] };
+  const person = { slug: 'people/zhang', sourceId: 'vault', type: 'person', title: '张三', aliases: [] as string[] };
+  expect(uniqueCaptureAliases('资料里写了彩讯股份的业绩。', [caixun, person])).toEqual([{ entity: caixun, alias: '彩讯' }]);
+  expect(uniqueNearEntity('彩讯', 'company', [caixun])?.slug).toBe('companies/caixun');
+  expect(uniqueNearEntity('彩讯公司', 'organization', [caixun])?.slug).toBe('companies/caixun');
+  expect(uniqueNearEntity('张三丰', 'person', [person])).toBeNull();
+  expect(uniqueNearEntity('彩讯', 'company', [named])?.slug).toBe('companies/short');
+  expect(uniqueCaptureAliases('彩讯股份发布财报。', [named, caixun])).toEqual([]);
+});
+
+test('模型没返回可保存结果时这一页失败，其他资料继续；普通报错仍然中断', () => {
+  expect(captureFailureDisposition({
+    status: 'completed', errorText: null, stopReason: 'end_turn', ingestVerified: false, jobId: 7,
+  })).toMatchObject({ fatal: false, pageStopped: false, reason: 'no_tool', failureStop: true });
+  expect(captureFailureDisposition({
+    status: 'dead', errorText: '模型这次失败', stopReason: null, ingestVerified: false,
+  })).toMatchObject({ fatal: true, pageStopped: true, reason: 'failure' });
+  expect(captureFailureDisposition({
+    status: 'dead', errorText: 'ingest_provider_timeout: isolated timeout', stopReason: null, ingestVerified: false,
+  })).toMatchObject({ fatal: false, pageStopped: false, reason: 'timeout' });
+  expect(captureFailureDisposition({
+    status: 'dead', errorText: 'ingest_output_truncated: output truncated after bounded retry', stopReason: null, ingestVerified: false,
+  })).toMatchObject({ fatal: false, pageStopped: true, reason: 'truncated' });
+  expect(captureFailureDisposition({
+    status: 'dead', errorText: 'ingest_provider_user_stop: stopped', stopReason: null, ingestVerified: false,
+  })).toMatchObject({ fatal: true, pageStopped: true, reason: 'user_stop' });
+  expect(captureFailureDisposition({
+    status: 'dead', errorText: 'ingest unresolved target: concepts/missing', stopReason: null, ingestVerified: false,
+  })).toMatchObject({ fatal: false, reason: 'ingest_validation' });
+  expect(captureReportLine({
+    model: 'mimo:mimo-v2.6-flash', pagesProcessed: 0, pagesRemaining: 1, entitiesCreated: 0, relationsCreated: 0,
+    costCny: null, costCapCny: 5, ollama: false, stopReason: 'no_tool',
+  })).toContain('模型没有返回可保存的实体结果');
 });
 
 test('任务详情能看到页面、分块、Token、费用和剩余资料', () => {

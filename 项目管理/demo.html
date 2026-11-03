@@ -181,6 +181,7 @@ a{color:var(--accent);text-decoration:none}button,input,textarea,select{font:inh
 .startup-create{max-width:920px}.startup-create h1{font-size:32px;letter-spacing:-.03em;margin:0 0 8px}.startup-create p{color:var(--muted);line-height:1.7}.startup-steps{list-style:none;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;padding:0;margin:18px 0 26px}.startup-steps .btn{width:100%;justify-content:flex-start;border:0;border-bottom:2px solid var(--line);border-radius:0;padding:8px 4px 10px;background:transparent;color:var(--muted);font-size:13px}.startup-steps [aria-current=step]{border-color:var(--accent);color:var(--text);font-weight:650}.startup-steps .btn:disabled{cursor:default;opacity:1}.startup-create .actions{margin-top:18px}.startup-model-roles{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:16px 0}.startup-model-roles section{padding:16px;border:1px solid var(--line);border-radius:12px;background:var(--raised)}.startup-model-roles label{display:grid;gap:7px}.startup-model-roles small{color:var(--muted)}.startup-model-roles .btn{margin-top:10px}.startup-build{display:grid;gap:9px;margin:18px 0}.startup-build span{display:flex;gap:9px;align-items:center}.startup-build i{display:block;width:8px;height:8px;border-radius:50%;background:var(--line);flex:none}.startup-build [data-state=current] i{background:var(--accent)}.startup-build [data-state=done] i{background:var(--positive)}.startup-build [data-state=failed] i{background:var(--danger)}
 .overlay:has(.startup-drawer){justify-content:flex-end;padding:0}.dialog.startup-drawer{height:100dvh;max-height:100dvh;width:min(520px,100vw);border-radius:16px 0 0 16px}.startup-drawer .dialog-footer{justify-content:space-between}.startup-drawer .dialog-footer small{max-width:275px;color:var(--muted);line-height:1.55}.startup-drawer .form-grid{margin-bottom:15px}.startup-drawer .quick-entry{min-height:70px}.startup-drawer .quick-entry .icon-tile{width:32px;height:32px}.startup-drawer .notice{align-items:flex-start;margin:12px 0}.startup-drawer .check-row{margin:5px 0}.startup-selected{list-style:none;padding:0;margin:14px 0}.startup-selected li{display:flex;gap:8px;align-items:center;padding:8px 0;border-bottom:1px solid var(--line)}.startup-selected li .btn{margin-left:auto}
 .startup-location{max-width:620px;margin:22px 0}.startup-location-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:stretch}.startup-location-row input{min-width:0}.startup-location-row .btn{white-space:nowrap}
+.mp-deep-content{border:1px solid var(--line);border-radius:10px;background:var(--side);padding:12px 14px 0;margin:6px 0 12px}.mp-deep-content-heading{display:flex;align-items:center;justify-content:space-between;gap:12px}.mp-deep-content-heading h4{font-size:13px;margin:0}.mp-deep-content-heading span{font-size:11px;color:var(--muted)}.mp-deep-content-counts{font-size:13px;font-weight:600;margin:8px 0 0}.mp-deep-content .mp-note{margin:5px 0 10px}
 </style></head><body data-theme="dark" data-nav="collapsed"><svg xmlns="http://www.w3.org/2000/svg" width="0" height="0" style="position:absolute" aria-hidden="true">
 <symbol id="home" viewBox="0 0 24 24"><path d="m3 10 9-7 9 7v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 21v-7h6v7"/></symbol>
 <symbol id="database" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></symbol>
@@ -243,7 +244,7 @@ const tasks=[
 {id:2,name:'知识向量化',source:'全部数据源',kind:'vector',state:'waiting',label:'等待空闲',detail:'电脑忙碌时自动等待',progress:42,time:'等待中',icon:'database'},
 {id:3,name:'快速维护',source:'全部数据源',kind:'dream',state:'active',label:'进行中',detail:'导入 72 / 120 份增量资料',progress:20,time:'今天 11:36',icon:'pen'},
 {id:4,name:'添加项目资料',source:'工作资料',kind:'import',state:'done',label:'已完成',detail:'8 份资料已保存',progress:100,time:'今天 10:42',icon:'upload'},
-{id:5,name:'AI 深度整理',source:'个人笔记',kind:'dream',state:'done',label:'已完成',detail:'保存 36 个知识点 · 新增 44 条关联',progress:100,time:'昨天 20:18',icon:'spark'},
+{id:5,name:'AI 深度整理',source:'个人笔记',kind:'dream',state:'done',label:'已完成',detail:'新建 41 个知识成果 · 维护 7 个 · 新增及补齐 44 条关联',progress:100,time:'昨天 20:18',icon:'spark'},
 {id:6,name:'周报助手',source:'工作资料',kind:'assistant',state:'done',label:'已完成',detail:'已生成一份周报',progress:100,time:'10 月 23 日',icon:'document'}];
 if(Array.isArray(S.taskPreview)){tasks.splice(0,tasks.length,...S.taskPreview)}
 const agents=[['main','知识库助手','知','main'],['report','周报助手','周','report'],['expense','报销助手','报','expense'],['write','写作助手','写','write']];
@@ -645,10 +646,10 @@ document.addEventListener('change',event=>{if(event.target.id==='maintenanceDemo
 const deepDemoStages=[
   {id:'check',title:'检查知识库',label:'检查知识库中',seconds:16,links:3,result:'检查 48 个页面，补齐 3 条反向链接',detail:'核对页面格式与反向链接',live:{seconds:5,count:'18 / 48 个页面',result:'已核对 18 个页面的格式与反向链接'}},
   {id:'sync',title:'同步资料',label:'同步资料中',seconds:132,imported:18,result:'同步 18 / 18 份，新增 6 份，更新 12 份',detail:'扫描 48 份，未变化 30 份，失败 0 份',live:{seconds:61,imported:7,count:'7 / 18 份资料',result:'扫描 48 份，确认 18 份有变化，已保存 7 份',file:'项目复盘.docx'}},
-  {id:'relations',title:'理解内容与关联',label:'理解内容与关联中',seconds:80,cents:68,links:32,result:'整理 4 份对话记录，保存 32 条关联',detail:'核对事实栏、页面引用和已有实体提及',live:{seconds:35,cents:34,links:14,count:'2 / 4 份对话记录',result:'已保存 14 条关联',file:'产品规划讨论.md'}},
-  {id:'knowledge',title:'提炼长期知识',label:'提炼长期知识中',seconds:305,cents:152,knowledge:36,result:'处理 24 / 24 份资料，保存 36 个知识点',detail:'18 份本轮变更，6 份此前待提炼，每个知识点保留出处',live:{seconds:152,cents:76,knowledge:18,count:'12 / 24 份资料',result:'已保存 18 个知识点，剩余 12 份待处理',file:'项目交付复盘.md'}},
+  {id:'relations',title:'内容综合与关联',label:'综合内容与核对关系中',seconds:80,cents:68,newKnowledge:2,maintainedKnowledge:1,links:32,result:'新建 2 篇综合页，维护 1 篇，新增 32 条关联',detail:'核对新增和变更资料的引用与关系；符合条件的对话记录用于生成或更新综合页。',live:{seconds:35,cents:34,newKnowledge:1,links:14,count:'已核对 8 份变更资料',result:'已新建 1 篇综合页，新增 14 条关联',file:'产品规划讨论.md'}},
+  {id:'knowledge',title:'提炼长期知识',label:'提炼长期知识中',seconds:305,cents:152,newKnowledge:36,result:'处理 24 / 24 份资料，新建 36 个知识点',detail:'18 份本轮变更，6 份此前待提炼，每个知识点保留出处',live:{seconds:152,cents:76,newKnowledge:18,count:'12 / 24 份资料',result:'已保存 18 个知识点，剩余 12 份待处理',file:'项目交付复盘.md'}},
   {id:'entities',title:'识别和更新实体',label:'识别和更新实体中',seconds:112,cents:84,entities:12,links:9,result:'新建 4 个实体，更新 8 个，新增 9 条关联',detail:'核对人物、项目、公司和组织的名称、来源与关系',live:{seconds:48,cents:40,entities:5,links:3,count:'8 / 18 份资料',result:'已新建 2 个实体，更新 3 个，新增 3 条关联',file:'客户访谈纪要.md'}},
-  {id:'concepts',title:'整理模式与概念',label:'整理模式与概念中',seconds:180,cents:64,result:'归纳 2 个知识模式，整理 4 个概念，补充 3 个页面',detail:'核对关系矛盾和固定问题，按有效证据补充页面',live:{seconds:87,cents:32,count:'2 / 4 个概念',result:'已保存 2 个知识模式和 2 个概念'}},
+  {id:'concepts',title:'整理模式与概念',label:'整理模式与概念中',seconds:180,cents:64,newKnowledge:3,maintainedKnowledge:6,result:'新建 1 个模式、2 个概念，维护 1 个模式、2 个概念和 3 个知识页',detail:'按有效证据补充已有内容，只统计实际保存的变更',live:{seconds:87,cents:32,newKnowledge:2,maintainedKnowledge:2,count:'2 / 4 个概念',result:'新建 1 个模式、1 个概念，维护 1 个模式、1 个概念'}},
   {id:'index',title:'更新搜索索引',label:'更新搜索索引中',seconds:153,cents:18,result:'已保存 180 / 180 个分块的向量',detail:'更新本次待处理的搜索向量',live:{seconds:85,cents:10,count:'108 / 180 个分块',result:'已保存 108 个分块的向量，剩余 72 个',file:'项目交付复盘.md'}},
   {id:'review',title:'完成检查',label:'完成检查中',seconds:30,result:'检查孤立页面和知识结构，发现 2 个页面待补关联',detail:'待补关联保留在本轮结果中',live:{seconds:13,count:'孤立页面检查已完成',result:'发现 2 个页面待补关联，知识结构待检查'}}
 ];
@@ -673,7 +674,7 @@ function deepDemoSnapshot(t){
 }
 function openDeepDemo(t){
   const {stage,live,records,completed,failed,stopped,label,percent,totals,scenario}=deepDemoSnapshot(t);
-  const metrics=[['已同步资料',totals('imported'),'份'],['已保存长期知识点',totals('knowledge'),'个'],['已新增或更新实体',totals('entities'),'个'],['已新增知识关联',totals('links'),'条']];
+  const metrics=[['已同步资料',totals('imported'),'份'],['新建 / 维护知识成果',`${totals('newKnowledge')} / ${totals('maintainedKnowledge')}`,'个'],['已新增或更新实体',totals('entities'),'个'],['新增及补齐关联',totals('links'),'条']];
   const summary=`<section class="mp-summary" aria-label="整轮总计">
     <div class="mp-heading"><h3>整轮总计 ${status(label,failed?'error':stopped?'neutral':completed?'':'working')}</h3><div class="mp-time">总耗时<b>${deepDemoDuration(totals('seconds'))}</b></div></div>
     <p class="mp-deep-meta"><span>整理范围 <b>${esc(t.source)}</b></span><span>模型费用 <b>${deepDemoCost(totals('cents'))}</b> / ¥5.00 上限</span>${completed?'<span>待补关联 <b>2 个页面</b></span>':''}</p>
@@ -696,8 +697,21 @@ function openDeepDemo(t){
       <span class="mp-step-dot" aria-hidden="true">${record&&!record.skipped?'✓':index+1}</span><strong>${item.title}<small>${state}</small></strong>
       <span>${record?`${record.result}<small>${record.detail}</small>`:active?live.count:'—'}</span>
       ${record&&!record.skipped?`<time datetime="PT${record.seconds}S">${deepDemoDuration(record.seconds)}<small>${deepDemoCost(record.cents??0)}</small></time>`:''}</li>`;
-  }).join('');
-  const results=`<section class="mp-results" aria-label="阶段记录"><h3>阶段记录</h3><ol class="mp-deep-stages">${stages}</ol></section>`;
+  });
+  const contentStart=2,contentEnd=6;
+  const contentItems=[...records,live].slice(contentStart,contentEnd);
+  const contentTotal=key=>contentItems.reduce((sum,item)=>sum+(item?.[key]??0),0);
+  const contentState=records.length>=contentEnd?'已完成':records.length>=contentStart?label:'待执行';
+  const results=`<section class="mp-results" aria-label="阶段记录"><h3>阶段记录</h3>
+    <ol class="mp-deep-stages">${stages.slice(0,contentStart).join('')}</ol>
+    <section class="mp-deep-content" aria-label="理解内容与关联">
+      <div class="mp-deep-content-heading"><h4>理解内容与关联</h4><span>${contentState}</span></div>
+      <p class="mp-deep-content-counts">新建 ${contentTotal('newKnowledge')} 个知识成果 · 维护 ${contentTotal('maintainedKnowledge')} 个 · 新增关联 ${contentTotal('links')} 条</p>
+      <p class="mp-note">整理符合条件的新增、变更资料，也补做此前待处理的资料。观点生成默认关闭。</p>
+      <ol class="mp-deep-stages" start="${contentStart+1}">${stages.slice(contentStart,contentEnd).join('')}</ol>
+    </section>
+    <ol class="mp-deep-stages" start="${contentEnd+1}">${stages.slice(contentEnd).join('')}</ol>
+  </section>`;
   const footer=`<label class="mp-preview-control">预览状态<select aria-label="预览状态" id="deepDemoState" data-id="${t.id}">${deepDemoScenarios.map(([key,name])=>`<option value="${key}" ${key===scenario?'selected':''}>${name}</option>`).join('')}</select></label>`
     +button('关闭','close-dialog','','ghost')+taskActions(t,true)+navButton('查看任务','tasks','primary-btn');
   const trigger=document.activeElement;
@@ -708,7 +722,7 @@ function saveDeepDemo(t){
   const {stage,label,percent,completed,totals}=deepDemoSnapshot(t);
   t.label=label;
   t.progress=percent;
-  t.detail=completed?`保存 ${totals('knowledge')} 个知识点 · 新增 ${totals('links')} 条关联`:`${stage.title} · ${stage.live.count}`;
+  t.detail=completed?`新建 ${totals('newKnowledge')} 个知识成果 · 维护 ${totals('maintainedKnowledge')} 个 · 新增及补齐 ${totals('links')} 条关联`:`${stage.title} · ${stage.live.count}`;
   saveTaskPreview();
 }
 document.addEventListener('change',event=>{

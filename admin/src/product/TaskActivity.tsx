@@ -5,7 +5,7 @@ import type { ConsoleRun } from '../lib/shared';
 import { taskName } from '../../../shared/task-progress';
 import { taskLink, taskStatus } from './TaskProgress';
 import type { MaterialSubmission } from './material-list-progress';
-import { taskPercent } from './task-presentation';
+import { taskLiveStage, taskPercent } from './task-presentation';
 import { useBackgroundActivity } from './use-background-activity';
 
 const TasksContext = createContext<{ rows: ConsoleRun[]; error: string; loaded: boolean; imports: MaterialSubmission[]; setImports: React.Dispatch<React.SetStateAction<MaterialSubmission[]>> }>({ rows: [], error: '', loaded: false, imports: [], setImports: () => {} });
@@ -46,7 +46,7 @@ export function TaskActivityProvider({ enabled, children }: { enabled: boolean; 
   const running = snapshot.rows.find(run => run.kind!=='conversation_memory'&&run.status === 'running') ?? snapshot.rows.find(run => run.kind!=='conversation_memory'&&run.status === 'queued');
   const waiting = running?.searchOptimize && running.status === 'queued';
   return <TasksContext.Provider value={{ ...snapshot, imports, setImports }}>{children}
-    {running && <button type="button" className={`product-task-activity${waiting ? ' is-waiting' : ''}`} onClick={() => running.kind==='document_ocr'?window.location.hash='tasks?ocr=1':taskLink(running)}>{waiting ? <Clock3 size={15} /> : <LoaderCircle size={15} />}<span>{running.product?.name ?? taskName(running.kind)} · {running.product?.stage ?? '等待执行'}{taskPercent(running) != null ? ` ${taskPercent(running)}%` : ''}</span></button>}
+    {running && <button type="button" className={`product-task-activity${waiting ? ' is-waiting' : ''}`} onClick={() => running.kind==='document_ocr'?window.location.hash='tasks?ocr=1':taskLink(running)}>{waiting ? <Clock3 size={15} /> : <LoaderCircle size={15} />}<span>{running.product?.name ?? taskName(running.kind)} · {taskLiveStage(running) ?? '等待执行'}{taskPercent(running) != null ? ` ${taskPercent(running)}%` : ''}</span></button>}
     {notice && <div className="product-task-notice" role="status"><button type="button" onClick={() => taskLink(notice)}>{notice.product?.name ?? taskName(notice.kind)} · {taskStatus(notice)}{notice.product?.metrics.filter(metric => metric.value > 0).slice(0, 2).map(metric => ` · ${metric.label} ${metric.value}`)}</button><button type="button" aria-label="关闭任务通知" onClick={() => setNotice(null)}><X size={16} /></button></div>}
   </TasksContext.Provider>;
 }

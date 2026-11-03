@@ -4,6 +4,7 @@ import { loadActivePack } from '../schema-pack/load-active.ts';
 import { extractableTypesFromPack } from '../schema-pack/extractable.ts';
 import { excludedCapturePath,excludedEntityCapturePath,EXCLUDED_CAPTURE_PATH,EXCLUDED_ENTITY_CAPTURE_PATH } from '../pmbrain-adapters/entity-capture-request.ts';
 import { createHash } from 'node:crypto';
+import { atomTitleKey, resolveAtomSlug } from './atom-identity.ts';
 import { reuseAtomSource } from '../pmbrain-adapters/atom-duplicate-reuse.ts';
 import { readPhaseBudget } from './phase-budget.ts';
 import { CONVERSATION_PAGE_URI_PREFIX } from './transcript-discovery.ts';
@@ -26,6 +27,8 @@ import { CONVERSATION_PAGE_URI_PREFIX } from './transcript-discovery.ts';
 //     - Pre-existing v0.41.2.0 transcript-side date-stamp duplicate bug
 //       (atom slugs are `atoms/YYYY-MM-DD/<title>`, so re-discovered
 //       transcripts on day N+1 used to write second atoms; now skipped).
+//   The same normalized title from another document appends its evidence to
+//   the oldest atom. The first document's body and frontmatter stay.
 //
 // Config:
 //   Reads dream.synthesize.session_corpus_dir + meeting_transcripts_dir
@@ -57,7 +60,6 @@ import { throwIfAborted } from '../abort-check.ts';
 import { upsertExtractRollup } from '../extract/rollup-writer.ts';
 import { parseLlmJson } from '../llm-json.ts';
 import {defaultMaxOutputTokens,isThinkingModel} from '../ai/model-compatibility.ts';
-import { resolveAtomSlug } from './atom-identity.ts';
 import { resolveCycleDate } from './cycle-date.ts';
 import {
   recordTranscriptFailureCount,
@@ -227,6 +229,7 @@ export async function discoverExtractablePages(
   affectedSlugs?: string[],
   scope?:{schemaPack?:string;since?:string;strict?:boolean;reuseDuplicateSources?:boolean;retrySignature?:string},
 ): Promise<DiscoveredPage[]> {
+  if (Array.isArray(affectedSlugs) && affectedSlugs.length === 0) return [];
   const hasFilter = Array.isArray(affectedSlugs) && affectedSlugs.length > 0;
   const capSlot = hasFilter ? '$8' : '$7';
   const retrySlot = hasFilter ? '$9' : '$8';
@@ -329,9 +332,24 @@ export async function discoverExtractablePages(
 export async function countExtractAtomsBacklog(
   engine: BrainEngine,
   sourceId: string,
-  scope?:{schemaPack?:string;since?:string;reuseDuplicateSources?:boolean;retrySignature?:string;heldOnly?:boolean},
+  scope?:{schemaPack?:string;since?:string;reuseDuplicateSources?:boolean;retrySignature?:string;heldOnly?:boolean;affectedSlugs?:string[]},
 ): Promise<number | null> {
+  if (Array.isArray(scope?.affectedSlugs) && scope.affectedSlugs.length === 0) return 0;
   try {
+    const params: unknown[] = [sourceId, await resolveExtractableTypes(scope?.schemaPack), MIN_PAGE_CHARS_FOR_EXTRACTION,scope?.since??null,(scope?.reuseDuplicateSources?EXCLUDED_ENTITY_CAPTURE_PATH:EXCLUDED_CAPTURE_PATH).source, await resolveExtractAtomsInputCap(engine)];
+    let slugClause = '';
+    if (scope?.affectedSlugs?.length) {
+      params.push(scope.affectedSlugs);
+      slugClause = `AND p.slug = ANY($${params.length}::text[])`;
+    }
+    let heldClause = '';
+    if (scope?.heldOnly) {
+      params.push(scope.retrySignature ?? '');
+      heldClause = `AND COALESCE(p.frontmatter->>'atoms_fail_hash','') = p.content_hash
+          AND COALESCE(p.frontmatter->>'atoms_fail_signature','') = $${params.length}
+          AND CASE WHEN COALESCE(p.frontmatter->>'atoms_fail_count','') ~ '^[0-9]+$'
+            THEN (p.frontmatter->>'atoms_fail_count')::numeric >= 3 ELSE false END`;
+    }
     const rows = await engine.executeRaw<{ cnt: string | number }>(
       `SELECT COUNT(*) AS cnt
          FROM pages p
@@ -349,10 +367,8 @@ export async function countExtractAtomsBacklog(
           AND COALESCE(p.frontmatter->>'raw','') = ''
           AND ($4::timestamptz IS NULL OR p.updated_at >= $4::timestamptz)
           AND p.slug !~* $5
-          ${scope?.heldOnly ? `AND COALESCE(p.frontmatter->>'atoms_fail_hash','') = p.content_hash
-          AND COALESCE(p.frontmatter->>'atoms_fail_signature','') = $7
-          AND CASE WHEN COALESCE(p.frontmatter->>'atoms_fail_count','') ~ '^[0-9]+$'
-            THEN (p.frontmatter->>'atoms_fail_count')::numeric >= 3 ELSE false END` : ''}
+          ${heldClause}
+          ${slugClause}
           AND COALESCE(p.frontmatter->>'atoms_scan_hash', '') <> substring(p.content_hash from 1 for 16)
           AND NOT (
             COALESCE(p.frontmatter->>'atoms_window_hash', '') = substring(p.content_hash from 1 for 16)
@@ -370,7 +386,7 @@ export async function countExtractAtomsBacklog(
                AND atom.frontmatter->>'source_hash' = substring(p.content_hash from 1 for 16)
                AND atom.deleted_at IS NULL
           )`}`,
-      [sourceId, await resolveExtractableTypes(scope?.schemaPack), MIN_PAGE_CHARS_FOR_EXTRACTION,scope?.since??null,(scope?.reuseDuplicateSources?EXCLUDED_ENTITY_CAPTURE_PATH:EXCLUDED_CAPTURE_PATH).source, await resolveExtractAtomsInputCap(engine),...(scope?.heldOnly?[scope.retrySignature??'']:[])],
+      params,
     );
     return Number(rows[0]?.cnt ?? 0);
   } catch (error) {
@@ -567,6 +583,7 @@ export async function runPhaseExtractAtoms(
 
   // 4. Per work-item: extract atoms via Haiku
   let totalAtomsExtracted = 0;
+  const writtenAtomSlugs: string[] = [];
   let transcriptsProcessed = 0;
   let pagesProcessed = 0;
   let transcriptsSkipped = 0;
@@ -713,6 +730,14 @@ export async function runPhaseExtractAtoms(
         }
         for (const atom of atoms) {
           const slug = await resolveAtomSlug(tx, sourceId, atom.title, item.kind, originLabel, await resolveCycleDate(tx));
+          const twins = await tx.executeRaw<{ slug: string; title: string; compiled_truth: string | null; timeline: string | null; frontmatter: Record<string, unknown> | null }>(
+            `SELECT slug, title, compiled_truth, timeline, frontmatter FROM pages
+              WHERE source_id = $1 AND type = 'atom' AND deleted_at IS NULL AND lower(btrim(title)) = lower(btrim($2))
+              ORDER BY id LIMIT 8`,
+            [sourceId, atom.title],
+          );
+          const twin = twins.find(row => atomTitleKey(row.title) === atomTitleKey(atom.title));
+          const merged = twin && twin.slug !== slug ? twin : null;
           const loc = locateQuote(promptContent, atom.source_quote ?? '');
           const quoteFields = atom.source_quote
             ? loc
@@ -723,39 +748,50 @@ export async function runPhaseExtractAtoms(
             item.kind === 'transcript'
               ? { source_path: item.filePath }
               : { source_slug: item.slug };
-          // The bare page-row upsert used here did not create content_chunks,
-          // leaving extracted atoms invisible to keyword and vector search.
-          // Serialize and reuse the canonical import path so Dream output has
-          // the same chunking/provenance behavior as every other page. The
-          // explicit type survives parsing, sourceId preserves isolation, and
-          // an unconfigured embedding provider remains a no-embed import.
-          const markdown = serializeMarkdown(
-            {
-              atom_type: atom.atom_type,
-              ...originFrontmatter,
-              source_hash: partialAtomSourceHash(contentHash16, windowPlan.truncated, windowPlan.readStart),
-              ...quoteFields,
-              ...(atom.lesson && { lesson: atom.lesson }),
-              ...(atom.concepts && atom.concepts.length > 0 && { concepts: atom.concepts }),
-              ...(atom.virality_score !== undefined && { virality_score: atom.virality_score }),
-              ...(atom.emotional_register && { emotional_register: atom.emotional_register }),
-              extracted_at: new Date().toISOString(),
-              extracted_by: 'extract_atoms-v0.41.2.1',
-              dream_generated:true,
-            },
-            atom.body,
-            '',
-            { type: 'atom', title: atom.title, tags: [] },
-          );
-          await importFromContent(tx, slug, markdown, {
-            sourceId,
-            noEmbed: opts.deferEmbedding||!isAvailable('embedding'),
-          });
+          const sourceMark = item.kind === 'page' ? item.slug : originLabel;
+          const alreadyThere = !!merged && ((merged.compiled_truth ?? '').includes(sourceMark) || (!!atom.body.trim() && (merged.compiled_truth ?? '').includes(atom.body.trim())));
+          const writingSlug = merged?.slug ?? slug;
+          if (!alreadyThere) {
+            const previous = merged?.frontmatter ?? {};
+            const { title: _ignoredTitle, type: _ignoredType, ...kept } = previous;
+            const concepts = [...new Set([
+              ...(Array.isArray(previous.concepts) ? previous.concepts.filter((label): label is string => typeof label === 'string') : []),
+              ...(atom.concepts ?? []),
+            ])];
+            const markdown = serializeMarkdown(
+              merged ? {
+                ...kept,
+                ...(previous.source_slug || previous.source_path ? {} : originFrontmatter),
+                ...(concepts.length ? { concepts } : {}),
+                dream_generated: true,
+              } : {
+                atom_type: atom.atom_type,
+                ...originFrontmatter,
+                source_hash: partialAtomSourceHash(contentHash16, windowPlan.truncated, windowPlan.readStart),
+                ...quoteFields,
+                ...(atom.lesson && { lesson: atom.lesson }),
+                ...(atom.concepts && atom.concepts.length > 0 && { concepts: atom.concepts }),
+                ...(atom.virality_score !== undefined && { virality_score: atom.virality_score }),
+                ...(atom.emotional_register && { emotional_register: atom.emotional_register }),
+                extracted_at: new Date().toISOString(),
+                extracted_by: 'extract_atoms-v0.41.2.1',
+                dream_generated:true,
+              },
+              merged ? `${merged.compiled_truth ?? ''}\n\n## ${sourceMark}\n\n${atom.body}` : atom.body,
+              merged?.timeline ?? '',
+              { type: 'atom', title: merged?.title ?? atom.title, tags: [] },
+            );
+            await importFromContent(tx, writingSlug, markdown, {
+              sourceId,
+              noEmbed: opts.deferEmbedding||!isAvailable('embedding'),
+            });
+          }
           const sourceSlug=item.kind==='page'?item.slug:item.filePath.startsWith(`${CONVERSATION_PAGE_URI_PREFIX}${sourceId}/`)?item.filePath.slice(`${CONVERSATION_PAGE_URI_PREFIX}${sourceId}/`.length):undefined;
           if(sourceSlug)await tx.addLinksBatch([
-            {from_slug:slug,to_slug:sourceSlug,link_type:'derives_from',link_source:'frontmatter',origin_slug:slug,origin_field:'source_slug',from_source_id:sourceId,to_source_id:sourceId,origin_source_id:sourceId},
-            {from_slug:sourceSlug,to_slug:slug,link_type:'evidence_of',link_source:'frontmatter',origin_slug:slug,origin_field:'source_slug',from_source_id:sourceId,to_source_id:sourceId,origin_source_id:sourceId},
+            {from_slug:writingSlug,to_slug:sourceSlug,link_type:'derives_from',link_source:'frontmatter',origin_slug:writingSlug,origin_field:'source_slug',from_source_id:sourceId,to_source_id:sourceId,origin_source_id:sourceId},
+            {from_slug:sourceSlug,to_slug:writingSlug,link_type:'evidence_of',link_source:'frontmatter',origin_slug:writingSlug,origin_field:'source_slug',from_source_id:sourceId,to_source_id:sourceId,origin_source_id:sourceId},
           ],{auditSite:'extract.links_db'});
+          writtenAtomSlugs.push(`${sourceId}:${writingSlug}`);
           written++;
         }
         if(item.kind==='page')await stampPageWindow(tx);
@@ -806,9 +842,10 @@ export async function runPhaseExtractAtoms(
   }
   });
   estimatedSpendUsd = budgetTracker.totalSpent;
-  const remainingPages=opts._pages===undefined?await countExtractAtomsBacklog(engine,sourceId,sourceScope):pagesSkipped+failures.length;
+  const backlogScope=Array.isArray(opts.affectedSlugs)?{...sourceScope,affectedSlugs:opts.affectedSlugs}:sourceScope;
+  const remainingPages=opts._pages===undefined?await countExtractAtomsBacklog(engine,sourceId,backlogScope):pagesSkipped+failures.length;
   if(remainingPages===null)throw new Error('atom_backlog_unknown: unable to verify remaining inputs');
-  const heldPages=opts.reuseDuplicateSources&&opts._pages===undefined?await countExtractAtomsBacklog(engine,sourceId,{...sourceScope,heldOnly:true}):0;
+  const heldPages=opts.reuseDuplicateSources&&opts._pages===undefined?await countExtractAtomsBacklog(engine,sourceId,{...backlogScope,heldOnly:true}):0;
   if(heldPages===null)throw new Error('atom_backlog_unknown: unable to verify held inputs');
 
   // v0.42 Wave B2: write extract receipt + rollup row when the phase
@@ -843,9 +880,18 @@ export async function runPhaseExtractAtoms(
     });
   }
 
+  let unresolvedLinks: Array<{ slug: string; targets: string[] }> = [];
+  let unlinkedPages: string[] = [];
+  if (!opts.dryRun && writtenAtomSlugs.length) {
+    try {
+      const audit = await (await import('./dream-link-audit.ts')).auditDreamLinks(engine, sourceId, writtenAtomSlugs);
+      unresolvedLinks = audit.unresolved;
+      unlinkedPages = audit.unlinked;
+    } catch { /* a link check must not discard atoms already written */ }
+  }
   return {
     phase: 'extract_atoms',
-    status: failures.length > 0||budgetExhausted||Number(remainingPages)>0 ? 'warn' : 'ok',
+    status: failures.length > 0||budgetExhausted||Number(remainingPages)>0||unresolvedLinks.length>0 ? 'warn' : 'ok',
     duration_ms: 0,
     summary:
       `extract_atoms: ${totalAtomsExtracted} atoms from ` +
@@ -867,6 +913,8 @@ export async function runPhaseExtractAtoms(
       pages_total: pages.length,
       pages_skipped_budget: pagesSkipped,
       duplicates_skipped: duplicatesSkipped,
+      unresolved_links: unresolvedLinks,
+      new_orphans: unlinkedPages,
       failures,
       estimated_spend_usd: estimatedSpendUsd,
       budget_usd: budgetCap,

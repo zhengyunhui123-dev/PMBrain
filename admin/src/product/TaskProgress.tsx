@@ -13,6 +13,7 @@ import { importOutcome } from '../../../shared/import-outcome';
 import { modelSetupIssue, taskModelSetupIssue } from './model-readiness';
 import { taskStopping, taskStatus, taskPercent, taskRoundCompleted, taskRoundSummary, taskHasRemaining, taskPhaseSummary } from './task-presentation';
 import { MaintenanceProgress, VectorRoundProgress } from './MaintenanceProgress';
+import { DeepOrganizeProgress } from './DeepOrganizeProgress';
 
 export { taskStopping, taskStatus } from './task-presentation';
 export const taskLink = (run: ConsoleRun) => { window.location.hash = `tasks?run=${encodeURIComponent(run.id)}`; };
@@ -46,6 +47,7 @@ function DatabaseWait({ active }: { active: boolean }) {
 }
 
 export function TaskProgressCard({run,link=true,timeline=false,vectorRuns=[]}:{run:ConsoleRun;link?:boolean;timeline?:boolean;vectorRuns?:ConsoleRun[]}){
+  if(run.product?.deep)return <DeepOrganizeProgress run={run} link={link}/>;
   if(run.product?.maintenance||run.kind==='import_path'||run.kind==='dream_quick'&&['running','queued'].includes(run.status))return <MaintenanceProgress run={run} link={link} vectorRuns={vectorRuns}/>;
   if(run.product?.vectorTotals)return <VectorRoundProgress runs={[run]} title="知识向量化"/>;
   return <LegacyTaskProgressCard run={run} link={link} timeline={timeline}/>;
