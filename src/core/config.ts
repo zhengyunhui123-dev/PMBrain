@@ -83,6 +83,8 @@ export interface GBrainConfig {
    * Default: `<config-dir>/backups/pglite-upgrades`.
    */
   pglite_upgrade_backup_dir?: string;
+  /** When true, an upgrade copies one PGLite backup over the previous copy. Default off. */
+  pglite_upgrade_backup_enabled?: boolean;
   /** Stable local-admin secret used by the desktop shell and direct HTTP serve. */
   admin_bootstrap_token?: string;
   desktop?: {
@@ -839,6 +841,7 @@ export const KNOWN_CONFIG_KEYS: readonly string[] = [
   'admin_bootstrap_token',
   'database_path',
   'pglite_upgrade_backup_dir',
+  'pglite_upgrade_backup_enabled',
   'openai_api_key',
   'custom_openai_api_key',
   'mimo_api_key',

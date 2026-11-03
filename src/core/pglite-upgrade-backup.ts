@@ -15,34 +15,18 @@ import {
 } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type { PGlite } from '@electric-sql/pglite';
-import { createPgliteDatabase } from './pglite-open.ts';
-import { vector } from '@electric-sql/pglite/vector';
-import { pg_trgm } from '@electric-sql/pglite/contrib/pg_trgm';
 import { configDir } from './config.ts';
 import { acquireLock, clearReapMarker, releaseLock } from './pglite-lock.ts';
 import { isPgliteDataDirPermissionError, isPgliteProcessStartupFailure, isPgliteToastInconsistencyError } from './pglite-errors.ts';
 import { attemptWalRepairAndRetry, clearRepairAttemptSidecar } from './pglite-repair.ts';
 import { PGLITE_DATA_PROTECTION_POLICY } from './pglite-data-policy.ts';
 
-export const PGLITE_UPGRADE_BACKUP_RETENTION = 2;
+export const PGLITE_UPGRADE_BACKUP_RETENTION = 1;
 export const PGLITE_UPGRADE_BACKUP_DIRNAME = 'pglite-upgrades';
+export const PGLITE_UPGRADE_BACKUP_SLOT = 'current';
 
 const MANIFEST_FILE = 'manifest.json';
 const BACKUP_DATABASE_DIR = 'brain.pglite';
-const PROTECTED_COUNT_TABLES = [
-  'pages',
-  'page_versions',
-  'sources',
-  'tags',
-  'page_tags',
-  'timeline_entries',
-  'raw_data',
-  'files',
-  'takes',
-  'facts',
-  'access_tokens',
-  'oauth_clients',
-] as const;
 
 export interface PgliteDirectoryInventory {
   files: number;
@@ -51,7 +35,7 @@ export interface PgliteDirectoryInventory {
 }
 
 export interface PgliteRecoveryValidation {
-  status: 'verified';
+  status: 'verified' | 'copied';
   verified_at: string;
   schema_version: number | null;
   protected_table_counts: Record<string, number>;
@@ -60,7 +44,7 @@ export interface PgliteRecoveryValidation {
 export interface PgliteUpgradeBackupManifest {
   manifest_version: 1;
   backup_id: string;
-  status: 'verified';
+  status: 'verified' | 'copied';
   created_at: string;
   source_database_path: string;
   backup_database_path: string;
@@ -229,10 +213,6 @@ export async function inventoryPgliteDirectory(root: string): Promise<PgliteDire
   return { files: files.length, bytes, sha256: hash.digest('hex') };
 }
 
-function sameInventory(a: PgliteDirectoryInventory, b: PgliteDirectoryInventory): boolean {
-  return a.files === b.files && a.bytes === b.bytes && a.sha256 === b.sha256;
-}
-
 function safeRemoveTemporary(root: string, target: string): void {
   if (!isWithin(root, target) || !basename(target).startsWith('.')) {
     throw new Error(`Refusing to remove unverified temporary backup path: ${target}`);
@@ -251,15 +231,6 @@ function copyColdDatabase(source: string, destination: string): void {
       return rel === '' || !isPgliteRuntimePath(rel);
     },
   });
-}
-
-async function preservingProcessExitCode<T>(fn: () => Promise<T>): Promise<T> {
-  const previous = process.exitCode;
-  try {
-    return await fn();
-  } finally {
-    process.exitCode = previous;
-  }
 }
 
 function isWasmAbortMessage(message: string): boolean {
@@ -286,56 +257,11 @@ export async function openVerifiedRestoreCopy(
   }
 }
 
-async function inspectRestoreCopy(databasePath: string): Promise<PgliteRecoveryValidation> {
-  return preservingProcessExitCode(async () => {
-    const open = () => createPgliteDatabase({
-      dataDir: databasePath,
-      extensions: { vector, pg_trgm },
-    });
-    const db = await openVerifiedRestoreCopy(databasePath, open);
-    try {
-      const tableResult = await db.query<{ tablename: string }>(
-        "SELECT tablename FROM pg_tables WHERE schemaname = 'public'",
-      );
-      const tables = new Set(tableResult.rows.map(row => row.tablename));
-      if (!tables.has('config') && !tables.has('pages')) {
-        throw new Error('Recovery verification opened the directory, but it is not a recognizable PMBrain PGLite database.');
-      }
-
-      let schemaVersion: number | null = null;
-      if (tables.has('config')) {
-        const versionResult = await db.query<{ value: unknown }>(
-          "SELECT value FROM config WHERE key = 'schema_version' LIMIT 1",
-        );
-        const raw = versionResult.rows[0]?.value;
-        const parsed = Number(typeof raw === 'string' ? raw.replace(/^\"|\"$/g, '') : raw);
-        if (Number.isFinite(parsed)) schemaVersion = parsed;
-      }
-
-      const protectedTableCounts: Record<string, number> = {};
-      for (const table of PROTECTED_COUNT_TABLES) {
-        if (!tables.has(table)) continue;
-        const count = await db.query<{ count: string | number }>(`SELECT COUNT(*)::bigint AS count FROM ${table}`);
-        protectedTableCounts[table] = Number(count.rows[0]?.count ?? 0);
-      }
-
-      return {
-        status: 'verified',
-        verified_at: new Date().toISOString(),
-        schema_version: schemaVersion,
-        protected_table_counts: protectedTableCounts,
-      };
-    } finally {
-      await db.close();
-    }
-  });
-}
-
 function parseManifest(backupDirectory: string): PgliteUpgradeBackupManifest {
   const manifestPath = join(backupDirectory, MANIFEST_FILE);
   const parsed = JSON.parse(readFileSync(manifestPath, 'utf8')) as PgliteUpgradeBackupManifest;
-  if (parsed.manifest_version !== 1 || parsed.status !== 'verified') {
-    throw new Error(`PGLite backup manifest is unsupported or unverified: ${manifestPath}`);
+  if (parsed.manifest_version !== 1 || (parsed.status !== 'verified' && parsed.status !== 'copied')) {
+    throw new Error(`PGLite backup manifest is unsupported: ${manifestPath}`);
   }
   const expectedDatabasePath = resolve(backupDirectory, BACKUP_DATABASE_DIR);
   if (normalizedPath(parsed.backup_database_path) !== normalizedPath(expectedDatabasePath)) {
@@ -377,29 +303,12 @@ export function listPgliteUpgradeBackups(
     }));
 }
 
-function listMatchingBackups(
-  backupRoot: string,
-  databasePath: string,
-  targetVersion: string,
-): Array<{ directory: string; manifest: PgliteUpgradeBackupManifest }> {
-  return listBackupManifests(backupRoot, databasePath)
-    .filter(({ manifest }) => manifest.target_version === targetVersion)
-    .sort((a, b) => a.manifest.created_at.localeCompare(b.manifest.created_at));
-}
-
-async function verifyUsingDisposableCopy(
-  backupRoot: string,
-  backupDatabasePath: string,
-): Promise<PgliteRecoveryValidation> {
-  const verifyRoot = join(backupRoot, `.verify-${randomUUID()}`);
-  const verifyDatabasePath = join(verifyRoot, BACKUP_DATABASE_DIR);
-  mkdirSync(verifyRoot, { recursive: false, mode: 0o700 });
-  try {
-    copyColdDatabase(backupDatabasePath, verifyDatabasePath);
-    return await inspectRestoreCopy(verifyDatabasePath);
-  } finally {
-    safeRemoveTemporary(backupRoot, verifyRoot);
-  }
+function measurePgliteDirectory(root: string): { files: number; bytes: number } {
+  assertDirectoryNotSymlink(root, 'PGLite database directory');
+  const files = listInventoryFiles(root);
+  let bytes = 0;
+  for (const path of files) bytes += statSync(path).size;
+  return { files: files.length, bytes };
 }
 
 export async function verifyPgliteUpgradeBackup(
@@ -408,17 +317,9 @@ export async function verifyPgliteUpgradeBackup(
   const directory = resolve(backupDirectory);
   assertDirectoryNotSymlink(directory, 'PGLite backup directory');
   const manifest = parseManifest(directory);
-  const actual = await inventoryPgliteDirectory(manifest.backup_database_path);
-  if (!sameInventory(actual, manifest.backup_inventory)) {
-    throw new Error(
-      `PGLite backup integrity verification failed (sha256/size/file-count mismatch): ${directory}`,
-    );
-  }
-
-  const validation = await verifyUsingDisposableCopy(resolve(directory, '..'), manifest.backup_database_path);
-  if (validation.schema_version !== manifest.recovery_validation.schema_version
-      || JSON.stringify(validation.protected_table_counts) !== JSON.stringify(manifest.recovery_validation.protected_table_counts)) {
-    throw new Error(`PGLite backup recovery verification produced different schema/data counts: ${directory}`);
+  const actual = measurePgliteDirectory(manifest.backup_database_path);
+  if (actual.files !== manifest.backup_inventory.files || actual.bytes !== manifest.backup_inventory.bytes) {
+    throw new Error(`PGLite backup integrity verification failed (size/file-count mismatch): ${directory}`);
   }
   return {
     status: 'verified',
@@ -447,61 +348,53 @@ export async function createVerifiedPgliteUpgradeBackup(
     ownerType: 'migration',
     timeoutMs: options.lockTimeoutMs ?? 30_000,
   });
+  const backupDirectory = join(backupRoot, PGLITE_UPGRADE_BACKUP_SLOT);
   try {
-    const existing = listMatchingBackups(backupRoot, databasePath, targetVersion)[0];
-    if (existing) {
-      const verified = await verifyPgliteUpgradeBackup(existing.directory);
-      return { ...verified, status: 'reused' };
+    if (existsSync(backupDirectory)) {
+      assertBackupInsideRoot(backupRoot, backupDirectory, 'PGLite backup directory');
+      rmSync(backupDirectory, { recursive: true, force: false });
     }
-
     const createdAt = new Date().toISOString();
-    const safeTarget = targetVersion.replace(/[^a-zA-Z0-9._-]+/g, '-').slice(0, 48) || 'unknown';
-    const backupId = `${createdAt.replace(/[-:.]/g, '')}-${safeTarget}-${randomUUID().slice(0, 8)}`;
-    const temporaryDirectory = join(backupRoot, `.${backupId}.tmp`);
-    const backupDirectory = join(backupRoot, backupId);
-    const temporaryDatabasePath = join(temporaryDirectory, BACKUP_DATABASE_DIR);
-    mkdirSync(temporaryDirectory, { recursive: false, mode: 0o700 });
-
+    const backupDatabasePath = join(backupDirectory, BACKUP_DATABASE_DIR);
+    mkdirSync(backupDirectory, { recursive: false, mode: 0o700 });
     try {
-      const sourceInventory = await inventoryPgliteDirectory(databasePath);
-      copyColdDatabase(databasePath, temporaryDatabasePath);
-      const backupInventory = await inventoryPgliteDirectory(temporaryDatabasePath);
-      if (!sameInventory(sourceInventory, backupInventory)) {
-        throw new Error('PGLite cold backup copy failed byte integrity verification.');
-      }
-
-      const recoveryValidation = await verifyUsingDisposableCopy(backupRoot, temporaryDatabasePath);
-      const finalDatabasePath = join(backupDirectory, BACKUP_DATABASE_DIR);
+      copyColdDatabase(databasePath, backupDatabasePath);
+      const measured = measurePgliteDirectory(backupDatabasePath);
+      const inventory: PgliteDirectoryInventory = {
+        files: measured.files,
+        bytes: measured.bytes,
+        sha256: 'unhashed',
+      };
       const manifest: PgliteUpgradeBackupManifest = {
         manifest_version: 1,
-        backup_id: backupId,
-        status: 'verified',
+        backup_id: PGLITE_UPGRADE_BACKUP_SLOT,
+        status: 'copied',
         created_at: createdAt,
         source_database_path: databasePath,
-        backup_database_path: finalDatabasePath,
+        backup_database_path: backupDatabasePath,
         target_version: targetVersion,
-        source_schema_version: recoveryValidation.schema_version,
-        source_inventory: sourceInventory,
-        backup_inventory: backupInventory,
-        recovery_validation: recoveryValidation,
+        source_schema_version: null,
+        source_inventory: inventory,
+        backup_inventory: inventory,
+        recovery_validation: {
+          status: 'copied',
+          verified_at: createdAt,
+          schema_version: null,
+          protected_table_counts: {},
+        },
         data_policy_version: PGLITE_DATA_PROTECTION_POLICY.version,
         rebuildable_artifacts: PGLITE_DATA_PROTECTION_POLICY.derived_artifacts,
       };
-      writeFileSync(
-        join(temporaryDirectory, MANIFEST_FILE),
-        JSON.stringify(manifest, null, 2) + '\n',
-        { mode: 0o600 },
-      );
-      renameSync(temporaryDirectory, backupDirectory);
+      writeFileSync(join(backupDirectory, MANIFEST_FILE), `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
       return {
         status: 'created',
         backupDirectory,
-        backupDatabasePath: finalDatabasePath,
+        backupDatabasePath,
         manifestPath: join(backupDirectory, MANIFEST_FILE),
         manifest,
       };
     } catch (error) {
-      safeRemoveTemporary(backupRoot, temporaryDirectory);
+      if (existsSync(backupDirectory)) rmSync(backupDirectory, { recursive: true, force: true });
       throw error;
     }
   } finally {
@@ -602,9 +495,10 @@ export async function restorePgliteUpgradeBackup(options: {
     : null;
   try {
     copyColdDatabase(verified.backupDatabasePath, restoreTemp);
-    const copied = await inventoryPgliteDirectory(restoreTemp);
-    if (!sameInventory(copied, verified.manifest.backup_inventory)) {
-      throw new Error('PGLite restore copy failed byte integrity verification.');
+    const copied = measurePgliteDirectory(restoreTemp);
+    if (copied.files !== verified.manifest.backup_inventory.files
+        || copied.bytes !== verified.manifest.backup_inventory.bytes) {
+      throw new Error('PGLite restore copy failed size verification.');
     }
   } catch (error) {
     safeRemoveTemporary(parent, restoreTemp);

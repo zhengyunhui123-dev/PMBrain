@@ -841,7 +841,7 @@ const THIN_CLIENT_REFUSE_HINTS: Record<string, string> = {
   enrich: 'enrich runs on the host (requires local engine + chat gateway). Run on the host machine.',
   migrate: "migrate runs on the host's local engine. Run on the host machine.",
   'apply-migrations': 'schema migrations run on the host. SSH and run there.',
-  'pglite-backup': 'PGLite cold backup reads the local database directory and must run on the host.',
+  'pglite-backup': 'PGLite upgrade backup copies the local database directory on the host.',
   'repair-jsonb': 'repair-jsonb operates on the local DB only.',
   integrity: 'integrity scans local files. Run on the host machine.',
   serve: 'serve starts a server. Run on the host, not the thin client.',
@@ -2090,7 +2090,7 @@ function printHelp() {
 初始化
   init [--pglite|--supabase|--url]   创建大脑（默认使用 PGLite，无需服务器）
   migrate --to <supabase|pglite>     在存储引擎之间迁移大脑
-  pglite-backup <create|list|verify|prune|delete|restore|set-root> 创建、列出、验证、清理或恢复 PGLite 冷备份
+  pglite-backup <create|list|verify|prune|delete|restore|set-root> 复制一份 PGLite 升级备份，或列出、核对大小、清理和恢复
   repair toast-diagnose|toast|toast-replace  副本上定位/修复 PGLite toast，确认后才替换正式库
   upgrade                            自更新
   check-update [--json]              检查新版本

@@ -87,7 +87,7 @@ export type {
 export type DesktopSettingsPanel = 'basic' | 'models' | 'integrations' | 'updates' | 'system' | 'repair';
 
 export interface DesktopPgliteUpgradeBackup {
-  status: 'verified';
+  status: 'verified' | 'copied';
   backupDirectory: string;
   backupDatabasePath: string;
   manifestPath: string;
@@ -103,6 +103,7 @@ export interface DesktopPgliteUpgradeBackups {
   backupRoot: string | null;
   keep: number;
   totalBytes: number;
+  enabled: boolean;
   backups: DesktopPgliteUpgradeBackup[];
 }
 
@@ -226,6 +227,7 @@ export interface PMBrainDesktopApi {
   deletePgliteUpgradeBackup(backupDirectory: string): Promise<DesktopPgliteUpgradeBackupMutation>;
   restorePgliteUpgradeBackup(backupDirectory: string): Promise<DesktopPgliteUpgradeBackupMutation>;
   setPgliteUpgradeBackupRoot(directory: string): Promise<DesktopPgliteUpgradeBackupMutation>;
+  setPgliteUpgradeBackupEnabled(enabled: boolean): Promise<DesktopPgliteUpgradeBackupMutation>;
   openPgliteUpgradeBackup(target: string): Promise<void>;
   diagnosePgliteToast(): Promise<DesktopToastDiagnoseResult>;
   replacePgliteToastRepair(stagingPath: string): Promise<DesktopToastRepairResult>;
@@ -361,6 +363,7 @@ const api: PMBrainDesktopApi = {
   deletePgliteUpgradeBackup: (backupDirectory) => ipcRenderer.invoke('desktop:delete-pglite-upgrade-backup', backupDirectory),
   restorePgliteUpgradeBackup: (backupDirectory) => ipcRenderer.invoke('desktop:restore-pglite-upgrade-backup', backupDirectory),
   setPgliteUpgradeBackupRoot: (directory) => ipcRenderer.invoke('desktop:set-pglite-upgrade-backup-root', directory),
+  setPgliteUpgradeBackupEnabled: (enabled) => ipcRenderer.invoke('desktop:set-pglite-upgrade-backup-enabled', enabled),
   openPgliteUpgradeBackup: (target) => ipcRenderer.invoke('desktop:open-pglite-upgrade-backup', target),
   diagnosePgliteToast: () => ipcRenderer.invoke('desktop:diagnose-pglite-toast'),
   replacePgliteToastRepair: (stagingPath) => ipcRenderer.invoke('desktop:replace-pglite-toast-repair', stagingPath),

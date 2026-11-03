@@ -226,16 +226,27 @@ describe('collectors', () => {
     expect(configured.find((f) => f.id === 'embedding_not_configured')).toBeUndefined();
   });
 
-  test('backup coverage warns for populated PGLite without a verified backup', async () => {
+  test('backup coverage stays quiet unless upgrade backup is turned on', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'advisor-backup-empty-'));
     const databasePath = join(dir, 'brain.pglite');
     const backupRoot = join(dir, 'backups');
     mkdirSync(databasePath);
     try {
-      const out = await collectBackupCoverage.collect(ctx({
+      const quiet = await collectBackupCoverage.collect(ctx({
         getStats: async () => ({ page_count: 8 }),
       } as never, {
         config: { engine: 'pglite', database_path: databasePath, pglite_upgrade_backup_dir: backupRoot } as AdvisorContext['config'],
+      }));
+      expect(quiet).toEqual([]);
+      const out = await collectBackupCoverage.collect(ctx({
+        getStats: async () => ({ page_count: 8 }),
+      } as never, {
+        config: {
+          engine: 'pglite',
+          database_path: databasePath,
+          pglite_upgrade_backup_dir: backupRoot,
+          pglite_upgrade_backup_enabled: true,
+        } as AdvisorContext['config'],
       }));
       expect(out.map((item) => item.id)).toEqual(['backup_pglite_missing']);
       expect(out[0]?.fix.command_argv).toEqual(['pmbrain', 'pglite-backup', 'create', '--target-version', '1.0.0']);
@@ -268,10 +279,20 @@ describe('collectors', () => {
       data_policy_version: 1,
       rebuildable_artifacts: [],
     }));
-    const context = ctx({ getStats: async () => ({ page_count: 8 }) } as never, {
+    const disabled = ctx({ getStats: async () => ({ page_count: 8 }) } as never, {
       config: { engine: 'pglite', database_path: databasePath, pglite_upgrade_backup_dir: backupRoot } as AdvisorContext['config'],
     });
+    const context = ctx({ getStats: async () => ({ page_count: 8 }) } as never, {
+      config: {
+        engine: 'pglite',
+        database_path: databasePath,
+        pglite_upgrade_backup_dir: backupRoot,
+        pglite_upgrade_backup_enabled: true,
+      } as AdvisorContext['config'],
+    });
     try {
+      writeManifest('2026-05-01T00:00:00.000Z');
+      expect(await collectBackupCoverage.collect(disabled)).toEqual([]);
       writeManifest('2026-06-20T00:00:00.000Z');
       expect(await collectBackupCoverage.collect(context)).toEqual([]);
       writeManifest('2026-05-01T00:00:00.000Z');

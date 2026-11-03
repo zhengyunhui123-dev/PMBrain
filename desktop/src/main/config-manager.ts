@@ -193,6 +193,7 @@ type RawConfig = Record<string, unknown> & {
   custom_openai_api_key?: string;
   zeroentropy_api_key?: string;
   admin_bootstrap_token?: string;
+  pglite_upgrade_backup_enabled?: boolean;
   desktop?: {
     setup_completed?: boolean;
     knowledge_directory?: string;
@@ -452,9 +453,22 @@ function readConfig(path = desktopConfigPath()): RawConfig | null {
   if (!existsSync(path)) return null;
   try {
     return JSON.parse(stripJsonBom(readFileSync(path, 'utf8'))) as RawConfig;
-  } catch (error) {
-    throw new Error(`无法读取 PMBrain 配置：${error instanceof Error ? error.message : String(error)}`);
+  } catch {
+    throw new Error(`无法读取 PMBrain 配置：${path}。文件内容没有写入这条错误。`);
   }
+}
+
+export function isPgliteUpgradeBackupEnabled(): boolean {
+  return readConfig()?.pglite_upgrade_backup_enabled === true;
+}
+
+export function setPgliteUpgradeBackupEnabled(enabled: boolean): void {
+  const path = desktopWriteConfigPath();
+  const config = readConfig(path);
+  if (!config) throw new Error(`无法保存升级备份开关：${path}。文件内容没有写入这条错误。`);
+  if (config.pglite_upgrade_backup_enabled === enabled) return;
+  config.pglite_upgrade_backup_enabled = enabled;
+  writeJsonConfig(path, config);
 }
 
 function preferencesFromConfig(config: RawConfig | null): DesktopPreferences {

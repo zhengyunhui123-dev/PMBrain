@@ -13,9 +13,18 @@ afterEach(() => {
   }
 });
 function root(): string { const path = mkdtempSync(join(tmpdir(), 'pmbrain-upgrade-path-')); roots.push(path); return path; }
-function controller(run: PgliteBackupControllerDependencies['runCliChecked'], firstSetup = false): PgliteBackupController {
-  return new PgliteBackupController({ appVersion: () => 'path-test', setupInfo: () => ({ needsSetup: firstSetup } as any), runtime: () => ({ bunPath: process.execPath, scriptPath: 'unused' } as any), runCliChecked: run, sendStartupProgress: () => {}, log: () => {} });
+function controller(run: PgliteBackupControllerDependencies['runCliChecked'], firstSetup = false, enabled = true): PgliteBackupController {
+  return new PgliteBackupController({ appVersion: () => 'path-test', setupInfo: () => ({ needsSetup: firstSetup } as any), runtime: () => ({ bunPath: process.execPath, scriptPath: 'unused' } as any), runCliChecked: run, sendStartupProgress: () => {}, log: () => {}, backupEnabled: () => enabled, setBackupEnabled: () => {} });
 }
+
+test('关闭升级备份时不检查数据库、不调用备份命令', async () => {
+  const path = join(root(), 'missing.pglite');
+  let calls = 0;
+  const backup = controller(async () => { calls++; return { stdout: '{}' }; }, false, false);
+  expect(await backup.ensureUpgradeBackup(path)).toBeNull();
+  expect(calls).toBe(0);
+  expect(backup.pendingBackupPath).toBeNull();
+});
 
 test('覆盖升级前先拦截同名文件，不启动备份或迁移 CLI，也不修改原文件', async () => {
   const path = join(root(), 'brain.pglite');writeFileSync(path, 'Preserve original unknown data.');

@@ -26,7 +26,7 @@
 - `C:\Users\zhengyunhui\\.pmbrain\config.json`
 - `D:\cursor-claude\PMBrain\\.pmbrain\config.json`
 
-仓库内 `.env` 不保存真实 key。`load-env.ps1` 只负责从私有 `config.json` 导出当前进程环境变量，用于兼容仍读取 `process.env` 的旧入口。
+仓库内 `.env` 不保存真实 key。`load-env.ps1` 只负责从私有 `config.json` 导出当前进程环境变量，用于兼容仍读取 `process.env` 的旧入口。解析失败时只报告文件路径，不把 `config.json` 正文写进错误输出。脚本本身保持英文，避免 Windows PowerShell 5.1 按系统编码误读中文后把引号拆掉。
 
 ## AI 提供商配置
 

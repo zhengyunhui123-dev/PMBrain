@@ -503,6 +503,7 @@ describe('desktop settings renderer contracts', () => {
       'desktop:delete-pglite-upgrade-backup',
       'desktop:restore-pglite-upgrade-backup',
       'desktop:set-pglite-upgrade-backup-root',
+      'desktop:set-pglite-upgrade-backup-enabled',
       'desktop:open-pglite-upgrade-backup',
     ]) {
       expect(main).toContain(channel);
@@ -523,6 +524,10 @@ describe('desktop settings renderer contracts', () => {
     expect(html).toContain('id="repair-backup-list"');
     expect(html).toContain('id="repair-prune-backups"');
     expect(html).toContain('id="repair-change-backup-root"');
+    expect(html).toContain('id="upgrade-backup-enabled"');
+    expect(renderer).toContain('setPgliteUpgradeBackupEnabled');
+    expect(renderer).toContain('只保留最新一份');
+    expect(renderer).not.toContain('最近 2 份');
     expect(html).toContain('清理旧备份');
     expect(html).toContain('更改位置');
     expect(renderer).toContain('listPgliteUpgradeBackups');

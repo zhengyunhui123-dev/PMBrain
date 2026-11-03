@@ -81,7 +81,7 @@ export class DatabaseTransferController {
       if (currentPlan.fingerprint !== planFingerprint) throw new Error('旧库在预检后发生变化，请重新扫描迁移方案。');
       const unknownTables = currentPlan.tables.filter(table => table.action === 'unknown').map(table => table.name);
       if (unknownTables.length > 0 && !skipUnknown) throw new Error('发现未知旧表，请先选择跳过继续或取消迁移。');
-      this.dependencies.sendProgress({ visible: true, stage: 'database', title: '正在建立 PGLite 冷备', message: '备份必须验证成功，原数据库不会被删除或修改。' });
+      this.dependencies.sendProgress({ visible: true, stage: 'database', title: '正在复制一份迁移来源', message: '正在把知识库复制到备份文件夹。原数据库不会被删除或修改。' });
       let backup: { status?: string; backup_directory?: string; backup_database_path?: string };
       try {
         const backupResult = await this.dependencies.runCliChecked(this.dependencies.runtime(), [
@@ -95,11 +95,11 @@ export class DatabaseTransferController {
         if (!recovered) throw error;
         backup = recovered;
       }
-      if (backup.status !== 'created' || !backup.backup_directory) throw new Error('PGLite 冷备未验证成功，迁移已停止。');
+      if (backup.status !== 'created' || !backup.backup_directory) throw new Error('PGLite 备份没有完成，迁移已停止。');
       backupDirectory = backup.backup_directory;
       const backupDatabasePath = backup.backup_database_path || join(backup.backup_directory, 'brain.pglite');
-      if (!existsSync(backupDatabasePath)) throw new Error('无法定位已验证的 PGLite 冷备数据库，迁移已停止。');
-      this.dependencies.sendProgress({ visible: true, stage: 'database', title: '正在准备只读迁移来源', message: '从冷备建立临时工作副本，原库和冷备本体保持不变。' });
+      if (!existsSync(backupDatabasePath)) throw new Error('无法定位已复制的 PGLite 备份，迁移已停止。');
+      this.dependencies.sendProgress({ visible: true, stage: 'database', title: '正在准备迁移工作副本', message: '从这份备份再复制一份临时工作库。原库和备份本体保持不变。' });
       workingCopyRoot = mkdtempSync(join(dirname(backup.backup_directory), 'pmbrain-transfer-work-'));
       const workingDatabasePath = join(workingCopyRoot, 'brain.pglite');
       cpSync(backupDatabasePath, workingDatabasePath, { recursive: true });

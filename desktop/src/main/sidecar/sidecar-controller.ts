@@ -200,8 +200,8 @@ export class SidecarController {
       const pendingBackupPath = this.dependencies.pendingPgliteBackupPath();
       if (database.engine === 'pglite' && pendingBackupPath) {
         message +=
-          `\n升级前冷备已验证并保留：${pendingBackupPath}`
-          + '\nPMBrain 不会自动覆盖当前数据库。请保留此备份和桌面日志，不要连续重复迁移。';
+          `\n升级前备份已保存：${pendingBackupPath}`
+          + '\n当前数据库没有被这次备份覆盖。请保留此备份和桌面日志，不要连续重复迁移。';
       }
       logger.write('desktop', message);
       this.sendState({ phase: 'failed', port: this.manager?.port ?? 3131, message });
@@ -280,7 +280,7 @@ export class SidecarController {
       title: '正在恢复数据库备份',
       message: shouldRestart
         ? '恢复需要独占访问当前数据库，桌面端已暂停本地服务；完成后会自动重启并执行健康检查。'
-        : '正在用已验证的升级备份替换当前数据库。',
+        : '正在用已保存的升级备份替换当前数据库。',
     });
     let operationError: unknown;
     try {
@@ -370,16 +370,20 @@ export class SidecarController {
       }
       if (migrationRequired && setup.current.engine !== 'pglite') markDesktopMigration(app.getVersion());
 
-      // Upgrade cold-backup holds an exclusive PGLite lock. Give it a short
-      // settle window so the first sidecar start does not race the lock.
+      const pendingBackupPath = this.dependencies.pendingPgliteBackupPath();
+      const backedUp = migrationRequired && setup.current.engine === 'pglite' && Boolean(pendingBackupPath);
       if (migrationRequired) {
         this.dependencies.sendStartupProgress({
           visible: true,
-          stage: setup.current.engine==='pglite'?'migration':'sidecar',
-          title: setup.current.engine==='pglite'?'冷备完成，正在打开并升级知识库':'升级完成，正在启动本地服务',
-          message: '升级前冷备已完成。PMBrain 正在启动本地服务并自动重试，请稍候，无需手动点击重启。',
+          stage: setup.current.engine === 'pglite' ? 'migration' : 'sidecar',
+          title: setup.current.engine === 'pglite'
+            ? (backedUp ? '备份已保存，正在打开并升级知识库' : '正在打开并升级知识库')
+            : '升级完成，正在启动本地服务',
+          message: setup.current.engine === 'pglite'
+            ? '正在启动本地服务，完成数据库升级和健康检查。'
+            : '正在启动本地服务并自动重试，请稍候，无需手动点击重启。',
         });
-        await sleep(POST_UPGRADE_SETTLE_MS);
+        if (backedUp) await sleep(POST_UPGRADE_SETTLE_MS);
       }
 
       const maxAttempts = migrationRequired ? POST_UPGRADE_READY_ATTEMPTS : 1;

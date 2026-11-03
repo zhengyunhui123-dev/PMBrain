@@ -1,5 +1,5 @@
-const __vite__mapDeps=(i,m=__vite__mapDeps,d=(m.f||(m.f=["assets/src-Dc37i99a.js","assets/src-Bi7L9_9h.css"])))=>i.map(i=>d[i]);
-import{e as y,_ as k}from"./index-DlXDMRvW.js";import{r as e,j as n}from"./react-CTwocyy_.js";import"./ui-Ba843ajB.js";const f=`
+const __vite__mapDeps=(i,m=__vite__mapDeps,d=(m.f||(m.f=["assets/src-C09LDvI1.js","assets/src-Bi7L9_9h.css"])))=>i.map(i=>d[i]);
+import{e as y,_ as k}from"./index-Bpg93ZUt.js";import{r as e,j as n}from"./react-CTwocyy_.js";import"./ui-Ba843ajB.js";const f=`
     <main class="app-shell">
       <aside class="rail">
         <div class="brand">
@@ -549,15 +549,19 @@ import{e as y,_ as k}from"./index-DlXDMRvW.js";import{r as e,j as n}from"./react
           </section>
           <div class="update-safety">
             <span>SAFE UPDATE</span>
-            <p>安装前自动停止 sidecar；PGLite 需要兼容迁移时会先创建升级冷备，并通过一次性恢复副本验证 schema 和关键数据计数，再启动唯一 sidecar 完成迁移与健康检查。失败时保留备份、数据库和日志，不会自动覆盖或整库重建。</p>
+            <p>安装前自动停止 sidecar。默认直接升级数据库并做健康检查，不再为升级复制整库。需要备份时，到软件修复打开开关，每次只覆盖保存一份。失败时保留当前数据库和日志，不会自动覆盖或整库重建。</p>
           </div>
         </section>
 
         <section class="panel repair-panel" id="panel-repair">
           <div class="section-heading">
             <div><span class="index">06</span><h2>软件修复</h2></div>
-            <p>查看升级前备份，或在副本上修复大字段损坏。自动升级只保留最近 2 份备份；修复当前库前会先留底。</p>
+            <p>查看已保存的升级备份，或在副本上修复大字段损坏。升级备份默认关闭。打开后每次只覆盖保存一份。</p>
           </div>
+          <label class="preference-row" for="upgrade-backup-enabled">
+            <span><b>升级时复制一份备份</b><small>默认关闭。打开后，每次升级把整个知识库复制到下面的文件夹，并覆盖上一次的这一份。复制失败不会阻止启动。</small></span>
+            <input id="upgrade-backup-enabled" class="settings-switch" type="checkbox" />
+          </label>
           <div class="repair-summary">
             <div><span>DATABASE BACKUPS</span><b id="repair-backup-count">等待读取备份清单</b></div>
             <div class="repair-summary-side">
@@ -566,7 +570,7 @@ import{e as y,_ as k}from"./index-DlXDMRvW.js";import{r as e,j as n}from"./react
             </div>
           </div>
           <article class="diagnostic-export-card">
-            <div><span>BACKUP LOCATION</span><h3>备份保存位置</h3><p id="repair-backup-root">等待读取备份目录</p><small>新备份会写入此目录，现有备份不会自动搬迁。可改到 D 盘等其他磁盘，以减少系统盘占用。</small></div>
+            <div><span>BACKUP LOCATION</span><h3>备份保存位置</h3><p id="repair-backup-root">等待读取备份目录</p><small>打开开关后，新的一份会写入此目录并覆盖上一次。现有旧备份不会自动搬迁。可改到其他磁盘。</small></div>
             <div class="repair-location-actions">
               <button class="ghost" id="repair-open-backup-root" type="button"><span>打开备份目录</span><i></i></button>
               <button class="primary" id="repair-change-backup-root" type="button"><span>更改位置</span><i></i></button>
@@ -584,7 +588,7 @@ import{e as y,_ as k}from"./index-DlXDMRvW.js";import{r as e,j as n}from"./react
             <button class="primary" id="export-diagnostic"><span>导出诊断包</span><i></i></button>
           </article>
           <div class="repair-backup-list" id="repair-backup-list" aria-live="polite">
-            <div class="repair-empty">打开本页后读取已验证的升级前数据库备份。</div>
+            <div class="repair-empty">打开本页后读取已保存的升级前数据库备份。</div>
           </div>
         </section>
 
@@ -660,4 +664,4 @@ import{e as y,_ as k}from"./index-DlXDMRvW.js";import{r as e,j as n}from"./react
         </div>
       </div>
     </div>
-`;let t;function x({panel:s,visible:o,theme:p}){const i=e.useRef(null),[c,r]=e.useState(""),[v,h]=e.useState(!1),[u,b]=e.useState(!1),[m,l]=e.useState("");e.useEffect(()=>{!y()||!i.current||(i.current.childElementCount||(i.current.innerHTML=f),t??(t=k(()=>import("./src-Dc37i99a.js"),__vite__mapDeps([0,1]))),t.then(()=>h(!0)).catch(a=>r(String(a))))},[]),e.useEffect(()=>{if(!o||!t)return;let a=!0;return t.then(d=>{a&&d.activateSettingsPanel(s)}).catch(d=>r(String(d))),()=>{a=!1}},[s,o]);const g=async()=>{if(t){b(!0),l("");try{await(await t).saveDatabaseSettings(),l("数据库与资料目录已保存")}catch(a){l(String(a))}finally{b(!1)}}};return n.jsxs("div",{className:"desktop-settings-container",hidden:!o,children:[c&&n.jsx("p",{role:"alert",children:c}),n.jsx("div",{className:"desktop-settings",hidden:!v,"data-theme":p==="system"?window.matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light":p,ref:i}),s==="basic"&&v&&n.jsxs("div",{className:"database-save",children:[n.jsx("button",{disabled:u,onClick:g,children:u?"保存中…":"保存数据库与资料目录"}),m&&n.jsx("p",{role:"status",children:m})]})]})}export{x as DesktopSettings};
+`;let t;function x({panel:s,visible:o,theme:p}){const i=e.useRef(null),[c,r]=e.useState(""),[u,h]=e.useState(!1),[v,b]=e.useState(!1),[m,l]=e.useState("");e.useEffect(()=>{!y()||!i.current||(i.current.childElementCount||(i.current.innerHTML=f),t??(t=k(()=>import("./src-C09LDvI1.js"),__vite__mapDeps([0,1]))),t.then(()=>h(!0)).catch(a=>r(String(a))))},[]),e.useEffect(()=>{if(!o||!t)return;let a=!0;return t.then(d=>{a&&d.activateSettingsPanel(s)}).catch(d=>r(String(d))),()=>{a=!1}},[s,o]);const g=async()=>{if(t){b(!0),l("");try{await(await t).saveDatabaseSettings(),l("数据库与资料目录已保存")}catch(a){l(String(a))}finally{b(!1)}}};return n.jsxs("div",{className:"desktop-settings-container",hidden:!o,children:[c&&n.jsx("p",{role:"alert",children:c}),n.jsx("div",{className:"desktop-settings",hidden:!u,"data-theme":p==="system"?window.matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light":p,ref:i}),s==="basic"&&u&&n.jsxs("div",{className:"database-save",children:[n.jsx("button",{disabled:v,onClick:g,children:v?"保存中…":"保存数据库与资料目录"}),m&&n.jsx("p",{role:"status",children:m})]})]})}export{x as DesktopSettings};

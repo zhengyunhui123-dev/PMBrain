@@ -85,8 +85,15 @@ export class DatabaseUpgradeController {
         : '检测到桌面版本更新，正在执行兼容迁移。不会删除知识库或原始资料，请不要关闭窗口。',
     });
     if (setup.current.engine === 'pglite') {
-      const backup = await this.dependencies.pgliteBackup.ensureUpgradeBackup(setup.current.databasePath);
-      if (!backup) throw new Error('原有知识库没有完成可恢复冷备，已停止升级。请检查原数据库路径。');
+      try {
+        await this.dependencies.pgliteBackup.ensureUpgradeBackup(setup.current.databasePath);
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        this.dependencies.getLogger()?.write(
+          'desktop',
+          `升级备份没有完成，继续升级和健康检查。当前知识库没有被这次备份修改。${detail}`,
+        );
+      }
       this.dependencies.getLogger()?.write('desktop', `PGLite migrations delegated to sidecar for desktop ${app.getVersion()}`);
       await this.dependencies.syncModelDefaults();
       return true;
@@ -157,7 +164,15 @@ export class DatabaseUpgradeController {
     }
 
     if (setup.current.engine === 'pglite') {
-      await this.dependencies.pgliteBackup.ensureUpgradeBackup(setup.current.databasePath);
+      try {
+        await this.dependencies.pgliteBackup.ensureUpgradeBackup(setup.current.databasePath);
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        this.dependencies.getLogger()?.write(
+          'desktop',
+          `升级备份没有完成，继续升级和健康检查。当前知识库没有被这次备份修改。${detail}`,
+        );
+      }
     }
     this.dependencies.sendStartupProgress({
       visible: true,

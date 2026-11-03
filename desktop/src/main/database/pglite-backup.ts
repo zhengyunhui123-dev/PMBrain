@@ -48,6 +48,8 @@ export interface PgliteBackupControllerDependencies {
   runCliChecked: (runtime: CliRuntime, args: string[]) => Promise<{ stdout: string }>;
   sendStartupProgress: (progress: StartupProgress) => void;
   log: (message: string) => void;
+  backupEnabled: () => boolean;
+  setBackupEnabled: (enabled: boolean) => void;
 }
 
 export class PgliteBackupController {
@@ -57,6 +59,10 @@ export class PgliteBackupController {
   constructor(private readonly dependencies: PgliteBackupControllerDependencies) {}
 
   async ensureUpgradeBackup(databasePath: string | null | undefined): Promise<string | null> {
+    if (!this.dependencies.backupEnabled()) {
+      this.pendingBackupPath = null;
+      return null;
+    }
     if (!databasePath) throw new Error('PGLite 升级前无法确定数据库路径，已停止迁移。');
     validatePgliteDatabasePath(databasePath);
     const setup = this.dependencies.setupInfo();
@@ -74,8 +80,8 @@ export class PgliteBackupController {
     this.dependencies.sendStartupProgress({
       visible: true,
       stage: 'migration',
-      title: '正在创建升级前数据库冷备',
-      message: 'sidecar 已停止。PMBrain 正在取得独占迁移锁、复制完整 PGLite 目录并验证恢复副本，请不要关闭窗口。',
+      title: '正在复制一份升级前备份',
+      message: '正在把知识库复制到指定文件夹，并覆盖上一次的这一份。不会再复制第二份。',
     });
     const { parseSuccessfulBackupJsonFromError } = await import('../startup/post-upgrade-startup.js');
     let result: {
@@ -114,17 +120,17 @@ export class PgliteBackupController {
       return null;
     }
     if (!['created', 'reused'].includes(result.status ?? '') || !result.backup_directory) {
-      throw new Error('PGLite 升级冷备没有返回可验证的备份目录，已停止迁移。');
+      throw new Error('PGLite 升级备份没有返回备份目录。');
     }
 
     this.pendingBackupPath = result.backup_directory;
     this.backupByVersion.set(key, result.backup_directory);
-    this.dependencies.log(`Verified PGLite pre-upgrade backup: ${result.backup_directory}`);
+    this.dependencies.log(`Saved PGLite pre-upgrade backup: ${result.backup_directory}`);
     this.dependencies.sendStartupProgress({
       visible: true,
       stage: 'migration',
-      title: '升级前冷备验证通过',
-      message: `可恢复备份已保留：${result.backup_directory}。现在开始兼容迁移；失败时不会自动覆盖数据库。`,
+      title: '升级前备份已保存',
+      message: `这一份备份已覆盖保存：${result.backup_directory}。现在开始升级和健康检查。`,
     });
     return result.backup_directory;
   }
@@ -132,7 +138,14 @@ export class PgliteBackupController {
   async listUpgradeBackups(): Promise<DesktopPgliteUpgradeBackups> {
     const setup = this.dependencies.setupInfo();
     if (setup.needsSetup || setup.current.engine !== 'pglite') {
-      return { databasePath: null, backupRoot: null, keep: 2, totalBytes: 0, backups: [] };
+      return {
+        databasePath: null,
+        backupRoot: null,
+        keep: 1,
+        totalBytes: 0,
+        backups: [],
+        enabled: this.dependencies.backupEnabled(),
+      };
     }
     const databasePath = setup.current.databasePath ?? setup.defaults.databasePath;
     const completed = await this.dependencies.runCliChecked(this.dependencies.runtime(), [
@@ -156,7 +169,8 @@ export class PgliteBackupController {
     return {
       databasePath: result.database_path ?? databasePath,
       backupRoot: result.backup_root ?? null,
-      keep: typeof result.keep === 'number' && result.keep >= 2 ? result.keep : 2,
+      enabled: this.dependencies.backupEnabled(),
+      keep: typeof result.keep === 'number' && result.keep >= 1 ? result.keep : 1,
       totalBytes: typeof result.total_bytes === 'number' && result.total_bytes >= 0
         ? result.total_bytes
         : backups.reduce((sum, backup) => sum + backup.bytes, 0),
@@ -171,7 +185,7 @@ export class PgliteBackupController {
       'pglite-backup',
       'prune',
       '--path', databasePath,
-      '--keep', '2',
+      '--keep', '1',
       '--json',
     ]);
     const result = parseLastJson<{ status?: string; deleted?: string[]; kept?: string[] }>(
@@ -275,6 +289,15 @@ export class PgliteBackupController {
     };
   }
 
+  async setBackupEnabled(enabled: boolean): Promise<DesktopPgliteUpgradeBackupMutation> {
+    this.dependencies.setBackupEnabled(enabled);
+    this.backupByVersion.clear();
+    return {
+      status: enabled ? 'updated' : 'unchanged',
+      listing: await this.listUpgradeBackups(),
+    };
+  }
+
   async setBackupRoot(directory: string): Promise<DesktopPgliteUpgradeBackupMutation> {
     const { databasePath } = await this.requirePgliteDatabase();
     const completed = await this.dependencies.runCliChecked(this.dependencies.runtime(), [
@@ -310,7 +333,7 @@ export class PgliteBackupController {
   }
 
   private mapVerifiedBackup(entry: PgliteBackupListCliEntry): DesktopPgliteUpgradeBackup[] {
-    if (entry.status !== 'verified'
+    if ((entry.status !== 'verified' && entry.status !== 'copied')
       || !entry.backup_directory
       || !entry.backup_database_path
       || !entry.manifest_path
@@ -320,7 +343,7 @@ export class PgliteBackupController {
       return [];
     }
     return [{
-      status: 'verified' as const,
+      status: entry.status === 'copied' ? 'copied' as const : 'verified' as const,
       backupDirectory: entry.backup_directory,
       backupDatabasePath: entry.backup_database_path,
       manifestPath: entry.manifest_path,
@@ -351,7 +374,7 @@ export class PgliteBackupController {
     const match = listing.backups.find(backup => (
       normalizedPath(backup.backupDirectory) === normalizedPath(backupDirectory)
     ));
-    if (!match) throw new Error('只能操作当前软件修复页列出的已验证备份。');
+    if (!match) throw new Error('只能操作当前软件修复页列出的已保存备份。');
     return { backupDirectory: match.backupDirectory, databasePath: listing.databasePath };
   }
 }
