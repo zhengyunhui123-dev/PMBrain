@@ -45,6 +45,12 @@ export function maintenanceStageSummary(round: MaintenanceRoundProgress, files?:
   return { completed, total: stageTotal, failed: round.stage === 'sync' ? files?.failed ?? 0 : 0,
     remaining: stageTotal == null ? null : Math.max(0, stageTotal - completed - (round.stage === 'sync' ? files?.failed ?? 0 : 0)) };
 }
+export function maintenancePhaseDatabase(round: { scan: { complete: boolean }; stage: string } | undefined, stats?: TaskDatabaseStatistics) {
+  if (!stats?.supported) return undefined;
+  if (!round) return { waitedMs: stats.waitedMs, writes: stats.writes, label: '本任务请求累计等待' as const };
+  const phase = stats.stages[round.scan.complete ? round.stage : 'scan'];
+  return { waitedMs: phase?.waitedMs ?? 0, writes: phase?.writes ?? 0, label: '本阶段等待' as const };
+}
 export function maintenancePercent(round: MaintenanceRoundProgress, files?: Files): number | null {
   if (!round.scan.complete) return null;
   if (round.stage === 'done') return round.stages.some(stage => ['partial', 'failed'].includes(stage.status)) ? 99 : 100;

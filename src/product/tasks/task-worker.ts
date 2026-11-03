@@ -45,6 +45,7 @@ import type { SyncStrategy } from '../../core/sync.ts';
 import { isOfficeFilePath } from '../../core/sync.ts';
 import { isImageFilePath } from '../../core/import-file.ts';
 import { QuickSyncPlan } from './quick-sync-plan';
+import { classifyQuickScanHash, classifyQuickScanStat } from './quick-scan-index';
 import type { MaintenanceRoundProgress, MaintenanceStageId, MaintenanceStageResult } from '../../../shared/maintenance-progress';
 import {QuickVectorProgress} from './vector-progress';
 import {importOutcome} from '../../../shared/import-outcome';
@@ -142,7 +143,7 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
   const checkpoint: MaintenanceCheckpoint = input.checkpoint ?? { phases: {}, reports: {} };
   const round: MaintenanceRoundProgress = checkpoint.quickProgress ?? { scan: { scanned: 0, unchanged: 0, complete: false }, stage: 'sync', stages: [], entities: { total: 0, person: 0, project: 0, organization: 0, company: 0, links: 0 } };
   const notifyRound = () => { checkpoint.quickProgress=round; send({type:'maintenance',value:round}); };
-  const quickPlan = input.preset==='quick'&&!input.dryRun ? new QuickSyncPlan(checkpoint,()=>rpc('task.maintenanceCheckpoint',[checkpoint]),scan=>{round.scan=scan;notifyRound();}) : undefined;
+  const quickPlan = input.preset==='quick'&&!input.dryRun ? new QuickSyncPlan(checkpoint,()=>rpc('task.maintenanceCheckpoint',[checkpoint]),scan=>{round.scan=scan;notifyRound();},ownerJobId) : undefined;
   const legacyQuickSources = input.preset === 'quick' ? [...new Set([...Object.keys(checkpoint.phases), ...Object.keys(checkpoint.reports)])].filter(sourceId => {
     const report = checkpoint.reports[sourceId];
     return (checkpoint.phases[sourceId] ?? []).some(phase => phase.phase === 'capture_entities' || phase.phase === 'embed')
@@ -179,7 +180,14 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
   const fileRuntime: SyncFileRuntime | undefined = usesSyncFileQueue(input) ? {
     signal: abort.signal,
     get collectOnly(){return quickPlan?.preparing;},
-    listFiles: quickPlan ? (root,discover)=>quickPlan.list(root,discover) : undefined,
+    listFiles: quickPlan ? async (root,discover)=>{
+      const paths=await quickPlan.list(root,discover);
+      if(quickPlan.preparing&&!quickPlan.current?.complete){
+        const sourceRoot=(await fetchSource(engine,quickPlan.sourceId))?.local_path??'';
+        await quickPlan.loadFingerprints(engine,sourceRoot,root,paths);
+      }
+      return paths;
+    } : undefined,
     importFiles: quickPlan ? ()=>quickPlan.imports() : undefined,
     workingTree: input.preset === 'quick' || (await engine.getConfig('sync.include_working_tree')) === 'true',
     importFile: async (path, relativePath, options) => {
@@ -202,6 +210,36 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
       let oversized=false;
       try{assertImportFileSize(relativePath,snapshot.size);}catch{oversized=true;}
       send({type:'progress',syncScan:{scanned,unchanged,path:relativePath,bytes:snapshot.size,updatedAt:new Date().toISOString(),active:true}});
+      if(quickPlan?.preparing){
+        const fingerprint=syncFileContentFingerprint(options);
+        const compatible=[syncFileContentFingerprint({...options,documentOcr:true})];
+        const base: import('./types').SyncFileInput = { path, relativePath, sourceRoot, originalPath,
+          originalSize: snapshot.size, originalMtime: snapshot.mtimeMs, hash: '',
+          quickMaintenance:true, modelFingerprint: taskModelFingerprint(),
+          modelMayRun: options.documentOcr === true && (isOfficeFilePath(relativePath) || isImageFilePath(relativePath)),
+          fingerprint, compatibleFingerprints: compatible, options,
+        };
+        const remember=async(file: import('./types').SyncFileInput, fileUnchanged: boolean)=>{
+          const known=quickPlan.stored(sourceRoot,relativePath);
+          const prepared=!fileUnchanged&&!isOfficeFilePath(relativePath)&&!known?.chunkHash?{...file,options:{...file.options,forceRechunk:true}}:file;
+          await quickPlan.record(prepared,fileUnchanged);
+          scanned++; if(fileUnchanged)unchanged++;
+          send({type:'progress',syncScan:{scanned,unchanged,path:relativePath,bytes:snapshot.size,updatedAt:new Date().toISOString(),active:true}});
+          return {slug:'',status:'skipped' as const,chunks:0,deferred:true};
+        };
+        if(oversized)return remember({...base,hash:`oversize:${snapshot.size}:${snapshot.mtimeMs}`},false);
+        const stored=quickPlan.stored(sourceRoot,relativePath);
+        const statDecision=classifyQuickScanStat(stored,snapshot.size,snapshot.mtimeMs,fingerprint,compatible);
+        if(statDecision==='unchanged')return remember({...base,hash:stored!.hash},true);
+        if(statDecision==='same-bytes')return remember({...base,hash:stored!.hash},false);
+        const hash=await streamFileHash(path,abort.signal);
+        const hashed=classifyQuickScanHash(stored,hash,fingerprint,compatible,snapshot.size,snapshot.mtimeMs);
+        if(hashed.unchanged){
+          if(hashed.refresh)quickPlan.noteRefresh(sourceRoot,relativePath,snapshot.size,snapshot.mtimeMs);
+          return remember({...base,hash},true);
+        }
+        return remember({...base,hash},false);
+      }
       const hash = oversized?`oversize:${snapshot.size}:${snapshot.mtimeMs}`:await streamFileHash(path,abort.signal);
       const file: import('./types').SyncFileInput = { path, relativePath, sourceRoot, originalPath,
         originalSize: snapshot.size, originalMtime: snapshot.mtimeMs, hash,
@@ -211,10 +249,7 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
         fingerprint: syncFileContentFingerprint(options),
         ...(input.preset === 'quick' ? { compatibleFingerprints: [syncFileContentFingerprint({ ...options, documentOcr: true })] } : {}), options,
       };
-      let result: import('../../core/import-file.ts').ImportResult & { deferred?: boolean; unchanged?: boolean; capacityReached?:boolean;preparedFile?:import('./types').SyncFileInput };
-      try { result=await rpc(quickPlan?.preparing?'task.inspectSyncFile':'task.syncFile',[file]) as typeof result; }
-      catch(error){if(quickPlan?.preparing)await quickPlan.record(file,false);throw error;}
-      if(quickPlan?.preparing)await quickPlan.record(result.preparedFile??file,result.unchanged===true);
+      const result=await rpc('task.syncFile',[file]) as import('../../core/import-file.ts').ImportResult & { deferred?: boolean; unchanged?: boolean; capacityReached?:boolean;preparedFile?:import('./types').SyncFileInput };
       if (result.deferred) pendingFiles = true;
       if(result.capacityReached)capacityReached=true;
       scanned++;
@@ -222,7 +257,7 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
       send({ type: 'progress', syncScan: { scanned, unchanged,path:relativePath,bytes:snapshot.size,updatedAt:new Date().toISOString(),active:true } });
       return result;
     },
-    finish: async () => { if(quickPlan?.preparing){await quickPlan.finish();throw new SyncFilesDeferred();} if (pendingFiles) throw new SyncFilesDeferred(); },
+    finish: async () => { if(quickPlan?.preparing){await quickPlan.flushRefreshes(engine);await quickPlan.finish();throw new SyncFilesDeferred();} if (pendingFiles) throw new SyncFilesDeferred(); },
   } : undefined;
   const resumeOptions = async (sourceId: string) => {
     let captureEntitySlugs: string[] | undefined;
@@ -352,6 +387,7 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
   };
   if (input.preset === 'quick') console.log('快速维护同步变化并关联已有实体；本轮资料向量化在后台进行，新实体建档和图片识别不属于本次维护。');
   if(quickPlan){
+    notifyRound();
     const startedAt=new Date();
     if(input.refreshPendingSync){
       const completed=await rpc('task.quickCompletedFiles',[]) as Array<{sourceId:string;relativePath:string;hash:string}>;
@@ -373,6 +409,7 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
     if(!sources.length)throw new Error('没有可同步的知识源');
     for(const source of sources){
       abort.signal.throwIfAborted();quickPlan.sourceId=source.id;
+      await quickPlan.restore(source.id);
       if(quickPlan.current?.complete)continue;
       send({type:'progress',scope:{name:source.name,index:sources.indexOf(source),total:sources.length}});
       try{
@@ -386,6 +423,7 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
     quickPlan.preparing=false;pendingFiles=false;capacityReached=false;
     round.scan=quickPlan.scan(true);notifyRound();
     await rpc('task.maintenanceCheckpoint',[checkpoint]);
+    await quickPlan.discardLog();
     const reports=new Map<string,import('../../core/cycle').CycleReport>();
     const scopeSlugs=(id:string)=>[...new Set((checkpoint.phases[id]?.find(phase=>phase.phase==='sync') as import('../../core/cycle').PhaseResult&{pagesAffected?:string[]}|undefined)?.pagesAffected??[])];
     const scopes=()=>sources.map(source=>({sourceId:source.id,slugs:scopeSlugs(source.id)}));

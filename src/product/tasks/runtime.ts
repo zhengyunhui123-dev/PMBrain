@@ -954,7 +954,11 @@ export class ProductTaskRuntime {
     const databaseContext = () => ({ taskId: context.id, token: record.lock_token!, signal: gitController.signal,
       stage: activity?.stage ?? adapter.view.stage, file: activity?.path ?? adapter.view.file ?? undefined,
       onTimeout: (error:Error) => { withoutDatabaseRequest(() => { void this.requestCancel(`task-${timeoutOwner}`, error.message).catch(reason => console.error('[tasks] database timeout:', reason)); }); },
-      onComplete:((stage:string)=>(value:{waitedMs:number;write:boolean})=>{addDatabaseStatistic(databaseStatistics,stage,value);progressDirty=true;})(quickTimeoutOwner!==undefined?'sync':adapter.view.maintenance?.stage??adapter.view.phaseProgress?.id??'prepare'),
+      onComplete:(value:{waitedMs:number;write:boolean})=>{
+        const maintenance=adapter.view.maintenance;
+        const stage=quickTimeoutOwner!==undefined?'sync':maintenance&&!maintenance.scan.complete?'scan':maintenance?.stage??adapter.view.phaseProgress?.id??'prepare';
+        addDatabaseStatistic(databaseStatistics,stage,value);progressDirty=true;
+      },
     });
     const gitOperations = new Set<Promise<unknown>>();
     const quickGitFiles=new Map<string,{sourceId:string;path:string;hash:string}>();

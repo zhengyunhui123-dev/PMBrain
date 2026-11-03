@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { FileText } from 'lucide-react';
 import type { ConsoleRun } from '../lib/shared';
 import type { DatabaseOccupancy } from '../../../shared/database-occupancy';
-import { MAINTENANCE_STAGE_LABELS, maintenancePercent, maintenanceStageSummary, type MaintenanceStageId } from '../../../shared/maintenance-progress';
+import { MAINTENANCE_STAGE_LABELS, maintenancePercent, maintenancePhaseDatabase, maintenanceStageSummary, type MaintenanceStageId } from '../../../shared/maintenance-progress';
 import { taskStatus, taskStopping } from './task-presentation';
 import { productFetch } from '../lib/product-fetch';
 import { ImportTaskResult } from './ImportTaskResult';
@@ -32,13 +32,13 @@ export function DatabaseSummary({run}:{run:ConsoleRun}){
     const load=async()=>{try{const response=await productFetch('/admin/api/database-occupancy');if(response.ok){const value=await response.json();if(live)setReport(value);}}catch{if(live)setReport(null);}finally{if(live)timer=setTimeout(load,document.visibilityState==='hidden'?8000:2000);}};
     void load();return()=>{live=false;clearTimeout(timer);};
   },[run.id,running]);
-  const stats=run.product?.database,supported=report?.supported!==false&&stats?.supported!==false;
+  const stats=run.product?.database,supported=report?.supported!==false&&stats?.supported!==false,phaseWait=maintenancePhaseDatabase(run.product?.maintenance,stats);
   const holder=report?.holder,own=new Set([Number(run.id.replace(/^task-/,'')),...(run.product?.activeFiles??[]).map(file=>file.id)]);
   const waiting=report?.waiting??[],mine=waiting.filter(request=>request.taskId!=null&&own.has(request.taskId));
   const held=holder?.heldMs;
   const state=!running?'已结束':report?.supported===false?'暂未提供':mine.length?'等待数据库':holder?own.has(holder.taskId??-1)?'本任务处理中':'其他任务占用':report?'空闲':'读取中';
   const operation=holder?.stage??(holder?'读取或保存资料':'');
-  return <div className="mpr-database" aria-label="数据库状态"><div>数据库状态<strong>{state}</strong>{holder&&<small>{operation}{held!=null?` · 已占用 ${elapsedText(held)}`:''}</small>}</div><div>数据库排队<strong>{report&&supported?`${waiting.length} 个请求`:'—'}</strong>{mine.length>0&&<small>本任务本次已等待 {elapsedText(Math.max(...mine.map(row=>row.waitedMs)))}</small>}</div><div>本任务请求累计等待<strong>{stats?.supported?elapsedText(stats.waitedMs):'暂未提供'}</strong><small>写入请求 {stats?.supported?stats.writes.toLocaleString():'—'} 次</small></div></div>;
+  return <div className="mpr-database" aria-label="数据库状态"><div>数据库状态<strong>{state}</strong>{holder&&<small>{operation}{held!=null?` · 已占用 ${elapsedText(held)}`:''}</small>}</div><div>数据库排队<strong>{report&&supported?`${waiting.length} 个请求`:'—'}</strong>{mine.length>0&&<small>本任务本次已等待 {elapsedText(Math.max(...mine.map(row=>row.waitedMs)))}</small>}</div><div>{phaseWait?.label??'本任务请求累计等待'}<strong>{stats?.supported?elapsedText(phaseWait?.waitedMs??stats.waitedMs):'暂未提供'}</strong><small>写入请求 {stats?.supported?(phaseWait?.writes??stats.writes).toLocaleString():'—'} 次</small></div></div>;
 }
 
 export function VectorRoundProgress({runs,title='本轮后台向量化'}:{runs:ConsoleRun[];title?:string}){
@@ -99,7 +99,7 @@ export function MaintenanceProgress({run,link=true,vectorRuns=[]}:{run:ConsoleRu
       {failure&&<p className="mpr-error" role="alert">{failure}</p>}
       {run.status==='cancelled'&&<p>已完成成果保留，可以继续未完成部分。</p>}
     </section>}
-    {round&&round.stages.length>0&&<section className="mpr-results" aria-label="各阶段统计结果"><h3>阶段结果</h3>{stageIds.flatMap(id=>{const stage=round.stages.find(stage=>stage.id===id);if(!stage)return[];const wait=view?.database?.stages[id];return <div key={id} className="mpr-result-row"><strong>{MAINTENANCE_STAGE_LABELS[id]}<small>{stage.status==='partial'?'部分完成':stage.status==='skipped'?'无需处理':'已完成'}</small></strong><span>{stage.completed} / {stage.total} {id==='sync'?'份资料':'页'}{id==='sync'?` · 失败 ${stage.failed??0}`:id==='relations'?` · ${stage.entities??0} 个已有实体 · ${stage.links??0} 条关联`:` · 修正 ${stage.repaired??0} 处`}<small>数据库累计等待 {view?.database?.supported?elapsedText(wait?.waitedMs??0):'暂未提供'}</small></span><time>{elapsedText(stage.durationMs)}</time></div>;})}</section>}
+    {round&&round.stages.length>0&&<section className="mpr-results" aria-label="各阶段统计结果"><h3>阶段结果</h3>{stageIds.flatMap(id=>{const stage=round.stages.find(stage=>stage.id===id);if(!stage)return[];const wait=view?.database?.stages[id];return <div key={id} className="mpr-result-row"><strong>{MAINTENANCE_STAGE_LABELS[id]}<small>{stage.status==='partial'?'部分完成':stage.status==='skipped'?'无需处理':'已完成'}</small></strong><span>{stage.completed} / {stage.total} {id==='sync'?'份资料':'页'}{id==='sync'?` · 失败 ${stage.failed??0}`:id==='relations'?` · ${stage.entities??0} 个已有实体 · ${stage.links??0} 条关联`:` · 修正 ${stage.repaired??0} 处`}<small>本阶段等待 {view?.database?.supported?elapsedText(wait?.waitedMs??0):'暂未提供'}</small></span><time>{elapsedText(stage.durationMs)}</time></div>;})}</section>}
     {round?.stages.find(stage=>stage.id==='relations')?.failures?.map((failure,index)=><p className="mpr-error" role="alert" key={`${failure.sourceId}:${failure.slug??''}:${index}`}><strong>{failure.sourceId}{failure.path||failure.slug?` / ${failure.path??failure.slug}`:''} · {failure.step}</strong><br/>{failure.error}</p>)}
     {round?.stages.find(stage=>stage.id==='relations')?.detail&&<p className="mpr-note">{round.stages.find(stage=>stage.id==='relations')!.detail}</p>}
     {ordinary&&!active(run)&&<ImportTaskResult run={run}/>}
