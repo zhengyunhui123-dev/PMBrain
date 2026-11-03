@@ -100,6 +100,8 @@ export function MaintenanceProgress({run,link=true,vectorRuns=[]}:{run:ConsoleRu
       {run.status==='cancelled'&&<p>已完成成果保留，可以继续未完成部分。</p>}
     </section>}
     {round&&round.stages.length>0&&<section className="mpr-results" aria-label="各阶段统计结果"><h3>阶段结果</h3>{stageIds.flatMap(id=>{const stage=round.stages.find(stage=>stage.id===id);if(!stage)return[];const wait=view?.database?.stages[id];return <div key={id} className="mpr-result-row"><strong>{MAINTENANCE_STAGE_LABELS[id]}<small>{stage.status==='partial'?'部分完成':stage.status==='skipped'?'无需处理':'已完成'}</small></strong><span>{stage.completed} / {stage.total} {id==='sync'?'份资料':'页'}{id==='sync'?` · 失败 ${stage.failed??0}`:id==='relations'?` · ${stage.entities??0} 个已有实体 · ${stage.links??0} 条关联`:` · 修正 ${stage.repaired??0} 处`}<small>数据库累计等待 {view?.database?.supported?elapsedText(wait?.waitedMs??0):'暂未提供'}</small></span><time>{elapsedText(stage.durationMs)}</time></div>;})}</section>}
+    {round?.stages.find(stage=>stage.id==='relations')?.failures?.map((failure,index)=><p className="mpr-error" role="alert" key={`${failure.sourceId}:${failure.slug??''}:${index}`}><strong>{failure.sourceId}{failure.path||failure.slug?` / ${failure.path??failure.slug}`:''} · {failure.step}</strong><br/>{failure.error}</p>)}
+    {round?.stages.find(stage=>stage.id==='relations')?.detail&&<p className="mpr-note">{round.stages.find(stage=>stage.id==='relations')!.detail}</p>}
     {ordinary&&!active(run)&&<ImportTaskResult run={run}/>}
     {round&&(round.stage!=='done'||receipts.length>0)&&<VectorRoundProgress runs={vectors}/>}
     {receipts.filter(receipt=>receipt.error).map((receipt,index)=><p key={index} className="mpr-error" role="alert">{receipt.error}</p>)}

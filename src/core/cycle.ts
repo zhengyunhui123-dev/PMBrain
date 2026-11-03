@@ -48,6 +48,7 @@ import { join } from 'path';
 import { hostname } from 'os';
 import { gbrainPath } from './config.ts';
 import type { BrainEngine } from './engine.ts';
+import type { MaintenanceRelationFailure } from '../../shared/maintenance-progress.ts';
 import type { MinionHandler } from './minions/types.ts';
 import { SyncFilesDeferred, type SyncFileRuntime } from './sync-file-runtime.ts';
 import { createProgress, type ProgressReporter } from './progress.ts';
@@ -1962,13 +1963,20 @@ export async function runCycle(
       await checkpoint();
     }
 
-    const refreshRelations = async (
+    const refreshRelationsPass = async (
       engine: BrainEngine,
       result: PhaseResult,
       prioritySlugs?: string[],
       limits?: { maxHistoricalPages?: number; nerSlugs?: string[] },
     ) => {
       const relationNerSlugs=new Set([...(opts.quickMaintenance ? [] : prioritySlugs ?? []),...(limits?.nerSlugs ?? [])]);
+      const failures:MaintenanceRelationFailure[]=[];
+      const recordFailure=(failure:MaintenanceRelationFailure)=>{if(!failures.some(item=>item.slug===failure.slug&&item.sourceId===failure.sourceId&&item.step===failure.step&&item.error===failure.error))failures.push(failure);result.details.relationFailures=failures;};
+      const onPageError=(step:string)=>opts.quickMaintenance?(slug:string,sourceId:string,error:unknown)=>{
+        if((error as {code?:string}|null)?.code==='revision_conflict')return;
+        recordFailure({slug,sourceId,step,error:error instanceof Error?error.message:String(error)});
+      }:undefined;
+      const noteFailure=(step:string,error:unknown)=>{if(opts.quickMaintenance)recordFailure({sourceId:filesystemSourceId??'default',step,error:error instanceof Error?error.message:String(error)});};
       checkAborted(opts.signal);
       if (opts.includeHistoricalMarkdownCatchUp && !dryRun) {
         try {
@@ -1983,11 +1991,12 @@ export async function runCycle(
             slugs: opts.quickMaintenance ? prioritySlugs ?? [] : undefined,
             sourceIdFilter: filesystemSourceId,
             catchUp: !opts.quickMaintenance && opts.markdownCatchUpMaxHistorical == null,
-            timeBudgetMs: opts.quickMaintenance ? opts.byMentionTimeBudgetMs : undefined,
+            timeBudgetMs: opts.quickMaintenance ? opts.byMentionTimeBudgetMs ?? Infinity : undefined,
             quiet: !getCliOptions().progressJson,
             signal: opts.signal,
             yieldDuringPhase: buildYieldDuringPhase(lock, opts.yieldDuringPhase),
             maxPages: opts.markdownCatchUpMaxHistorical,
+            onPageError:onPageError('显式关系'),
           });
           for(const ref of catchUp.processedSlugs)relationNerSlugs.add(ref.slug);
           result.details = {
@@ -2021,6 +2030,7 @@ export async function runCycle(
         } catch (e) {
           checkAborted(opts.signal);
           const message = e instanceof Error ? e.message : String(e);
+          noteFailure('显式关系',e);
           if (isGinRepairAbortText(e)) {
             result.status = 'fail';
             result.error = makeErrorFromException(e);
@@ -2045,6 +2055,7 @@ export async function runCycle(
             priorityOnly: opts.quickMaintenance,
             quickEntityTypes: opts.quickMaintenance,
             onPages: opts.quickMaintenance ? opts.onMaintenancePages : undefined,
+            onPageError:onPageError('名称提及'),
             excludePathPattern: opts.quickMaintenance ? (await import('./pmbrain-adapters/quick-maintenance-policy.ts')).QUICK_MAINTENANCE_EXCLUDED_PATH : undefined,
             maxHistoricalPages: limits && Object.prototype.hasOwnProperty.call(limits, 'maxHistoricalPages')
               ? limits.maxHistoricalPages
@@ -2088,6 +2099,7 @@ export async function runCycle(
         } catch (e) {
           checkAborted(opts.signal);
           const message = e instanceof Error ? e.message : String(e);
+          noteFailure('名称提及',e);
           if (isGinRepairAbortText(e)) {
             result.status = 'fail';
             result.error = makeErrorFromException(e);
@@ -2106,8 +2118,7 @@ export async function runCycle(
 
 
       if (result.error && isGinRepairAbortText(result.error.message)) return;
-      if (opts.includeNer && !dryRun) {
-        if (opts.quickMaintenance && (relationNerSlugs.size === 0 || result.details.by_mention_disabled === true)) return;
+      if (opts.includeNer && !dryRun && (!opts.quickMaintenance || relationNerSlugs.size > 0 && result.details.by_mention_disabled !== true)) {
         const started = performance.now();
         try {
           const { extractNerLinks } = await import('./extract-ner.ts');
@@ -2119,9 +2130,10 @@ export async function runCycle(
             excludePathPattern: opts.quickMaintenance ? (await import('./pmbrain-adapters/quick-maintenance-policy.ts')).QUICK_MAINTENANCE_EXCLUDED_PATH : undefined,
             gazetteer,
             includeProjectTargets: opts.quickMaintenance,
+            onPageError:onPageError('关系类型'),
           });
           const { runMentionPass }=await import('./mentions/pass.ts');
-          const settled=await runMentionPass(engine,{sourceId:filesystemSourceId,slugs:[...relationNerSlugs],signal:opts.signal,quickEntityTypes:opts.quickMaintenance,excludePathPattern:opts.quickMaintenance ? (await import('./pmbrain-adapters/quick-maintenance-policy.ts')).QUICK_MAINTENANCE_EXCLUDED_PATH : undefined});
+          const settled=await runMentionPass(engine,{sourceId:filesystemSourceId,slugs:[...relationNerSlugs],signal:opts.signal,quickEntityTypes:opts.quickMaintenance,onPageError:onPageError('名称提及'),excludePathPattern:opts.quickMaintenance ? (await import('./pmbrain-adapters/quick-maintenance-policy.ts')).QUICK_MAINTENANCE_EXCLUDED_PATH : undefined});
           if(settled.state==='failed')throw new Error(settled.error);
           result.details = {
             ...result.details,
@@ -2136,6 +2148,7 @@ export async function runCycle(
         } catch (error) {
           checkAborted(opts.signal);
           const message = error instanceof Error ? error.message : String(error);
+          noteFailure('关系类型',error);
           result.status = isGinRepairAbortText(error) ? 'fail' : result.status === 'fail' ? 'fail' : 'warn';
           result.error = makeErrorFromException(error);
           for(const slug of relationNerSlugs)await engine.executeRaw('UPDATE page_mention_state SET mention_revision=NULL WHERE page_id IN (SELECT id FROM pages WHERE slug=$1 AND ($2::text IS NULL OR source_id=$2))',[slug,filesystemSourceId ?? null]);
@@ -2144,6 +2157,48 @@ export async function runCycle(
         }
         result.duration_ms += Math.round(performance.now() - started);
       }
+      if(opts.quickMaintenance&&!dryRun){
+        const slugs=[...new Set(prioritySlugs??[])],sourceId=filesystemSourceId??'default';
+        const {QUICK_MAINTENANCE_EXCLUDED_PATH:excludePathPattern}=await import('./pmbrain-adapters/quick-maintenance-policy.ts');
+        const {LINK_EXTRACTOR_VERSION_TS}=await import('./link-extraction.ts');
+        const explicitPending=(await engine.listStalePagesForExtraction({batchSize:Math.max(1,slugs.length),afterPageId:0,sourceId,slugs,versionTs:LINK_EXTRACTOR_VERSION_TS,excludePathPattern})).map(page=>page.slug);
+        const pending=new Set(explicitPending);let mentionPending:string[]=[];
+        if(result.details.by_mention_disabled!==true){
+          const {listMentionDueSlugs}=await import('./mentions/pass.ts');
+          mentionPending=await listMentionDueSlugs(engine,sourceId,excludePathPattern,slugs);
+          for(const slug of mentionPending)pending.add(slug);
+        }
+        for(const failure of failures)for(const slug of failure.slug?[failure.slug]:slugs)pending.add(slug);
+        if(failures.some(failure=>failure.slug)){
+          const paths=await engine.executeRaw<{slug:string;source_path:string|null}>('SELECT slug,source_path FROM pages WHERE source_id=$1 AND slug=ANY($2::text[])',[sourceId,failures.flatMap(failure=>failure.slug?[failure.slug]:[])]);
+          for(const failure of failures){const path=paths.find(row=>row.slug===failure.slug)?.source_path;if(path)failure.path=path;}
+        }
+        const completed=slugs.filter(slug=>!pending.has(slug));
+        result.details={...result.details,relationScopeRemaining:explicitPending.length,mentionScopeRemaining:mentionPending.length,relationCompletedSlugs:completed,relationPendingSlugs:[...pending],relationFailures:failures,remaining:pending.size};
+        if(pending.size||failures.length)result.status=result.status==='fail'?'fail':'warn';
+        await opts.onMaintenancePages?.(completed);
+      }
+    };
+
+    const refreshRelations = async (...args:Parameters<typeof refreshRelationsPass>) => {
+      if(!opts.quickMaintenance||dryRun||opts.markdownCatchUpMaxHistorical!==undefined||opts.byMentionMaxHistorical!==undefined||opts.byMentionTimeBudgetMs!==undefined||args[3]?.maxHistoricalPages!==undefined)return refreshRelationsPass(...args);
+      const [engine,result,prioritySlugs]=args,scope=[...new Set(prioritySlugs??[])];
+      const completed=new Set<string>(),failed=new Set<string>(),failures:MaintenanceRelationFailure[]=[];
+      let pending=scope;
+      do {
+        checkAborted(opts.signal);
+        await refreshRelationsPass(engine,result,pending,args[3]);
+        for(const slug of result.details.relationCompletedSlugs as string[]??[])completed.add(slug);
+        for(const failure of result.details.relationFailures as MaintenanceRelationFailure[]??[]){
+          failures.push(failure);
+          for(const slug of failure.slug?[failure.slug]:pending)failed.add(slug);
+        }
+        pending=(result.details.relationPendingSlugs as string[]??[]).filter(slug=>!failed.has(slug));
+        if(pending.length)await buildYieldDuringPhase(lock,opts.yieldDuringPhase)?.();
+      }while(pending.length);
+      const remaining=scope.filter(slug=>!completed.has(slug)||failed.has(slug)),remainingSet=new Set(remaining);
+      result.details={...result.details,relationCompletedSlugs:scope.filter(slug=>!remainingSet.has(slug)),relationPendingSlugs:remaining,relationFailures:failures,remaining:remaining.length};
+      if(!remaining.length&&!failures.length&&!result.error)result.status='ok';
     };
 
 

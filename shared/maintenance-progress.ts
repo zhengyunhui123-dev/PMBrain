@@ -1,4 +1,11 @@
 export type MaintenanceStageId = 'sync' | 'relations' | 'check';
+export interface MaintenanceRelationFailure {
+  sourceId: string;
+  slug?: string;
+  path?: string;
+  step: string;
+  error: string;
+}
 export interface MaintenanceStageResult {
   id: MaintenanceStageId;
   status: 'completed' | 'partial' | 'failed' | 'skipped';
@@ -12,6 +19,7 @@ export interface MaintenanceStageResult {
   links?: number;
   entities?: number;
   detail?: string;
+  failures?: MaintenanceRelationFailure[];
 }
 export interface MaintenanceRoundProgress {
   vectors?: Array<{taskId?:string;sourceId:string;pages:number;error?:string}>;

@@ -40,9 +40,6 @@ export async function runQuickMaintenance(
     // generic cycle default unchanged, but include committed local documents
     // here just like Admin's direct import flow does.
     includeOffice: true,
-    markdownCatchUpMaxHistorical: opts.markdownCatchUpMaxHistorical ?? 200,
-    byMentionMaxHistorical: opts.byMentionMaxHistorical ?? 200,
-    byMentionTimeBudgetMs: opts.byMentionTimeBudgetMs ?? 5_000,
   });
 }
 

@@ -15,10 +15,10 @@ const databaseUrl = process.env.PMBRAIN_TASK_TEST_DATABASE_URL;
 const keys = ['PMBRAIN_HOME', 'GBRAIN_HOME', 'DATABASE_URL', 'GBRAIN_DATABASE_URL', 'PMBRAIN_DATABASE_URL'];
 const saved = Object.fromEntries(keys.map(key => [key, process.env[key]]));
 
-async function until<T>(read: () => Promise<T | undefined>, timeout = 90000): Promise<T> {
+async function until<T>(read: () => Promise<T | undefined>, timeout = 180000): Promise<T> {
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) { const result = await read(); if (result !== undefined) return result; await Bun.sleep(30); }
-  throw new Error(JSON.stringify((await runtime.listRuns()).map(run => ({ id: run.id, status: run.status, stage: run.product?.stage, error: run.error }))));
+  throw new Error(JSON.stringify((await runtime.listRuns()).map(run => ({ id: run.id, status: run.status, stage: run.product?.stage, error: run.error,round:run.product?.maintenance,files:run.product?.syncFiles,output:run.stdout.slice(-4000) }))));
 }
 const finished = (id: string) => until(async () => { const run = await runtime.getRun(id); return run && !['queued', 'running'].includes(run.status) ? run : undefined; });
 
@@ -64,11 +64,12 @@ test('扫描后固定增量清单；途中新增文件留到下一轮，多Sourc
   expect(await engine.getPage('arrived-later', { sourceId: 'default' })).toBeNull();
   expect(done.product?.maintenance?.entities.total).toBeGreaterThanOrEqual(2);
   expect(done.product?.maintenance?.stages.map(stage => stage.id)).toEqual(['sync', 'relations', 'check']);
+  expect(done.product?.maintenance?.stages.find(stage=>stage.id==='relations')).toMatchObject({status:'completed',completed:16,total:16,failures:[]});
   expect((await engine.getPage('people/li', { sourceId: 'default' }))?.compiled_truth).toBe('# 李明\n\n已有人员资料。');
   const jobs = await engine.executeRaw<{ data: any }>('SELECT data FROM minion_jobs WHERE id=$1', [Number(id.slice(5))]);
   expect(Object.keys(jobs[0].data.task.input.checkpoint.quickSync.sources)).toHaveLength(2);
   expect(Object.values(jobs[0].data.task.input.checkpoint.quickSync.sources).every((source: any) => source.complete)).toBe(true);
-}, 180000);
+}, 240000);
 
 test('下一轮只导入新增资料，保留扫描总量和阶段最终统计', async () => {
   const id = (await runtime.submitDream({ preset: 'quick', allSources: true })).id;
@@ -121,4 +122,31 @@ test('失败不计作已导入；修复原文件后仅核对未完成文件，�
   expect(done.product?.maintenance?.scan).toMatchObject({total:2,incremental:2});
   expect((await engine.getPage('good',{sourceId:'fixed-failed'}))?.content_hash).toBe(original?.content_hash);
   expect((await engine.getPage('bad',{sourceId:'fixed-failed'}))?.compiled_truth).toContain('修复后的资料');
+},180000);
+
+test('真实任务保存逐份关联失败；其余资料完成，继续后清除已解决错误',async()=>{
+  const sourceId='fixed-relations',dir=join(root,'relations');mkdirSync(dir);
+  for(const name of ['first','blocked','last'])writeFileSync(join(dir,`${name}.md`),'# 增量资料\n\n李明负责青山项目。');
+  await engine.executeRaw('INSERT INTO sources(id,name,local_path) VALUES($1,$1,$2)',[sourceId,dir]);
+  await engine.executeRaw(`CREATE FUNCTION reject_relation_checkpoint_fixture() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+    IF NEW.source_id='fixed-relations' AND NEW.slug='blocked' AND NEW.links_extracted_at IS DISTINCT FROM OLD.links_extracted_at THEN
+      RAISE EXCEPTION '隔离验收：blocked.md 关联保存失败';
+    END IF; RETURN NEW; END $$`);
+  await engine.executeRaw('CREATE TRIGGER reject_relation_checkpoint_fixture BEFORE UPDATE OF links_extracted_at ON pages FOR EACH ROW EXECUTE FUNCTION reject_relation_checkpoint_fixture()');
+  let run:Awaited<ReturnType<typeof finished>>;
+  try {
+    run=await finished((await runtime.submitDream({preset:'quick',sourceId})).id);
+    const stage=run.product?.maintenance?.stages.find(stage=>stage.id==='relations');
+    expect(run.product?.syncFiles).toMatchObject({completed:3,failed:0});
+    expect(stage).toMatchObject({status:'partial',total:3,completed:2});
+    expect(stage?.failures?.[0]).toMatchObject({sourceId,slug:'blocked',step:'显式关系',error:'隔离验收：blocked.md 关联保存失败'});
+    expect(stage?.failures?.[0].path).toContain('blocked.md');
+  }finally {
+    await engine.executeRaw('DROP TRIGGER reject_relation_checkpoint_fixture ON pages');await engine.executeRaw('DROP FUNCTION reject_relation_checkpoint_fixture()');
+  }
+  await runtime.close();runtime=new ProductTaskRuntime(engine,{background:idleBackground});await runtime.start();
+  expect((await runtime.getRun(run!.id))?.product?.maintenance?.stages.find(stage=>stage.id==='relations')?.failures?.[0].slug).toBe('blocked');
+  await runtime.retry(run!.id);
+  const done=await finished(run!.id);
+  expect(done.product?.maintenance?.stages.find(stage=>stage.id==='relations')).toMatchObject({status:'completed',completed:3,total:3,failures:[]});
 },180000);

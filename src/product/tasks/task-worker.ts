@@ -38,6 +38,7 @@ import {readDocumentChunkManifest} from '../../core/document/chunk-manifest.ts';
 import { classifyErrorCode, isInfrastructureFailureCode } from '../../core/sync-failure-ledger.ts';
 import { performSync } from '../../commands/sync.ts';
 import { readTaskCheckpoint, taskModelFingerprint, syncFileContentFingerprint, retireAutomaticCapture } from './checkpoint.ts';
+import { phaseHasPendingWork } from '../../../shared/dream-phase-state.ts';
 import { usesSyncFileQueue } from '../../../shared/task-progress.ts';
 import { isGinRepairAbortText } from '../../core/pglite-gin-repair.ts';
 import type { SyncStrategy } from '../../core/sync.ts';
@@ -415,21 +416,23 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
         const extracted=report.phases.find(phase=>phase.phase==='extract');
         if(group.id==='relations'&&extracted&&!previous.has('extract'))extracted.duration_ms=Date.now()-before;
         reports.set(source.id,report);
-        completed+=group.id==='sync'?quickPlan.current.entries.length:scopeSlugs(source.id).length;
-        round.current={completed:Math.max(round.current!.completed,completed),total:round.current!.total};
+        completed+=group.id==='sync'?quickPlan.current.entries.length:group.id==='relations'&&Array.isArray(extracted?.details.relationCompletedSlugs)?extracted.details.relationCompletedSlugs.length:scopeSlugs(source.id).length;
+        round.current={completed,total:round.current!.total};
         if(group.id==='relations')round.entities=await rpc('task.quickEntityStats',[scopes()]) as MaintenanceRoundProgress['entities'];
         notifyRound();
       }
       const phases=sources.flatMap(source=>(checkpoint.phases[source.id]??[]).filter(phase=>group.phases.includes(phase.phase)));
       const number=(key:string)=>phases.reduce((sum,phase)=>sum+Number(phase.details[key]??0),0);
-      const partial=phases.some(phase=>phase.status==='fail'||['relationScopeRemaining','mentionScopeRemaining','refused'].some(key=>Number(phase.details[key]??0)>0)||phase.details.reason==='repair_failed');
+      const partial=phases.some(phase=>phase.status==='fail'||phaseHasPendingWork(phase)||Number(phase.details.refused??0)>0);
       const result:MaintenanceStageResult={id:group.id,status:partial?'partial':phases.every(phase=>phase.status==='skipped')?'skipped':'completed',completed,total:round.current!.total,durationMs:phases.reduce((sum,phase)=>sum+phase.duration_ms,0)};
       if(group.id==='sync'){
         const counts=await rpc('task.quickFileCounts',[]) as {completed:number;failed:number;remaining:number};
         Object.assign(result,{added:number('added'),modified:number('modified'),failed:counts.failed,completed:counts.completed});
         if(counts.failed||counts.remaining)result.status='partial';
       }
-      if(group.id==='relations')Object.assign(result,{links:round.entities.links,entities:round.entities.total});
+      if(group.id==='relations')Object.assign(result,{links:round.entities.links,entities:round.entities.total,
+        failures:phases.flatMap(phase=>Array.isArray(phase.details.relationFailures)?phase.details.relationFailures:[]),
+        ...(completed<result.total?{detail:`已完成 ${completed} 页，剩余 ${result.total-completed} 页关联未完成`}:{})});
       if(group.id==='check')result.repaired=number('merged')+number('closed')+number('removed');
       round.stages=[...round.stages.filter(stage=>stage.id!==group.id),result];notifyRound();
       await rpc('task.maintenanceCheckpoint',[checkpoint]);

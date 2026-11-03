@@ -65,6 +65,7 @@ export async function extractStaleFromDB(
     slugs?: string[];
     signal?: AbortSignal;
     yieldDuringPhase?: () => Promise<void>;
+    onPageError?: (slug: string, sourceId: string, error: unknown) => void;
   },
 ): Promise<{
   linksCreated: number;
@@ -174,7 +175,13 @@ export async function extractStaleFromDB(
     let writeLinksMs = 0;
     for(const page of rows){
       opts.signal?.throwIfAborted();
-      const extracted=await reconcile(page.slug,page.source_id,{includeFrontmatter});
+      let extracted: Awaited<ReturnType<typeof reconcile>>;
+      try { extracted=await reconcile(page.slug,page.source_id,{includeFrontmatter}); }
+      catch(error) {
+        opts.signal?.throwIfAborted();
+        if(!opts.onPageError || isGinCorruptionError(error))throw error;
+        opts.onPageError(page.slug,page.source_id,error);continue;
+      }
       resolveMs+=extracted.timings.resolveMs;
       writeLinksMs+=extracted.timings.writeMs;
       reconciledLinks+=extracted.created;
@@ -182,34 +189,31 @@ export async function extractStaleFromDB(
       unresolvedReferences+=extracted.unresolved.length;
       skippedMissingTarget+=extracted.skippedMissingTarget;
       revisions.push({slug:page.slug,sourceId:page.source_id,revision:extracted.revision});
-      processedSlugs.push({slug:page.slug,sourceId:page.source_id});
       for(const entry of parseTimelineEntries(extracted.page.compiled_truth+'\n'+extracted.page.timeline))timelineRows.push({slug:page.slug,date:entry.date,summary:entry.summary,detail:entry.detail||'',source:entry.source||'',source_id:page.source_id});
       processedRefs.push({slug:page.slug,source_id:page.source_id,extractedAt:page.updated_at.getTime()>=Date.parse(versionTs)?page.updated_at_iso:versionTs});
     }
 
     let writeTimelineMs = 0;
     let markExtractedMs = 0;
-    const persistBatch = async (): Promise<{ links: number; timeline: number }> => {
+    const persistBatch = async (refs=processedRefs, expected=revisions, timelines=timelineRows): Promise<{ links: number; timeline: number }> => {
       opts.signal?.throwIfAborted();
       return engine.transaction(async tx=>{
-        for(const ref of revisions){
+        for(const ref of expected){
           const [current]=await tx.executeRaw<{revision:string}>('SELECT knowledge_revision::text AS revision FROM pages WHERE slug=$1 AND source_id=$2 AND deleted_at IS NULL FOR SHARE',[ref.slug,ref.sourceId]);
           if(current?.revision!==ref.revision){const error=new Error('Page changed during relation extraction');Object.assign(error,{code:'revision_conflict'});throw error;}
         }
         let timeline=0;
         const timelineStarted=performance.now();
-        for(let i=0;i<timelineRows.length;i+=BATCH_SIZE)timeline+=await tx.addTimelineEntriesBatch(timelineRows.slice(i,i+BATCH_SIZE),{auditSite:'extract.stale'});
+        for(let i=0;i<timelines.length;i+=BATCH_SIZE)timeline+=await tx.addTimelineEntriesBatch(timelines.slice(i,i+BATCH_SIZE),{auditSite:'extract.stale'});
         writeTimelineMs+=performance.now()-timelineStarted;
         const markStarted=performance.now();
-        await tx.markPagesExtractedBatch(processedRefs,new Date().toISOString());
+        await tx.markPagesExtractedBatch(refs,new Date().toISOString());
         markExtractedMs+=performance.now()-markStarted;
         return {links:reconciledLinks,timeline};
       });
     };
     let persisted: { links: number; timeline: number };
-    try {
-      persisted = await persistBatch();
-    } catch (error) {
+    const persistWithRepair=async()=>{try {return await persistBatch();} catch (error) {
       if (engine.kind !== 'pglite' || !isGinCorruptionError(error)) throw error;
       if (ginRepaired) {
         throw error instanceof GinIndexUnusableError
@@ -221,14 +225,28 @@ export async function extractStaleFromDB(
         throw new GinIndexUnusableError(result.message, { status: result.status, cause: error });
       }
       ginRepaired = true;
-      persisted = await persistBatch();
+      return persistBatch();
+    }};
+    let committedRefs=processedRefs;
+    try { persisted=await persistWithRepair(); }
+    catch(error) {
+      opts.signal?.throwIfAborted();
+      if(!opts.onPageError || isGinCorruptionError(error) || error instanceof GinIndexUnusableError)throw error;
+      persisted={links:reconciledLinks,timeline:0};committedRefs=[];
+      for(const ref of processedRefs){
+        try {
+          const outcome=await persistBatch([ref],revisions.filter(item=>item.slug===ref.slug&&item.sourceId===ref.source_id),timelineRows.filter(item=>item.slug===ref.slug&&item.source_id===ref.source_id));
+          persisted.timeline+=outcome.timeline;committedRefs.push(ref);
+        }catch(pageError){opts.signal?.throwIfAborted();if(isGinCorruptionError(pageError)||pageError instanceof GinIndexUnusableError)throw pageError;opts.onPageError(ref.slug,ref.source_id,pageError);}
+      }
     }
+    processedSlugs.push(...committedRefs.map(ref=>({slug:ref.slug,sourceId:ref.source_id})));
     linksCreated += persisted.links;
     timelineCreated += persisted.timeline;
 
-    pagesProcessed += rows.length;
+    pagesProcessed += committedRefs.length;
     const timing: ExtractStaleBatchTiming = {
-      range: `${pagesProcessed - rows.length + 1}-${pagesProcessed}`,
+      range: committedRefs.length?`${pagesProcessed - committedRefs.length + 1}-${pagesProcessed}`:String(pagesProcessed),
       pages: rows.length,
       readMs,
       parseMs,

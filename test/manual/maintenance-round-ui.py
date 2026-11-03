@@ -6,6 +6,7 @@ from pathlib import Path
 from playwright.sync_api import expect, sync_playwright
 
 base = 'http://127.0.0.1:5398'
+expect.set_options(timeout=15000)
 output = Path('.codex/maintenance-round-ui')
 output.mkdir(parents=True, exist_ok=True)
 checks = []
@@ -131,9 +132,45 @@ with sync_playwright() as playwright:
     expect(drawer.locator('.mpr-overall')).to_have_attribute('aria-valuenow', '50')
     page.screenshot(path=str(output / 'ordinary-partial.png'))
     checks.append('普通导入真实失败样例：总数2、已导入1、失败1，失败文件不计为成功，保留原始错误')
+    failed_source = page.request.post(base + '/fixture/relations-failure').json()['sourceId']
+    accepted = page.request.post(base + '/admin/api/dream-runs', data={'preset': 'quick', 'sourceId': failed_source})
+    assert accepted.ok, accepted.text()
+    failed_id = accepted.json()['runId']
+    deadline = time.monotonic() + 180
+    while time.monotonic() < deadline:
+        failed = page.request.get(base + '/admin/api/runs/' + failed_id).json()
+        if failed['status'] not in ['running', 'queued']:
+            break
+        time.sleep(.3)
+    relation = next(stage for stage in failed['product']['maintenance']['stages'] if stage['id'] == 'relations')
+    assert relation['completed'] == 2 and relation['total'] == 3 and relation['status'] == 'partial', relation
+    page.goto(base + '/admin/#tasks?run=' + failed_id)
+    page.wait_for_load_state('networkidle')
+    drawer = page.locator('.task-detail-drawer')
+    expect(drawer.locator('.mpr-results')).to_contain_text('2 / 3 页')
+    expect(drawer.get_by_role('alert')).to_contain_text('blocked.md')
+    expect(drawer.get_by_role('alert')).to_contain_text('关联保存失败')
+    page.screenshot(path=str(output / 'relation-failure.png'))
+    assert page.request.post(base + '/fixture/relations-repair').ok
+    assert page.request.post(base + '/admin/api/runs/' + failed_id + '/retry').ok
+    deadline = time.monotonic() + 180
+    while time.monotonic() < deadline:
+        repaired = page.request.get(base + '/admin/api/runs/' + failed_id).json()
+        if repaired['status'] not in ['running', 'queued']:
+            break
+        time.sleep(.3)
+    relation = next(stage for stage in repaired['product']['maintenance']['stages'] if stage['id'] == 'relations')
+    assert relation['completed'] == 3 and relation['status'] == 'completed' and not relation['failures'], relation
+    page.reload()
+    page.wait_for_load_state('networkidle')
+    expect(page.locator('.task-detail-drawer .mpr-results')).to_contain_text('3 / 3 页')
+    expect(page.locator('.task-detail-drawer .mpr-error')).to_have_count(0)
+    page.screenshot(path=str(output / 'relation-repaired.png'))
+    checks.append('真实关联失败：其余2份完成，保留失败文件和原始错误；修复后原任务3份全部完成，重载后结果保留')
+    assert page.request.get(base + '/fixture').json()['modelCalls'] == 0
     assert not errors, errors
     browser.close()
 
-receipt = {'checks': checks, 'errors': errors, 'snapshots': snapshots, 'runId': run_id, 'fixture': fixture}
+receipt = {'checks': checks, 'errors': errors, 'snapshots': snapshots, 'runId': run_id, 'relationRunId': failed_id, 'fixture': fixture}
 (output / 'receipt.json').write_text(json.dumps(receipt, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
 print(json.dumps({'checks': checks, 'errors': errors, 'runId': run_id}, ensure_ascii=False, indent=2))

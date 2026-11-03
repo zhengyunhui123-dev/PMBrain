@@ -44,6 +44,20 @@ app.post('/fixture/ordinary',(_req,res)=>{
   res.json({path:folder});
 });
 app.get('/fixture/pages',async(_req,res)=>res.json(await engine.executeRaw('SELECT slug,type FROM pages WHERE deleted_at IS NULL ORDER BY slug')));
+app.post('/fixture/relations-failure',async(_req,res)=>{
+  const folder=join(root,'relations-failure');mkdirSync(folder,{recursive:true});
+  for(const name of ['first','blocked','last'])writeFileSync(join(folder,`${name}.md`),'# 隔离关联资料\n\n李明负责青山项目。');
+  await engine.executeRaw("INSERT INTO sources(id,name,local_path) VALUES('ui-relations-failure','关联失败验收',$1)",[folder]);
+  await engine.executeRaw(`CREATE FUNCTION reject_ui_relation() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+    IF NEW.source_id='ui-relations-failure' AND NEW.slug='blocked' AND NEW.links_extracted_at IS DISTINCT FROM OLD.links_extracted_at THEN
+      RAISE EXCEPTION '隔离验收：blocked.md 关联保存失败';
+    END IF; RETURN NEW; END $$`);
+  await engine.executeRaw('CREATE TRIGGER reject_ui_relation BEFORE UPDATE OF links_extracted_at ON pages FOR EACH ROW EXECUTE FUNCTION reject_ui_relation()');
+  res.json({sourceId:'ui-relations-failure'});
+});
+app.post('/fixture/relations-repair',async(_req,res)=>{
+  await engine.executeRaw('DROP TRIGGER reject_ui_relation ON pages');await engine.executeRaw('DROP FUNCTION reject_ui_relation()');res.json({ok:true});
+});
 app.use('/admin',express.static(resolve('admin/dist')));
 const server=app.listen(5398,'127.0.0.1');await new Promise<void>(resolve=>server.once('listening',resolve));
 console.log('MAINTENANCE_UI_READY http://127.0.0.1:5398/admin/');

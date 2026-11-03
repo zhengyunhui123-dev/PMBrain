@@ -16,6 +16,7 @@
 // link goes in as a different row with a different link_type.
 
 import type { BrainEngine } from './engine.ts';
+import {isGinCorruptionError,GinIndexUnusableError} from './pglite-gin-repair.ts';
 import type { LinkBatchInput } from './engine.ts';
 import {ingestMentionOrigin} from './pmbrain-adapters/ingest-provenance.ts';
 import { buildGazetteer, findMentionedEntities, type Gazetteer } from './by-mention.ts';
@@ -26,6 +27,7 @@ import { inferLinkType } from './link-extraction.ts';
 import type { PageType } from './types.ts';
 
 export interface ExtractNerOpts {
+  onPageError?: (slug: string, sourceId: string, error: unknown) => void;
   signal?: AbortSignal;
   excludePathPattern?: string;
   includeProjectTargets?: boolean;
@@ -195,6 +197,8 @@ export async function extractNerLinks(
     opts.signal?.throwIfAborted();
     if (processed % 25 === 0) await opts.yieldDuringPhase?.();
     opts.signal?.throwIfAborted();
+    const before=processed;
+    try {
     const page = await engine.getPage(slug, { sourceId: source_id });
     if (!page) continue;
     if (opts.typeFilter && page.type !== opts.typeFilter) continue;
@@ -235,6 +239,11 @@ export async function extractNerLinks(
         to_source_id: m.source_id,
       });
       if (batch.length >= BATCH_SIZE) await flush();
+    }
+    if(opts.onPageError)await flush();
+    }catch(error){
+      opts.signal?.throwIfAborted();if(!opts.onPageError||isGinCorruptionError(error)||error instanceof GinIndexUnusableError)throw error;
+      batch.length=0;processed=before;opts.onPageError(slug,source_id,error);
     }
   }
 
