@@ -4,6 +4,20 @@ import { DeepOrganizeProgress } from '../admin/src/product/DeepOrganizeProgress'
 import { TaskProductProgressSchema } from '../shared/contracts/common';
 import { DEEP_ORGANIZE_STAGES, deepOrganizePercent, deepOrganizeTotals, isStagedDeepOrganize, summarizeDeepStage, type DeepRoundProgress } from '../shared/deep-organize-progress';
 
+test('综合页、知识点、模式概念都按真实新建和维护累计，关联单独计数', () => {
+  const stages = [
+    summarizeDeepStage('relations', [{ phase: 'synthesize', status: 'ok', details: { knowledge_created: 2, knowledge_maintained: 1, knowledge_created_refs: ['a', 'b'], knowledge_maintained_refs: ['old'], linksCreated: 3 } }]),
+    summarizeDeepStage('knowledge', [{ phase: 'extract_atoms', status: 'ok', details: { atoms_extracted: 6, knowledge_created: 4, knowledge_maintained: 2, knowledge_created_refs: ['c', 'd', 'e', 'f'], knowledge_maintained_refs: ['old2', 'old3'] } }]),
+    summarizeDeepStage('concepts', [{ phase: 'patterns', status: 'ok', details: { knowledge_created: 1, knowledge_maintained: 1, knowledge_created_refs: ['g'], knowledge_maintained_refs: ['a'] } }]),
+  ];
+  const round: DeepRoundProgress = { stage: 'index', stages, scan: { scanned: 5, unchanged: 1, complete: true } };
+  expect(deepOrganizeTotals(round)).toMatchObject({ newKnowledge: 7, maintainedKnowledge: 3, links: 3 });
+  expect(stages[0].result).toContain('新建 2');
+  expect(stages[0].result).toContain('维护 1');
+  expect(stages[1].result).toContain('新建 4');
+  expect(TaskProductProgressSchema.shape.deep.parse(round)?.stages[0].newKnowledge).toBe(2);
+});
+
 const adminRequire = createRequire(new URL('../admin/package.json', import.meta.url));
 const { createElement } = adminRequire('react');
 const { renderToStaticMarkup } = adminRequire('react-dom/server');
@@ -47,7 +61,7 @@ test('同步和实体阶段用真实回执汇总，未完成的阶段不计入�
   };
   expect(deepOrganizePercent(round)).toBe(25);
   expect(deepOrganizePercent({ ...round, stage: 'done', stages: DEEP_ORGANIZE_STAGES.map(stage => ({ id: stage.id, status: stage.id === 'entities' ? 'partial' as const : 'completed' as const, durationMs: 0, result: '', detail: '' })) })).toBe(99);
-  expect(deepOrganizeTotals({ ...round, stages: [sync, entities] })).toEqual({ files: 18, knowledge: 0, entities: 4, links: 9 });
+  expect(deepOrganizeTotals({ ...round, stages: [sync, entities] })).toMatchObject({ files: 18, knowledge: 0, entities: 4, links: 9 });
 });
 
 test('深度整理详情按八个阶段展示同步、知识点和新增实体', () => {

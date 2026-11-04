@@ -106,7 +106,7 @@ export class ProductTaskRuntime {
   private dirtyFiles = new Map<number,Set<number>>();
   private idleFileThreads: Worker[] = [];
   private idleMaintenanceThreads: Worker[] = [];
-  private sessionRefresh = new Map<number, { timer: ReturnType<typeof setTimeout>; file?: string }>();
+  private sessionRefresh = new Map<number, { timer: ReturnType<typeof setTimeout>; file?: string; dirty: boolean }>();
   private quickProgressPersistedAt = new Map<number,number>();
   private loop: Promise<void> | null = null;
   private stopped = false;
@@ -1583,7 +1583,7 @@ export class ProductTaskRuntime {
     if (!job || ['completed','cancelled','dead','failed','paused'].includes(job.status)) { this.sessionViews.delete(id);this.quickProgressPersistedAt.delete(id);return; }
     const run = toRun(job);
     const task=job.data.task as ProductTask;
-    const quick=task?.type==='dream'&&task.input.preset==='quick';
+    const quick=task?.type==='dream'&&(task.input.preset==='quick'||task.input.preset==='full'&&Boolean(run.product?.deep));
     await this.hydrateFiles([id],true);
     const counts = quick ? this.fileProjection.counts(id)??await this.fileQueue.counts(id) : await this.fileQueue.counts(id);
     if(this.stopIntents.has(id))return;
@@ -1611,10 +1611,14 @@ export class ProductTaskRuntime {
   private scheduleSessionRefresh(id: number, file?: string) {
     if (this.stopped) return;
     const queued = this.sessionRefresh.get(id);
-    if (queued) { if (file) queued.file = file; return; }
-    const refresh = { file, timer: setTimeout(() => {
-      this.sessionRefresh.delete(id);
-      if (!this.stopped) void this.refreshSession(id, refresh.file).catch(error => console.error('[tasks] sync progress:', error));
+    if (queued) { if (file) queued.file = file; queued.dirty = true; return; }
+    const refresh = { file, dirty: false, timer: setTimeout(() => {
+      if (this.stopped) { this.sessionRefresh.delete(id); return; }
+      refresh.dirty = false;
+      void this.refreshSession(id, refresh.file).catch(error => console.error('[tasks] sync progress:', error)).finally(() => {
+        this.sessionRefresh.delete(id);
+        if (refresh.dirty && !this.stopped) this.scheduleSessionRefresh(id, refresh.file);
+      });
     }, 500) };
     this.sessionRefresh.set(id, refresh);
   }

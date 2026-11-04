@@ -36,7 +36,9 @@ import {runMaintenanceVectorization,mergeEmbeddingWindow,MaintenanceVectorizatio
 import {readDocumentChunkManifest} from '../../core/document/chunk-manifest.ts';
 import { classifyErrorCode, isInfrastructureFailureCode } from '../../core/sync-failure-ledger.ts';
 import { performSync } from '../../commands/sync.ts';
-import { readTaskCheckpoint, taskModelFingerprint, syncFileContentFingerprint, retireAutomaticCapture } from './checkpoint.ts';
+import { readTaskCheckpoint, taskModelFingerprint, syncFileContentFingerprint, syncFileCompatibleFingerprints, retireAutomaticCapture } from './checkpoint.ts';
+import { DeepOutputReceipt } from './deep-output-receipt';
+import { loadAllowedSlugPrefixes } from '../../core/cycle/allowed-slug-prefixes';
 import { phaseHasPendingWork } from '../../../shared/dream-phase-state.ts';
 import { usesSyncFileQueue } from '../../../shared/task-progress.ts';
 import { isGinRepairAbortText } from '../../core/pglite-gin-repair.ts';
@@ -141,6 +143,7 @@ setCliOptions({ ...DEFAULT_CLI_OPTIONS, progressJson: true });
 
 async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { type: 'dream' }>['input'], progressPrefix:string[] = []) {
   const stagedFull = isStagedDeepOrganize(input);
+  let deepOutput: DeepOutputReceipt | undefined;
   const checkpoint: MaintenanceCheckpoint = input.checkpoint ?? { phases: {}, reports: {} };
   const round: MaintenanceRoundProgress = checkpoint.quickProgress ?? { scan: { scanned: 0, unchanged: 0, complete: false }, stage: 'sync', stages: [], entities: { total: 0, person: 0, project: 0, organization: 0, company: 0, links: 0 } };
   const notifyRound = () => { checkpoint.quickProgress=round; send({type:'maintenance',value:round}); };
@@ -220,7 +223,7 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
       send({type:'progress',syncScan:{scanned,unchanged,path:relativePath,bytes:snapshot.size,updatedAt:new Date().toISOString(),active:true}});
       if(syncPlan?.preparing){
         const fingerprint=syncFileContentFingerprint(options);
-        const compatible=[syncFileContentFingerprint({...options,documentOcr:true})];
+        const compatible=syncFileCompatibleFingerprints(options,relativePath);
         const base: import('./types').SyncFileInput = { path, relativePath, sourceRoot, originalPath,
           originalSize: snapshot.size, originalMtime: snapshot.mtimeMs, hash: '',
           quickMaintenance:true, modelFingerprint: taskModelFingerprint(),
@@ -255,7 +258,7 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
         modelFingerprint: taskModelFingerprint(),
         modelMayRun: options.documentOcr === true && (isOfficeFilePath(relativePath) || isImageFilePath(relativePath)),
         fingerprint: syncFileContentFingerprint(options),
-        ...(input.preset === 'quick' ? { compatibleFingerprints: [syncFileContentFingerprint({ ...options, documentOcr: true })] } : {}), options,
+        ...((input.preset === 'quick' || stagedFull) ? { compatibleFingerprints: syncFileCompatibleFingerprints(options,relativePath) } : {}), options,
       };
       const result=await rpc('task.syncFile',[file]) as import('../../core/import-file.ts').ImportResult & { deferred?: boolean; unchanged?: boolean; capacityReached?:boolean;preparedFile?:import('./types').SyncFileInput };
       if (result.deferred) pendingFiles = true;
@@ -305,6 +308,10 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
     syncFileRuntime: fileRuntime,
     completedPhases: checkpoint.phases[sourceId],
     phaseCheckpoint: async (phases: import('../../core/cycle.ts').PhaseResult[]) => {
+      if (deepOutput && phases.length) {
+        const last = phases.at(-1)!;
+        if (!checkpoint.phases[sourceId]?.some(saved => saved.phase === last.phase)) last.details = { ...last.details, ...deepOutput.take() };
+      }
       const capture=phases.find(phase=>phase.phase==='capture_entities');
       if(capture&&!checkpoint.phases[sourceId]?.some(phase=>phase.phase==='capture_entities')){
         const combined=mergeCaptureWindow(checkpoint.captureWindows?.[sourceId],capture);
@@ -611,7 +618,8 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
             syncPlan.sourceId = source.id;
             send({ type: 'progress', scope: { name: source.name, index, total: sources.length } });
             const options = await phaseOptions(source.id);
-            const report = await runCycle(engine, {
+            deepOutput = ['relations', 'knowledge', 'concepts'].includes(stage.id) ? new DeepOutputReceipt(source.id, stage.id === 'concepts', await loadAllowedSlugPrefixes()) : undefined;
+            const report = await runCycle(deepOutput?.observe(engine) ?? engine, {
               ...resolveDreamRelationOptions('full', null),
               ...common, sourceId: source.id, brainDir: await quickBrainDir(source.id), ...options,
               phases: deepPhases, phaseWindow: [...stage.phases] as CyclePhase[],
@@ -622,6 +630,7 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
               ...(stage.id === 'entities' && !options.prepareEntityCapture ? { captureEntitySlugs: options.captureEntitySlugs ?? [] } : {}),
             });
             lastReport = report;
+            deepOutput = undefined;
             if (report.reason === 'cycle_already_running') return report;
           }
         }

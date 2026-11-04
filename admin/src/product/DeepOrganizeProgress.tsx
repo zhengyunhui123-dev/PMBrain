@@ -21,6 +21,8 @@ export function DeepOrganizeProgress({ run, link = true }: { run: ConsoleRun; li
   const round = view?.deep;
   if (!round) return null;
   const totals = deepOrganizeTotals(round);
+  const contentStages = DEEP_ORGANIZE_STAGES.slice(2, 6);
+  const contentTotals = deepOrganizeTotals({ ...round, stages: round.stages.filter(stage => contentStages.some(spec => spec.id === stage.id)) });
   const percent = deepOrganizePercent(round);
   const title = taskStopping(run) ? '正在停止任务' : deepStageTitle(round);
   const spec = DEEP_ORGANIZE_STAGES.find(stage => stage.id === round.stage);
@@ -28,12 +30,22 @@ export function DeepOrganizeProgress({ run, link = true }: { run: ConsoleRun; li
   const showCurrent = active(run) || ['failed', 'cancelled'].includes(run.status);
   const failure = run.error ?? view?.errorReason;
   const budget = view?.budget;
+  const syncFiles = view?.syncFiles;
+  const syncing = round.stage === 'sync' && round.scan.complete;
+  const syncResult = syncing ? `已同步 ${syncFiles?.completed ?? 0} / ${round.scan.incremental ?? syncFiles?.total ?? 0} 份${syncFiles?.failed ? `，失败 ${syncFiles.failed} 份` : ''}` : undefined;
+  const row = (stage: typeof DEEP_ORGANIZE_STAGES[number]) => {
+    const saved = round.stages.find(item => item.id === stage.id);
+    const current = round.stage === stage.id && active(run);
+    const state = saved ? saved.status === 'failed' ? '未完成' : saved.status === 'partial' ? '部分完成' : saved.status === 'skipped' ? '无需处理' : '已完成' : current ? '进行中' : '待执行';
+    return <div key={stage.id} className={`mpr-result-row deep${current ? ' is-current' : ''}`}><strong>{stage.title}<small>{state}</small></strong><span>{saved?.result ?? (current ? syncResult ?? round.current?.result ?? stage.detail : '—')}<small>{saved?.detail ?? (current ? stage.detail : '')}</small></span><time>{saved ? elapsedText(saved.durationMs) : current && round.current?.startedAt ? elapsedText(Math.max(0, now - Date.parse(round.current.startedAt))) : '—'}{saved?.costCny != null && <small>{yuan(saved.costCny)}</small>}</time></div>;
+  };
   return <section className="maintenance-round-progress" aria-label="AI 深度整理进度">
     <section className="mpr-summary" aria-label="整轮总计"><div className="mpr-heading"><h3>{title}<span className={`product-task-state state-${run.status}`}>{taskStatus(run)}</span></h3><span className="mpr-time">总耗时<b>{elapsedText(active(run) ? Math.max(0, now - Date.parse(run.startedAt)) : run.durationMs)}</b></span></div>
-      <dl className="mpr-totals deep"><div><dt>同步文件</dt><dd>{round.scan.complete ? totals.files.toLocaleString() : '确定中'}</dd></div><div><dt>知识点</dt><dd>{totals.knowledge.toLocaleString()}</dd></div><div><dt>写入实体</dt><dd>{totals.entities.toLocaleString()}</dd></div><div><dt>新增关联</dt><dd>{totals.links.toLocaleString()}</dd></div></dl>
-      <div className="mpr-progress-label"><span>深度整理整体进度 · {round.stages.filter(stage => stage.status === 'completed' || stage.status === 'skipped').length} / {DEEP_ORGANIZE_STAGES.length} 个阶段已记录</span><b>{percent}%</b></div>
+      <dl className="mpr-totals deep"><div><dt>同步资料</dt><dd>{round.scan.complete ? (syncing ? syncFiles?.completed ?? totals.files : totals.files).toLocaleString() : '确定中'}</dd></div><div><dt>新建 / 维护知识成果</dt><dd>{totals.newKnowledge.toLocaleString()} / {totals.maintainedKnowledge.toLocaleString()}</dd></div><div><dt>写入实体</dt><dd>{totals.entities.toLocaleString()}</dd></div><div><dt>新增及补齐关联</dt><dd>{totals.links.toLocaleString()}</dd></div></dl>
+      {totals.unclassifiedKnowledge > 0 && <p className="mpr-note">历史记录另有 {totals.unclassifiedKnowledge} 个知识点，未区分新建与维护。</p>}
+      <div className="mpr-progress-label"><span>深度整理整体进度 · {new Set(round.stages.map(stage => stage.id)).size} / {DEEP_ORGANIZE_STAGES.length} 个阶段已记录</span><b>{percent}%</b></div>
       <div className="mpr-overall" role="progressbar" aria-label="深度整理整体进度" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}><i style={{ width: `${percent}%` }} /></div>
-      <p className="mpr-note">按 8 个阶段累计。当前阶段完成后才计入。检查和同步使用资料目录；理解内容与新增实体按现有整理规则调用模型。</p>
+      <p className="mpr-note">阶段完成后保存记录并计入总计。整理符合条件的新增、变更资料，也补做此前待处理的资料。</p>
       {budget && <p className="mpr-note">本次费用 {yuan(budget.spentCny)} / {yuan(budget.capCny)}{budget.reason ? ` · ${budget.reason}` : ''}</p>}
       <ol className="mpr-steps deep">{DEEP_ORGANIZE_STAGES.map((stage, index) => {
         const saved = round.stages.find(item => item.id === stage.id);
@@ -41,7 +53,7 @@ export function DeepOrganizeProgress({ run, link = true }: { run: ConsoleRun; li
         return <li key={stage.id} className={state}><span>{saved ? saved.status === 'failed' || saved.status === 'partial' ? '!' : '✓' : index + 1}</span>{stage.title}</li>;
       })}</ol>
     </section>
-    {showCurrent && <section className="mpr-current" aria-label="当前阶段"><h4>{spec?.title ?? title}<span>{round.current?.result ?? spec?.detail ?? '等待开始'}</span></h4>
+    {showCurrent && <section className="mpr-current" aria-label="当前阶段"><h4>{spec?.title ?? title}<span>{syncResult ?? round.current?.result ?? spec?.detail ?? '等待开始'}</span></h4>
       {file && <div className="mpr-document"><FileText size={15} />{file}</div>}
       {spec && <p>{spec.detail}</p>}
       {round.stage === 'sync' && round.scan.complete && <p>本轮清单已固定，未变化 {round.scan.unchanged.toLocaleString()} 份；途中新增的资料留到下一轮。</p>}
@@ -49,11 +61,10 @@ export function DeepOrganizeProgress({ run, link = true }: { run: ConsoleRun; li
       {failure && <p className="mpr-error" role="alert">{failure}</p>}
       {run.status === 'cancelled' && <p>已完成成果保留，可以继续未完成部分。</p>}
     </section>}
-    {round.stages.length > 0 && <section className="mpr-results" aria-label="各阶段结果"><h3>阶段结果</h3>{DEEP_ORGANIZE_STAGES.flatMap(stage => {
-      const saved = round.stages.find(item => item.id === stage.id);
-      if (!saved) return [];
-      return <div key={stage.id} className="mpr-result-row deep"><strong>{stage.title}<small>{saved.status === 'failed' ? '未完成' : saved.status === 'partial' ? '部分完成' : saved.status === 'skipped' ? '无需处理' : '已完成'}</small></strong><span>{saved.result}<small>{saved.detail}{saved.costCny != null ? ` · 本阶段 ${yuan(saved.costCny)}` : ''}</small></span><time>{elapsedText(saved.durationMs)}</time></div>;
-    })}</section>}
+    <section className="mpr-results" aria-label="各阶段结果"><h3>阶段记录</h3>{DEEP_ORGANIZE_STAGES.slice(0, 2).map(row)}
+      <section className="mpr-content-group" aria-label="理解内容与关联"><h4>理解内容与关联</h4><p>新建 {contentTotals.newKnowledge} 个知识成果 · 维护 {contentTotals.maintainedKnowledge} 个 · 新增关联 {contentTotals.links} 条</p><p className="mpr-note">包括综合页、知识点、模式和概念等实际保存成果。</p>{contentStages.map(row)}</section>
+      {DEEP_ORGANIZE_STAGES.slice(6).map(row)}
+    </section>
     <ModelSetupNotice run={run} />
     {link && <footer><button type="button" onClick={() => { window.location.hash = `tasks?run=${encodeURIComponent(run.id)}`; }}>查看任务</button></footer>}
   </section>;

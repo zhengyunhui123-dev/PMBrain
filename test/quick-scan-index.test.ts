@@ -6,6 +6,7 @@ import type { BrainEngine } from '../src/core/engine';
 import type { SyncFileManifest } from '../src/product/tasks/sync-file-queue';
 import { classifyQuickScanHash, classifyQuickScanStat, loadQuickScanFingerprints, quickScanManifestKey, saveQuickScanFingerprints } from '../src/product/tasks/quick-scan-index';
 import { QuickSyncPlan } from '../src/product/tasks/quick-sync-plan';
+import { syncFileCompatibleFingerprints, syncFileContentFingerprint } from '../src/product/tasks/checkpoint';
 import type { SyncFileInput } from '../src/product/tasks/types';
 
 const home = mkdtempSync(join(tmpdir(), 'pmbrain-quick-scan-'));
@@ -24,6 +25,36 @@ afterAll(() => {
 
 const manifest = (patch: Partial<SyncFileManifest> = {}): SyncFileManifest => ({
   hash: 'abc', fingerprint: 'finger', slug: 'note', pageHash: 'page', size: 12, mtime: 20, chunks: 1, ...patch,
+});
+
+test('快速维护后深度整理复用普通文档比对结果，识图资料仍须按识图配置处理', () => {
+  const quick = { sourceId: 'default', noEmbed: true, includeOffice: true, includeImages: true, documentOcr: false };
+  const deep = { ...quick, documentOcr: true };
+  const stored = manifest({ fingerprint: syncFileContentFingerprint(quick) });
+  for (const path of ['note.md', 'record.txt', 'meeting.jsonl']) {
+    expect(classifyQuickScanStat(stored, 12, 20, syncFileContentFingerprint(deep), syncFileCompatibleFingerprints(deep, path))).toBe('unchanged');
+  }
+  for (const path of ['scan.pdf', 'photo.png', 'slides.pptx']) {
+    expect(classifyQuickScanStat(stored, 12, 20, syncFileContentFingerprint(deep), syncFileCompatibleFingerprints(deep, path))).toBe('same-bytes');
+  }
+  const differentSource = { ...deep, sourceId: 'other' };
+  expect(classifyQuickScanStat(stored, 12, 20, syncFileContentFingerprint(differentSource), syncFileCompatibleFingerprints(differentSource, 'note.md'))).toBe('same-bytes');
+});
+
+test('3195份资料仅1份变化时，不因识图开关把其余3194份重新放入导入清单', () => {
+  const quick = { sourceId: 'default', noEmbed: true, includeOffice: true, includeImages: true, documentOcr: false };
+  const deep = { ...quick, documentOcr: true };
+  const stored = manifest({ fingerprint: syncFileContentFingerprint(quick) });
+  const current = syncFileContentFingerprint(deep);
+  let before = 0, after = 0;
+  for (let index = 0; index < 3195; index++) {
+    const size = index === 3194 ? 13 : 12;
+    if (classifyQuickScanStat(stored, size, 20, current, [syncFileContentFingerprint({ ...deep, documentOcr: true })]) !== 'unchanged') before++;
+    if (classifyQuickScanStat(stored, size, 20, current, syncFileCompatibleFingerprints(deep, `note-${index}.md`)) !== 'unchanged') after++;
+  }
+  expect(before).toBe(3195);
+  expect(after).toBe(1);
+  console.log(`固定清单比对：旧配置兼容判断待检查 ${before} 份，修复后 ${after} 份；复用 ${3195-after} 份。`);
 });
 
 test('大小和修改时间相同就跳过读全文；变了才比哈希', () => {

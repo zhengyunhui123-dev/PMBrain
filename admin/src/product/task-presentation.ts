@@ -1,6 +1,6 @@
 import type { ConsoleRun } from '../lib/shared';
 import { importOutcome } from '../../../shared/import-outcome';
-import { deepOrganizePercent, deepStageTitle } from '../../../shared/deep-organize-progress';
+import { deepOrganizePercent, deepOrganizeTotals, deepStageTitle } from '../../../shared/deep-organize-progress';
 import {maintenancePercent} from '../../../shared/maintenance-progress';
 
 export function taskPhaseSummary(run: ConsoleRun, now = Date.now()) {
@@ -87,8 +87,8 @@ export function taskHasRemaining(run: ConsoleRun): boolean {
 export function taskRoundListSummary(run: ConsoleRun): string {
   const deep=run.product?.deep;
   if(deep){
-    const files=deep.stages.find(stage=>stage.id==='sync'),knowledge=deep.stages.find(stage=>stage.id==='knowledge'),entities=deep.stages.find(stage=>stage.id==='entities');
-    return `同步 ${files?.imported??0} 份 · 知识点 ${knowledge?.knowledge??0} · 实体 ${entities?.entities??0}`;
+    const totals=deepOrganizeTotals(deep);
+    return `同步 ${totals.files} 份 · 新建 ${totals.newKnowledge} 个知识成果 · 维护 ${totals.maintainedKnowledge} 个 · 关联 ${totals.links} 条${totals.unclassifiedKnowledge ? ` · 历史知识点 ${totals.unclassifiedKnowledge}` : ''}`;
   }
   const round=run.product?.maintenance;
   if(round)return `已导入 ${run.product?.syncFiles?.completed??0} / ${round.scan.incremental??'待统计'} 份 · 关联 ${round.entities.total} 个已有实体`;

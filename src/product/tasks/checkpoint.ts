@@ -6,6 +6,8 @@ import type { SyncFileOptions } from '../../core/sync-file-runtime.ts';
 import { SYNC_FILE_FORMAT_VERSION } from '../../core/sync-file-runtime.ts';
 import { phaseHasPendingWork } from '../../../shared/dream-phase-state.ts';
 import type { MaintenanceCheckpoint, ProductTask } from './types.ts';
+import { isOfficeFilePath } from '../../core/sync.ts';
+import { isImageFilePath } from '../../core/import-file.ts';
 
 export function setMaintenanceCheckpoint(task: ProductTask, checkpoint: MaintenanceCheckpoint): void {
   if (task.type === 'dream') task.input.checkpoint = checkpoint;
@@ -47,6 +49,11 @@ export function syncFileContentFingerprint(options:SyncFileOptions):string {
   return createHash('sha256').update(JSON.stringify([SYNC_FILE_FORMAT_VERSION,options.sourceId??'default',
     options.structured!==false,options.session===true,options.includeOffice===true,options.includeImages===true,
     options.documentOcr===true,options.activePack?.page_types.map(type=>[type.name,type.path_prefixes])])).digest('hex');
+}
+
+export function syncFileCompatibleFingerprints(options: SyncFileOptions, path: string): string[] {
+  const variants = options.documentOcr && (isOfficeFilePath(path) || isImageFilePath(path)) ? [true] : [true, false];
+  return [...new Set(variants.map(documentOcr => syncFileContentFingerprint({ ...options, documentOcr })))];
 }
 
 export function taskModelFingerprint(): string {
