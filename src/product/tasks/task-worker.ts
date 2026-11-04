@@ -160,6 +160,17 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
     return (checkpoint.phases[sourceId] ?? []).some(phase => phase.phase === 'capture_entities' || phase.phase === 'embed')
       || (Array.isArray(report?.phases) && report.phases.some((phase: { phase?: string }) => phase.phase === 'capture_entities' || phase.phase === 'embed'));
   }) : [];
+  const legacyCompletedReports = new Set<string>();
+  if (input.preset === 'quick' && input.allSources && checkpoint.quickSync) {
+    for (const [id, raw] of Object.entries(checkpoint.reports)) {
+      const report = raw as { status?: string; brain_dir?: string | null; phases?: Array<{ status?: string }> };
+      if (checkpoint.quickSync.sources[id] || report.status === 'failed' || report.phases?.some(phase => phase.status === 'fail')) continue;
+      checkpoint.quickSync.sources[id] = {
+        root: report.brain_dir ?? '', paths: [], checked: 0, checkedPaths: [], unchanged: 0, entries: [], complete: true,
+      };
+      legacyCompletedReports.add(id);
+    }
+  }
   if (input.preset === 'quick' || (input.phase !== 'capture_entities' && !input.incrementalIngest)) {
     retireAutomaticCapture(checkpoint);
     if (Object.keys(checkpoint.retiredCapture ?? {}).length) {
@@ -173,10 +184,10 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
     const previous = checkpoint.retiredCapture?.[sourceId];
     const report = checkpoint.reports[sourceId] ?? previous?.report;
     checkpoint.retiredCapture = { ...checkpoint.retiredCapture, [sourceId]: {
-      phases: [...(previous?.phases ?? []), ...phases.filter(phase => phase.phase === 'embed')],
+      phases: [...(previous?.phases ?? []), ...phases.filter(phase => phase.phase === 'capture_entities' || phase.phase === 'embed')],
       ...(report ? { report } : {}),
     } };
-    checkpoint.phases[sourceId] = (checkpoint.phases[sourceId] ?? []).filter(phase => phase.phase !== 'extract' && phase.phase !== 'embed');
+    checkpoint.phases[sourceId] = (checkpoint.phases[sourceId] ?? []).filter(phase => phase.phase !== 'capture_entities' && phase.phase !== 'embed');
     delete checkpoint.reports[sourceId];
   }
   const capturesImported = input.preset !== 'quick' && (!input.phase || input.phase==='all' || !!input.preset);
@@ -442,6 +453,11 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
     await rpc('task.maintenanceCheckpoint',[checkpoint]);
     await quickPlan.discardLog();
     const reports=new Map<string,import('../../core/cycle').CycleReport>();
+    for (const source of sources) {
+      if (legacyCompletedReports.has(source.id)) {
+        reports.set(source.id, checkpoint.reports[source.id] as unknown as import('../../core/cycle').CycleReport);
+      }
+    }
     const scopeSlugs=(id:string)=>[...new Set((checkpoint.phases[id]?.find(phase=>phase.phase==='sync') as import('../../core/cycle').PhaseResult&{pagesAffected?:string[]}|undefined)?.pagesAffected??[])];
     const scopes=()=>sources.map(source=>({sourceId:source.id,slugs:scopeSlugs(source.id)}));
     const groups:Array<{id:MaintenanceStageId;phases:CyclePhase[]}>= [{id:'sync',phases:['sync']},{id:'relations',phases:['extract']},{id:'check',phases:['fence_repair','content_repair']}];
@@ -452,6 +468,7 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
       round.stage=group.id;round.current={completed:previousDone,total:group.id==='sync'?round.scan.incremental??0:scopes().reduce((sum,scope)=>sum+scope.slugs.length,0)};notifyRound();
       let completed=0;
       for(const [index,source] of sources.entries()){
+        if (legacyCompletedReports.has(source.id)) continue;
         abort.signal.throwIfAborted();quickPlan.sourceId=source.id;
         send({type:'progress',scope:{name:source.name,index,total:sources.length}});
         const before=Date.now();
@@ -471,7 +488,7 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
         const extracted=report.phases.find(phase=>phase.phase==='extract');
         if(group.id==='relations'&&extracted&&!previous.has('extract'))extracted.duration_ms=Date.now()-before;
         reports.set(source.id,report);
-        completed+=group.id==='sync'?quickPlan.current.entries.length:group.id==='relations'&&Array.isArray(extracted?.details.relationCompletedSlugs)?extracted.details.relationCompletedSlugs.length:scopeSlugs(source.id).length;
+        completed+=group.id==='sync'?(quickPlan.current?.entries.length??0):group.id==='relations'&&Array.isArray(extracted?.details.relationCompletedSlugs)?extracted.details.relationCompletedSlugs.length:scopeSlugs(source.id).length;
         round.current={completed,total:round.current!.total};
         if(group.id==='relations')round.entities=await rpc('task.quickEntityStats',[scopes()]) as MaintenanceRoundProgress['entities'];
         notifyRound();

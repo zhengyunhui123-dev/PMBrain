@@ -478,8 +478,10 @@ def import_search_journey(page: Page, origin: str, markdown: Path, pdf: Path, ar
         page.wait_for_function(
             """() => {
               if (document.querySelector('.materials-progress')) return false;
-              const cards = [...document.querySelectorAll('.materials-drawer .product-task-progress')];
-              return cards.length === 2 && cards.every(card => !card.classList.contains('task-is-active'));
+              const cards = [...document.querySelectorAll('.materials-drawer .maintenance-round-progress')];
+              return cards.length === 2 && cards.every(card =>
+                card.querySelector('.mpr-summary .product-task-state')?.textContent?.trim() === '导入成功'
+                && card.querySelector('[aria-label="逐份导入结果"]')?.textContent?.includes('成功 1 份 · 跳过 0 份 · 失败 0 份'));
             }""", timeout=240_000,
         )
     except PlaywrightTimeoutError:
@@ -487,18 +489,20 @@ def import_search_journey(page: Page, origin: str, markdown: Path, pdf: Path, ar
             f"url={page.url}\n\n{page.locator('.materials-drawer').inner_text()}", encoding="utf-8",
         )
         raise
-    outcomes = page.locator(".materials-drawer .product-task-progress").evaluate_all(
+    outcomes = page.locator(".materials-drawer .maintenance-round-progress").evaluate_all(
         """cards => cards.map(card => ({
-          status: card.querySelector('.product-task-state')?.textContent,
-          metrics: Object.fromEntries([...card.querySelectorAll('.product-task-metrics > div')]
+          status: card.querySelector('.mpr-summary .product-task-state')?.textContent?.trim(),
+          metrics: Object.fromEntries([...card.querySelectorAll('.mpr-totals > div')]
             .map(metric => [metric.querySelector('dt')?.textContent, metric.querySelector('dd')?.textContent])),
-          error: card.querySelector('.product-task-error')?.textContent,
+          result: card.querySelector('[aria-label="逐份导入结果"]')?.textContent?.replace(/\\s+/g, ' ').trim(),
+          error: card.querySelector('.mpr-error')?.textContent,
         }))"""
     )
     if len(outcomes) != 2 or any(
         outcome.get("status") != "导入成功" or outcome.get("error")
-        or outcome.get("metrics", {}).get("失败文件") != "0"
-        or outcome.get("metrics", {}).get("新增资料") != "1"
+        or outcome.get("metrics", {}).get("资料总数") != "1"
+        or outcome.get("metrics", {}).get("已导入 / 本轮总数") != "1 / 1"
+        or "成功 1 份 · 跳过 0 份 · 失败 0 份" not in (outcome.get("result") or "")
         for outcome in outcomes
     ):
         raise AssertionError(f"Markdown/PDF import was not fully successful: {outcomes}")

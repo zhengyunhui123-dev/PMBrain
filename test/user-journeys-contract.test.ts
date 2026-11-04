@@ -19,9 +19,10 @@ describe('core user journeys cover packaged Desktop openability', () => {
     expect(start).toBeGreaterThanOrEqual(0);
     expect(script).toContain('--packaged');
     expect(script).toContain('win-unpacked');
-    expect(journey).toContain(".materials-drawer .product-task-progress");
+    expect(journey).toContain(".materials-drawer .maintenance-round-progress");
+    expect(journey).toContain(".mpr-summary .product-task-state");
     expect(journey).toContain('outcome.get("status") != "导入成功"');
-    expect(journey).toContain('task-is-active');
+    expect(journey).toContain('成功 1 份 · 跳过 0 份 · 失败 0 份');
     expect(journey).toContain('materials-progress');
     expect(journey).toContain('len(outcomes) != 2');
     expect(script).toContain('desktop-runtime.log');

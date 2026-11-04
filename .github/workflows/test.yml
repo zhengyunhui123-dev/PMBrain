@@ -230,6 +230,7 @@ jobs:
           bun run build:sidecar
           bun run verify:runtime
           bun test ../test/cli-import-exit.serial.test.ts --timeout=120000
+          bun test ../test/load-env-secret-error.test.ts
 
   # ──────────────────────────────────────────────────────────────────────
   test-status:

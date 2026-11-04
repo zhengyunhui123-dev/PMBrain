@@ -692,7 +692,7 @@ test('显式实体摄入校验失败保留原任务继续，不自动开启另�
   invalid = true;
   const quick = await runtime.submitDream({ phase: 'capture_entities', sourceId: 'default',slugs:['input'] });
   const done = await finished(quick.id);
-  expect(done.status).toBe('failed'); expect(done.product?.errorReason).toContain('ingest');
+  expect(done.status, JSON.stringify(done.result)).toBe('failed'); expect(done.product?.errorReason).toContain('ingest');
   expect((await runtime.listRuns()).filter(run => run.kind === 'dream_capture_entities' && run.trigger==='scheduled')).toHaveLength(0);
   const count = calls; await Bun.sleep(350); expect(calls).toBe(count);
   invalid = false;

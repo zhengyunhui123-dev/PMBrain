@@ -8,18 +8,11 @@ import { classifyQuickScanHash, classifyQuickScanStat, loadQuickScanFingerprints
 import { QuickSyncPlan } from '../src/product/tasks/quick-sync-plan';
 import { syncFileCompatibleFingerprints, syncFileContentFingerprint } from '../src/product/tasks/checkpoint';
 import type { SyncFileInput } from '../src/product/tasks/types';
+import { withEnv } from './helpers/with-env';
 
 const home = mkdtempSync(join(tmpdir(), 'pmbrain-quick-scan-'));
-const savedHome = process.env.PMBRAIN_HOME;
-const savedLegacy = process.env.GBRAIN_HOME;
-process.env.PMBRAIN_HOME = home;
-process.env.GBRAIN_HOME = home;
 
 afterAll(() => {
-  if (savedHome === undefined) delete process.env.PMBRAIN_HOME;
-  else process.env.PMBRAIN_HOME = savedHome;
-  if (savedLegacy === undefined) delete process.env.GBRAIN_HOME;
-  else process.env.GBRAIN_HOME = savedLegacy;
   if (resolve(home).startsWith(resolve(tmpdir()) + sep) && home.includes('pmbrain-quick-scan-')) rmSync(home, { recursive: true, force: true });
 });
 
@@ -99,9 +92,7 @@ function sample(path: string, unchanged: boolean): SyncFileInput {
   return { path, relativePath: path, sourceRoot: home, originalSize: 3, originalMtime: 1, hash: unchanged ? 'same' : 'new', fingerprint: 'finger', modelFingerprint: 'model', options: { sourceId: 'default', noEmbed: true } };
 }
 
-test('扫描过程只把清单追加到本地，结束才保存到库；中断后能接着用同一份清单', async () => {
-  process.env.PMBRAIN_HOME = home;
-  process.env.GBRAIN_HOME = home;
+test('扫描过程只把清单追加到本地，结束才保存到库；中断后能接着用同一份清单', async () => withEnv({ PMBRAIN_HOME: home, GBRAIN_HOME: home }, async () => {
   const checkpoint = { phases: {}, reports: {} };
   let saves = 0;
   const plan = new QuickSyncPlan(checkpoint, async () => { saves++; }, () => {}, 7);
@@ -127,4 +118,4 @@ test('扫描过程只把清单追加到本地，结束才保存到库；中断�
   expect(resumed.sources.default.entries.every(file => file.scanValidated)).toBe(true);
   expect(resumed.sources.default.complete).toBe(false);
   expect(saves).toBe(1);
-});
+}));

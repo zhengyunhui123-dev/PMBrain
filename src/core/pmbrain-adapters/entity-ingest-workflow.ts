@@ -304,29 +304,36 @@ export function entityIngestTools(tools:ToolDef[],context:EntityIngestContext):T
       const reference=String(input.slug),colon=reference.indexOf(':');
       const sourceId=colon<0?context.sourceId:reference.slice(0,colon),slug=colon<0?reference:reference.slice(colon+1);
       const [observed]=await ctx.engine.executeRaw<{revision:string}>('SELECT knowledge_revision::text revision FROM pages WHERE slug=$1 AND source_id=$2',[slug,sourceId]);
-      if(name==='put_page'&&observed){
-        const [read]=await ctx.engine.executeRaw<{revision:string}>(`SELECT o->>'ingest_revision' revision FROM
-          (SELECT id,CASE WHEN jsonb_typeof(input)='string' THEN (input #>> '{}')::jsonb ELSE input END i,CASE WHEN jsonb_typeof(output)='string' THEN (output #>> '{}')::jsonb ELSE output END o
-           FROM subagent_tool_executions WHERE job_id=$1 AND tool_name IN ('brain_get_page','brain_put_page') AND status='complete') x
-          WHERE i->>'slug'=ANY($2::text[]) AND COALESCE(o->>'source_id',CASE WHEN strpos(o->>'slug',':')>0 THEN split_part(o->>'slug',':',1) END,CASE WHEN strpos(i->>'slug',':')>0 THEN split_part(i->>'slug',':',1) END,$3)=$4 ORDER BY id DESC LIMIT 1`,[ctx.jobId,[slug,`${sourceId}:${slug}`],context.sourceId,sourceId]);
-        if(read&&read.revision!==observed.revision)throw new UnrecoverableError('ingest revision conflict; read the changed entity before merging');
-      }
-      const writeInput=name==='put_page'?{...input,content:await annotateIngestContent(ctx.engine,context,reference,String(input.content))}:input;
-      let prepared:((engine:BrainEngine)=>Promise<import('../import-file.ts').ImportResult>)|undefined;
-      if(name==='put_page'&&tool.preparesPageImport){
+      let writeInput=name==='put_page'?{...input,content:await annotateIngestContent(ctx.engine,context,reference,String(input.content))}:input;
+      const preparePageImport=async(engine:BrainEngine,value:unknown)=>{
+        if(name!=='put_page'||!tool.preparesPageImport)return undefined;
+        let prepared:((engine:BrainEngine)=>Promise<import('../import-file.ts').ImportResult>)|undefined;
         const ready=new Error('prepared ingest import');
         try{
-          await tool.execute(writeInput,{...ctx,preparePageCommit:async apply=>{prepared=apply;throw ready;}});
+          await tool.execute(value,{...ctx,engine,preparePageCommit:async apply=>{prepared=apply;throw ready;}});
           throw new Error('ingest put_page did not prepare its import');
         }catch(error){if(error!==ready)throw error;}
-      }
+        return prepared;
+      };
+      let prepared=await preparePageImport(ctx.engine,writeInput);
       return ctx.engine.transaction(async tx=>{
+        if(name==='put_page')await tx.executeRaw('SELECT pg_advisory_xact_lock(hashtext($1))',[`entity-ingest:${sourceId}:${slug}`]);
         await tx.executeRaw('SELECT id FROM pages WHERE slug=$1 AND source_id=$2 FOR SHARE',[context.slug,context.sourceId]);
         const original=await tx.getPage(context.slug,{sourceId:context.sourceId});
         if(!original||original.deleted_at||original.compiled_truth!==context.body)throw new UnrecoverableError('ingest source changed before entity write');
         await checkSourceIdentity(tx,context,original.id);
         const [current]=await tx.executeRaw<{revision:string}>('SELECT knowledge_revision::text revision FROM pages WHERE slug=$1 AND source_id=$2 FOR UPDATE',[slug,sourceId]);
-        if(name==='put_page'&&(current?.revision??null)!==(observed?.revision??null))throw new UnrecoverableError('ingest revision conflict; read the changed entity before merging');
+        if(name==='put_page'){
+          const [read]=await tx.executeRaw<{revision:string}>(`SELECT o->>'ingest_revision' revision FROM
+            (SELECT id,CASE WHEN jsonb_typeof(input)='string' THEN (input #>> '{}')::jsonb ELSE input END i,CASE WHEN jsonb_typeof(output)='string' THEN (output #>> '{}')::jsonb ELSE output END o
+             FROM subagent_tool_executions WHERE job_id=$1 AND tool_name IN ('brain_get_page','brain_put_page') AND status='complete') x
+            WHERE i->>'slug'=ANY($2::text[]) AND COALESCE(o->>'source_id',CASE WHEN strpos(o->>'slug',':')>0 THEN split_part(o->>'slug',':',1) END,CASE WHEN strpos(i->>'slug',':')>0 THEN split_part(i->>'slug',':',1) END,$3)=$4 ORDER BY id DESC LIMIT 1`,[ctx.jobId,[slug,`${sourceId}:${slug}`],context.sourceId,sourceId]);
+          if(read&&(read.revision??null)!==(current?.revision??null))throw new UnrecoverableError('ingest revision conflict; read the changed entity before merging');
+          if((current?.revision??null)!==(observed?.revision??null)){
+            writeInput={...input,content:await annotateIngestContent(tx,context,reference,String(input.content))};
+            prepared=await preparePageImport(tx,writeInput);
+          }
+        }
         const [before]=await tx.executeRaw<{id:number}>('SELECT COALESCE(max(id),0)::int id FROM links');
         const output=await tool.execute(writeInput,{...ctx,engine:tx,preparedPageImport:prepared});
         const [after]=await tx.executeRaw<{n:number}>('SELECT count(*)::int n FROM links WHERE id>$1',[before?.id??0]);

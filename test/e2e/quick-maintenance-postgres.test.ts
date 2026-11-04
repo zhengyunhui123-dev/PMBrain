@@ -67,8 +67,7 @@ describeIfDB('Postgres Quick Maintenance — stale Source local_path', () => {
       expect(report.status).not.toBe('failed');
       expect(report.phases.find(item => item.phase === 'sync')?.details?.reason).toBe('no_brain_dir');
       expect(report.phases.find(item => item.phase === 'extract')?.details?.by_mention).toBe(true);
-      expect(report.phases.find(item => item.phase === 'resolve_symbol_edges')?.details?.sources_walked).toBe(1);
-      expect(report.phases.find(item => item.phase === 'orphans')?.details?.total_pages).toBe(1);
+      expect(report.phases.map(item => item.phase)).toEqual(['sync', 'fence_repair', 'content_repair', 'extract']);
     } finally {
       exitSpy.mockRestore();
       logSpy.mockRestore();

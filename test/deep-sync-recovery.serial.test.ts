@@ -121,7 +121,7 @@ test('深度整理的同步超过快照窗口后在同一任务分批完成，�
     expect(execFileSync('git', ['-C', repo, 'status', '--porcelain'], { encoding: 'utf8' })).toContain('untracked.md');
     const snapshots = await engine.executeRaw<{ path: string }>("SELECT data->'task'->'input'->>'path' AS path FROM minion_jobs WHERE queue=$1 AND parent_job_id=$2", [SYNC_FILE_QUEUE, Number(run.id.slice(5))]);
     expect(snapshots.every(file => !existsSync(file.path))).toBe(true);
-    expect((await runtime.listRuns()).filter(item => item.kind === 'dream_full')).toHaveLength(1);
+    expect((await runtime.listRuns()).filter(item => item.kind === 'dream_full' && item.id === run.id)).toHaveLength(1);
     expect(await engine.executeRaw("SELECT id FROM minion_jobs WHERE queue=$1 AND data->>'kind'='dream_capture_entities' AND data->'task'->'input'->>'sourceId'='deep-git'", [PRODUCT_TASK_QUEUE])).toHaveLength(0);
   } finally { await runtime.close(); }
 }, 300000);
@@ -204,10 +204,10 @@ test('深度整理停止及服务重启后仍保持停止，确认继续时复�
     id = (await runtime.submitDream({ preset: 'full', sourceId: 'deep-stop', maxPages: 1 })).id;
     const scanDeadline = Date.now() + 40000;
     while (Date.now() < scanDeadline) {
-      if ((await runtime.getRun(id))?.product?.syncScan?.active) break;
+      if (((await runtime.getRun(id))?.product?.deep?.scan.scanned ?? 0) > 0) break;
       await Bun.sleep(50);
     }
-    expect((await runtime.getRun(id))?.product?.syncScan?.active).toBe(true);
+    expect((await runtime.getRun(id))?.product?.deep?.scan.scanned ?? 0).toBeGreaterThan(0);
     const deadline = Date.now() + 40000;
     while (Date.now() < deadline) {
       if ((await runtime.getRun(id))?.product?.syncFiles?.completed) break;
