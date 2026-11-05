@@ -19,6 +19,7 @@ test('数据库等待、模型错误、预算停止和用户取消有稳定分�
   expect(taskErrorReason('任务已停止')).toBe('已由你停止。已完成的结果保留，可以继续未完成部分。');
   expect(taskErrorReason('Error: 任务已停止')).toBe('已由你停止。已完成的结果保留，可以继续未完成部分。');
   expect(taskErrorReason('原整理任务已停止，未提交后台识图')).toBe('原整理任务已停止，未提交后台识图');
+  expect(taskErrorReason('提炼事实失败：new row violates check constraint "facts_kind_check"')).toBe('提炼事实失败：new row violates check constraint "facts_kind_check"');
   expect(contextFailure(new Error('任务已停止')).code).toBe('user_cancel');
   expect(contextFailure(new Error('fetch failed: timed out')).code).toBe('model_request_timeout');
 });

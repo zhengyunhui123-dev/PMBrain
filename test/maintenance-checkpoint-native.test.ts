@@ -34,6 +34,7 @@ test('retry preserves informational warnings but reruns errors and incomplete st
   for(const details of [{ner_error:'temporary error'},{by_mention_error:'temporary error'},{relation_backfill_error:'temporary error'},{pages_remaining:2}]){
     const extract:PhaseResult={phase:'extract',status:'warn',summary:'未完成',duration_ms:1,details};
     if(!('pages_remaining' in details))expect(maintenanceFailure({status:'partial',phases:[lint,sync,extract]})).toBe('实体摄入失败：temporary error');
+    expect(maintenanceFailure({status:'failed',phases:[{phase:'extract_facts',status:'fail',error:{message:'new row for relation "facts" violates check constraint "facts_kind_check"'}}]})).toBe('提炼事实失败：new row for relation "facts" violates check constraint "facts_kind_check"');
     expect(maintenanceFailure({status:'partial',phases:[lint,sync]})).toBeNull();
     const checkpoint:MaintenanceCheckpoint={phases:{one:[lint,sync,extract]},reports:{one:{status:'partial'}}};
     resumeMaintenanceCheckpoint(checkpoint,true,true);

@@ -25,6 +25,7 @@ function group(phase: string): string {
 
 export function taskErrorReason(error: string | null | undefined): string | null {
   if (!error) return null;
+  if (error.startsWith('提炼事实失败')) return error.slice(0, 500);
   if (/ENOENT|no such file/i.test(error)) return '找不到资料文件，请检查路径后重试。';
   if (/too large/i.test(error)) return '资料超过支持的大小，请拆分后重试。';
   if (/因休眠中断/.test(error)) return '因休眠中断，点继续';
@@ -334,7 +335,9 @@ export function finishTaskProgress(view: TaskProductProgress, status: string, re
       ));
       next.errorReason = failure?.details?.stop_reason === 'model_unavailable'
         ? '实体识别模型不可用'
-        : taskErrorReason(failure?.error?.message) ?? `${failed.label}未完成，请查看技术日志。`;
+        : failure?.phase === 'extract_facts' && failure?.error?.message
+          ? `提炼事实失败：${failure.error.message}`
+          : taskErrorReason(failure?.error?.message) ?? `${failed.label}未完成，请查看技术日志。`;
     }
     if (Array.isArray(data.phases) && data.phases.some((phase: any) => phase.details?.dryRun === true)) {
       next.stage = '预览完成，未写入知识库';
@@ -353,7 +356,7 @@ export function finishTaskProgress(view: TaskProductProgress, status: string, re
     next.errorReason = status === 'failed' ? taskErrorReason(error) : null;
     if (status === 'failed') {
       const failed = data.phases?.find((phase: any) => phase.error?.message);
-      if (failed?.error?.message) next.errorReason = failed.error.message;
+      if (failed?.error?.message) next.errorReason = failed.phase === 'extract_facts' ? `提炼事实失败：${failed.error.message}` : failed.error.message;
       next.stage = '任务未完成';
     } else if (next.name === '知识向量化' || next.name === '向量化') {
       next.stage = '已暂停，已完成的部分保留';

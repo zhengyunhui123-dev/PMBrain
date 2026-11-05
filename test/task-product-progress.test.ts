@@ -231,6 +231,8 @@ describe('任务的产品进度', () => {
     const partial = finishTaskProgress(adapter.view, 'completed', { status: 'partial', phases: [{ phase: 'lint', status: 'ok' }, { phase: 'sync', status: 'fail' }] }, null);
     expect(partial.stage).toContain('部分完成');
     expect(partial.errorReason).toContain('同步资料');
+    const factFailure = finishTaskProgress(adapter.view, 'failed', { phases: [{ phase: 'extract_facts', status: 'fail', error: { message: 'new row violates check constraint "facts_kind_check"' } }] }, '提炼事实失败：new row violates check constraint "facts_kind_check"');
+    expect(factFailure.errorReason).toBe('提炼事实失败：new row violates check constraint "facts_kind_check"');
     expect(partial.steps.find(step => step.id === 'embed')?.status).toBe('skipped');
     const modelFailure = finishTaskProgress(adapter.view, 'completed', { status: 'partial', phases: [{ phase: 'sync', status: 'fail', error: { message: 'fetch failed' } }] }, null);
     expect(modelFailure.errorReason).toContain('模型调用失败');
