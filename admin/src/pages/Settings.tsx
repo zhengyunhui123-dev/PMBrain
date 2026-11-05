@@ -112,7 +112,7 @@ function DreamSettings() {
   const [timeoutMinutes,setTimeoutMinutes]=useState('');
   const [message,setMessage]=useState('');
   const [error,setError]=useState('');
-  type ToggleKey='knowledgeEnabled'|'knowledgeUseOrdinaryModel'|'entityCaptureEnabled'|'enrichThinEnabled'|'fenceRepairEnabled'|'edgeContradictionsEnabled'|'dualWrite'|'autoGitCommit';
+  type ToggleKey='knowledgeEnabled'|'knowledgeUseOrdinaryModel'|'entityCaptureEnabled'|'enrichThinEnabled'|'fenceRepairEnabled'|'edgeContradictionsEnabled'|'dualWrite'|'autoGitCommit'|'imageOcrEnabled';
 
   useEffect(()=>{
     void api.dreamSettings().then(value=>{
@@ -192,6 +192,10 @@ function DreamSettings() {
       {toggleRow('edgeContradictionsEnabled','dream-edge-contradictions','检查关系矛盾','发现同一主体互相冲突的关系后只记下待确认项，不自动改页面或已有关系。')}
       {toggleRow('dualWrite','dream-dual-write','写入本地 Markdown','对话综合和模式发现同时写入数据库和本地文件。知识点与概念保存在知识库中，可搜索并查看来源关联。')}
       {toggleRow('autoGitCommit','sync-auto-git-commit','快速维护时自动 Git 提交','将成功同步的文件变更保存为本地版本记录，不推送远端；普通文件夹无需 Git。')}
+      <label className="dream-dual-write-setting" htmlFor="dream-image-ocr">
+        <span className="dream-toggle-copy"><b>图片识别</b><small>默认关闭。开启后，深度整理才会把图片送去识别，并受张数和费用上限约束。文本资料的同步不依赖这个开关。</small></span>
+        <span className="dream-toggle-control"><small>{savingKey==='imageOcrEnabled'?'正在保存…':settings.imageOcrEnabled?'已开启':'已关闭'}</small><input id="dream-image-ocr" className="settings-switch" type="checkbox" role="switch" aria-label="图片识别" checked={settings.imageOcrEnabled===true} disabled={loading||saving} onChange={event=>toggle('imageOcrEnabled',event.target.checked)}/></span>
+      </label>
     </div>
     <div className="dream-output-setting">
       <h3>固定问题</h3>
@@ -222,8 +226,14 @@ function DreamSettings() {
         <h3>任务运行时间</h3>
         <label htmlFor="dream-timeout-minutes">单次执行上限（分钟）</label>
         <input id="dream-timeout-minutes" type="number" min="1" value={timeoutMinutes} disabled={loading||saving} onChange={event=>setTimeoutMinutes(event.target.value)} placeholder={settings.effectiveTimeoutMs?String(settings.effectiveTimeoutMs/60000):''}/>
-        <p className="pm-hint">当前生效上限：{persisted.effectiveTimeoutMs?persisted.effectiveTimeoutMs/60000:'—'} 分钟。留空保存可恢复默认，新任务按此执行；继续旧任务保留原上限。这不是自动整理的执行间隔。</p>
+        <p className="pm-hint">当前生效上限：{persisted.effectiveTimeoutMs?persisted.effectiveTimeoutMs/60000:'—'} 分钟。留空保存可恢复默认。这个上限用于快速维护和其他整理任务，不限制 AI 深度整理。继续旧任务保留原上限。这不是自动整理的执行间隔。</p>
         <button className="pm-primary dream-local-save" onClick={saveTimeout} disabled={loading||saving||!timeoutDirty}>保存执行上限</button>
+        <label htmlFor="dream-image-ocr-max">图片识别张数上限</label>
+        <input id="dream-image-ocr-max" type="number" min="1" step="1" value={settings.imageOcrMaxImages??20} disabled={loading||saving} onChange={event=>setSettings(current=>({...current,imageOcrMaxImages:Number(event.target.value)}))}/>
+        <label htmlFor="dream-image-ocr-cost">图片识别费用上限（元）</label>
+        <input id="dream-image-ocr-cost" type="number" min="0.01" step="0.1" value={settings.imageOcrCostCapCny??2} disabled={loading||saving} onChange={event=>setSettings(current=>({...current,imageOcrCostCapCny:Number(event.target.value)}))}/>
+        <p className="pm-hint">只在单独开启图片识别后生效。达到张数或费用上限后，不再把新的图片放进识别队列。</p>
+        <button className="pm-primary dream-local-save" onClick={()=>void savePatch({imageOcrMaxImages:settings.imageOcrMaxImages??20,imageOcrCostCapCny:settings.imageOcrCostCapCny??2},'图片识别上限已保存')} disabled={loading||saving||((settings.imageOcrMaxImages??20)===(persisted.imageOcrMaxImages??20)&&(settings.imageOcrCostCapCny??2)===(persisted.imageOcrCostCapCny??2))}>保存图片上限</button>
       </div>
       <div className="dream-output-setting dream-output-directory">
         <h3>本地文件保存位置</h3>

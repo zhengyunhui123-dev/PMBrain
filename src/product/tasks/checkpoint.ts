@@ -52,8 +52,10 @@ export function syncFileContentFingerprint(options:SyncFileOptions):string {
 }
 
 export function syncFileCompatibleFingerprints(options: SyncFileOptions, path: string): string[] {
-  const variants = options.documentOcr && (isOfficeFilePath(path) || isImageFilePath(path)) ? [true] : [true, false];
-  return [...new Set(variants.map(documentOcr => syncFileContentFingerprint({ ...options, documentOcr })))];
+  const image = isImageFilePath(path);
+  const documentOcrVariants = options.documentOcr && (isOfficeFilePath(path) || image) ? [true] : [true, false];
+  const includeImagesVariants = image ? [options.includeImages === true] : [true, false];
+  return [...new Set(documentOcrVariants.flatMap(documentOcr => includeImagesVariants.map(includeImages => syncFileContentFingerprint({ ...options, documentOcr, includeImages }))))];
 }
 
 export function taskModelFingerprint(): string {

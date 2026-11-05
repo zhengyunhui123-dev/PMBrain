@@ -533,7 +533,7 @@ export async function ingestFinalPrompt(engine:BrainEngine,jobId:number,data:Sub
 
 export function ingestAbortKind(signal:AbortSignal):'timeout'|'service_shutdown'|'user_stop'|'aborted'{
   const reason=signal.reason instanceof Error?`${signal.reason.name}: ${signal.reason.message}`:String(signal.reason??'');
-  if(/timeout|timed out|超时/i.test(reason))return 'timeout';
+  if(/timeout|timed out|超时|小时上限/i.test(reason))return 'timeout';
   if(/shutdown|service.*stop|服务关闭/i.test(reason))return 'service_shutdown';
   if(/cancel|user.*stop|取消|用户停止/i.test(reason))return 'user_stop';
   return 'aborted';

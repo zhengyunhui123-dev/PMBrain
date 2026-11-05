@@ -36,7 +36,7 @@ export function DeepOrganizeProgress({ run, link = true }: { run: ConsoleRun; li
   const row = (stage: typeof DEEP_ORGANIZE_STAGES[number]) => {
     const saved = round.stages.find(item => item.id === stage.id);
     const current = round.stage === stage.id && active(run);
-    const state = saved ? saved.status === 'failed' ? '未完成' : saved.status === 'partial' ? '部分完成' : saved.status === 'skipped' ? '无需处理' : '已完成' : current ? '进行中' : '待执行';
+    const state = saved ? saved.status === 'failed' ? '未完成' : saved.status === 'partial' ? '部分完成' : saved.status === 'skipped' ? '跳过' : '已完成' : current ? '进行中' : '待执行';
     return <div key={stage.id} className={`mpr-result-row deep${current ? ' is-current' : ''}`}><strong>{stage.title}<small>{state}</small></strong><span>{saved?.result ?? (current ? syncResult ?? round.current?.result ?? stage.detail : '—')}<small>{saved?.detail ?? (current ? stage.detail : '')}</small></span><time>{saved ? elapsedText(saved.durationMs) : current && round.current?.startedAt ? elapsedText(Math.max(0, now - Date.parse(round.current.startedAt))) : '—'}{saved?.costCny != null && <small>{yuan(saved.costCny)}</small>}</time></div>;
   };
   return <section className="maintenance-round-progress" aria-label="AI 深度整理进度">
@@ -45,7 +45,8 @@ export function DeepOrganizeProgress({ run, link = true }: { run: ConsoleRun; li
       {totals.unclassifiedKnowledge > 0 && <p className="mpr-note">历史记录另有 {totals.unclassifiedKnowledge} 个知识点，未区分新建与维护。</p>}
       <div className="mpr-progress-label"><span>深度整理整体进度 · {new Set(round.stages.map(stage => stage.id)).size} / {DEEP_ORGANIZE_STAGES.length} 个阶段已记录</span><b>{percent}%</b></div>
       <div className="mpr-overall" role="progressbar" aria-label="深度整理整体进度" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}><i style={{ width: `${percent}%` }} /></div>
-      <p className="mpr-note">阶段完成后保存记录并计入总计。整理符合条件的新增、变更资料，也补做此前待处理的资料。</p>
+      <p className="mpr-note">阶段完成后保存记录并计入总计。只整理本轮新增或变更的资料，以及被这些资料牵连到的页面。没有新资料的步骤会显示跳过。</p>
+      {round.log && round.log.length > 0 && <ol className="mpr-note" aria-label="阶段日志">{round.log.slice(-8).map((entry, index) => <li key={`${entry.at}:${entry.stage}:${entry.event}:${index}`}>{entry.event === 'start' ? '开始' : '结束'} {DEEP_ORGANIZE_STAGES.find(stage => stage.id === entry.stage)?.title ?? entry.stage}{entry.event === 'finish' && entry.durationMs != null ? ` · ${elapsedText(entry.durationMs)}` : ''}{entry.result ? ` · ${entry.result}` : ''}</li>)}</ol>}
       {budget && <p className="mpr-note">本次费用 {yuan(budget.spentCny)} / {yuan(budget.capCny)}{budget.reason ? ` · ${budget.reason}` : ''}</p>}
       <ol className="mpr-steps deep">{DEEP_ORGANIZE_STAGES.map((stage, index) => {
         const saved = round.stages.find(item => item.id === stage.id);

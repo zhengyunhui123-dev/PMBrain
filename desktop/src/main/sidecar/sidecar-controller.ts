@@ -45,6 +45,7 @@ export class SidecarController {
   private startupPromise: Promise<void> | null = null;
   private retryPromise: Promise<string> | null = null;
   private readyPromise: Promise<SidecarManager> | null = null;
+  private sleepBound = false;
 
   constructor(private readonly dependencies: SidecarControllerDependencies) {}
 
@@ -177,6 +178,7 @@ export class SidecarController {
         },
       });
       this.manager = manager;
+      this.bindSleep();
       await manager.start();
       if (this.manager !== manager) {
         await manager.stop();
@@ -225,6 +227,22 @@ export class SidecarController {
     } finally {
       if (this.startupPromise === pending) this.startupPromise = null;
     }
+  }
+
+  private bindSleep(): void {
+    if (this.sleepBound) return;
+    this.sleepBound = true;
+    const notify = (action: 'suspend' | 'resume') => {
+      const current = this.manager;
+      if (!current) return;
+      void current.adminRequest('/admin/api/console/sleep', {
+        method: 'POST',
+        body: JSON.stringify({ action }),
+        signal: AbortSignal.timeout(5000),
+      }).catch(error => this.dependencies.getLogger()?.write('desktop', `休眠${action === 'suspend' ? '暂停' : '继续'}未完成：${error instanceof Error ? error.message : String(error)}`));
+    };
+    powerMonitor.on('suspend', () => notify('suspend'));
+    powerMonitor.on('resume', () => notify('resume'));
   }
 
   private async stopNow(): Promise<void> {

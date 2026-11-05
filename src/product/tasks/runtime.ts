@@ -15,7 +15,8 @@ import { TaskEngineHost } from './engine-host.ts';
 import type { DreamTaskInput, ImportTaskInput, ProductTask, TaskWorkerMessage } from './types.ts';
 import { removeAdminUploadTempDir } from '../../commands/pmbrain-admin-support.ts';
 import { appendTaskCheckpoint, taskArtifactPath, resumeMaintenanceCheckpoint, retireAutomaticCapture, setMaintenanceCheckpoint } from './checkpoint.ts';
-import { DEFAULT_PRODUCT_TASK_TIMEOUT_MS, DREAM_TASK_TIMEOUT_KEY, parseTaskTimeout } from './timeout.ts';
+import { DEFAULT_PRODUCT_TASK_TIMEOUT_MS, DREAM_TASK_TIMEOUT_KEY, SLEEP_INTERRUPT_REASON, isUnboundedDeepOrganize, parseTaskTimeout } from './timeout.ts';
+import { IMAGE_BACKLOG_REASON } from '../../core/pmbrain-adapters/image-ocr-policy.ts';
 import { FileProjection } from './file-projection.ts';
 import { WorkerPgliteEngine } from '../database/worker-engine.ts';
 import { TaskProgressAdapter, finishTaskProgress,applyTaskBudget } from './progress-adapter.ts';
@@ -244,6 +245,7 @@ export class ProductTaskRuntime {
     await this.listRuns();
     for (const run of this.cached.filter(run=>taskUsesFileQueue(run.kind))) await this.fileProjection.load(Number(run.id.slice(5)));
     await this.hydrateFiles(this.cached.filter(run=>taskUsesFileQueue(run.kind)).map(run=>Number(run.id.slice(5))));
+    await this.clearImageBacklog();
     this.fileLoop = withDatabasePriority(2, () => this.fileWorker.start()).catch(error => { this.failure = error instanceof Error ? error : new Error(String(error)); console.error('[tasks] file worker stopped:', error); });
     this.loop = withDatabasePriority(3, () => this.worker.start()).catch(error => {
       this.failure = error instanceof Error ? error : new Error(String(error));
@@ -261,9 +263,11 @@ export class ProductTaskRuntime {
     if (this.stopped || this.paused) throw new Error('数据库维护期间暂不能提交新任务');
     await this.resources.assertImportDisk();
     const initialVectorTotals=task.type==='embed'&&task.input.quickVector?(await QuickVectorProgress.load(this.engine,task.input.sourceId??'default',task.input.slugs??[],Math.max(1,Math.min(1800000,task.input.windowMs??1800000)))).snapshot():undefined;
-    const job = await queue.add(TASK_NAME, { task, kind, trigger, relations: {}, ...(initialVectorTotals?{initialVectorTotals}:{}),fileSession: task.type === 'dream' && usesSyncFileQueue(task.input) }, {
+    const unbounded = task.type === 'dream' && isUnboundedDeepOrganize(task.input);
+    if (unbounded && task.type === 'dream') delete task.input.timeoutMs;
+    const job = await queue.add(TASK_NAME, { task, kind, trigger, relations: {}, ...(unbounded ? { unboundedRuntime: true } : {}), ...(initialVectorTotals?{initialVectorTotals}:{}),fileSession: task.type === 'dream' && usesSyncFileQueue(task.input) }, {
       queue: PRODUCT_TASK_QUEUE, max_attempts: 1, maxQueueSize: PRODUCT_QUEUE_CAPACITY,
-      timeout_ms: task.input.timeoutMs ?? DEFAULT_PRODUCT_TASK_TIMEOUT_MS,
+      timeout_ms: unbounded ? undefined : task.input.timeoutMs ?? DEFAULT_PRODUCT_TASK_TIMEOUT_MS,
       idempotency_key: idempotencyKey ?? `product:${randomUUID()}`,
     });
     const run = toRun(job);
@@ -291,13 +295,19 @@ export class ProductTaskRuntime {
   }
 
   async submitDream(input: DreamTaskInput, trigger: 'manual' | 'scheduled' = 'manual'): Promise<ConsoleRun> {
-    if (input.timeoutMs !== undefined && parseTaskTimeout(input.timeoutMs) === null) throw new Error('任务超时必须是有效的正整数毫秒数');
-    input = { ...input, incrementalIngest:true, timeoutMs: input.timeoutMs ?? parseTaskTimeout(await this.engine.getConfig(DREAM_TASK_TIMEOUT_KEY)) ?? DEFAULT_PRODUCT_TASK_TIMEOUT_MS };
+    const unbounded = isUnboundedDeepOrganize(input);
+    if (!unbounded && input.timeoutMs !== undefined && parseTaskTimeout(input.timeoutMs) === null) throw new Error('任务超时必须是有效的正整数毫秒数');
+    if (unbounded) {
+      const { timeoutMs: _ignored, ...rest } = input;
+      input = { ...rest, incrementalIngest: true };
+    } else {
+      input = { ...input, incrementalIngest:true, timeoutMs: input.timeoutMs ?? parseTaskTimeout(await this.engine.getConfig(DREAM_TASK_TIMEOUT_KEY)) ?? DEFAULT_PRODUCT_TASK_TIMEOUT_MS };
+    }
     if (input.phase && input.preset) throw new Error('Dream phase and preset are mutually exclusive');
     if (input.phase && input.phase !== 'all' && !(ALL_PHASES as readonly string[]).includes(input.phase)) throw new Error(`Unsupported dream phase: ${input.phase}`);
     if (input.allSources && (input.sourceId || input.preset !== 'quick')) throw new Error('Dream allSources requires quick preset without sourceId');
     if (input.drainProposals && input.phase !== 'propose_takes') throw new Error('Dream proposal draining requires standalone propose_takes');
-    for (const value of [input.maxPages, input.windowSeconds, input.timeoutMs]) {
+    for (const value of [input.maxPages, input.windowSeconds, ...(unbounded ? [] : [input.timeoutMs])]) {
       if (value !== undefined && (!Number.isFinite(value) || value <= 0)) throw new Error('任务页数、窗口和超时必须为正数');
     }
     if (input.preset !== 'quick') {
@@ -546,12 +556,20 @@ export class ProductTaskRuntime {
   private async vectorizationDecision(maintenanceId?:number,allowOcrPeers=false): Promise<VectorizationSchedule> {
     const decision = this.background.decision(this.foregroundCheck?.() === true, this.localPressure || this.externalPressure);
     if (decision.mode === 'waiting') return decision;
+    const deepOrganize = `data->'task'->>'type'='dream' AND data->'task'->'input'->>'preset'='full' AND data->'task'->'input'->>'dryRun' IS DISTINCT FROM 'true' AND COALESCE(data->>'vectorizationWait','') IS DISTINCT FROM 'true'`;
     const busy = await this.engine.executeRaw(`SELECT id FROM minion_jobs WHERE queue IN ($1,$2)
-      AND status IN ('waiting','active','waiting-children')
       AND data->'task'->>'type' IN ('import','sync','sync-file','dream','assistant')
       AND (data->'task'->'input'->'ocrOnly' IS NULL OR (status='active' AND NOT $4::boolean))
-      AND data->>'waitingForOcr' IS DISTINCT FROM 'true'
-      AND ($3::bigint IS NULL OR (id<>$3 AND (data->'task'->>'type'<>'dream' OR id<$3))) LIMIT 1`, [PRODUCT_TASK_QUEUE, SYNC_FILE_QUEUE,maintenanceId??null,allowOcrPeers]);
+      AND ($3::bigint IS NULL OR id<>$3)
+      AND ((
+        status IN ('waiting','active','waiting-children')
+        AND data->>'waitingForOcr' IS DISTINCT FROM 'true'
+        AND (data->'task'->>'type'<>'dream' OR $3::bigint IS NULL OR id<$3)
+      ) OR (
+        ${deepOrganize}
+        AND status IN ('waiting','active','waiting-children','delayed')
+        AND NOT ($4::boolean AND (data->>'waitingForOcr'='true' OR status='delayed'))
+      )) LIMIT 1`, [PRODUCT_TASK_QUEUE, SYNC_FILE_QUEUE,maintenanceId??null,allowOcrPeers]);
     return this.background.decision(busy.length > 0, this.localPressure || this.externalPressure);
   }
 
@@ -756,6 +774,8 @@ export class ProductTaskRuntime {
       await this.reconcileMaintenanceChildren(jobId);
       const checkpoint = task.input.checkpoint;
       if(task.input.preset==='quick'&&checkpoint?.quickSync)task.input.refreshPendingSync=true;
+      const unboundedResume = isUnboundedDeepOrganize(task.input);
+      if (unboundedResume) { delete task.input.timeoutMs; record!.data.unboundedRuntime = true; delete record!.data.sleepPaused; }
       delete record!.data.resourceStopReason;
       const progress=(record!.progress??{}) as Progress;
       delete progress.result;
@@ -778,6 +798,7 @@ export class ProductTaskRuntime {
       }
       await this.clearStopIntent(jobId);
       await this.fileQueue.resume(jobId);
+      if (unboundedResume) await this.engine.executeRaw(`UPDATE minion_jobs SET timeout_ms=NULL, timeout_at=NULL, data=CASE WHEN id=$1 THEN data ELSE jsonb_set(data,'{unboundedRuntime}','true'::jsonb) END WHERE id=$1 OR (queue=$2 AND parent_job_id=$1 AND name=$3)`, [jobId, SYNC_FILE_QUEUE, SYNC_FILE_TASK]);
       return this.getRun(id);
     }
     if (task.type !== 'sync-file') {
@@ -788,17 +809,59 @@ export class ProductTaskRuntime {
       const progress = (record!.progress ?? {}) as Progress;
       delete progress.result;
       if (progress.product) progress.product.errorReason = null;
+      const unboundedResume = task.type === 'dream' && isUnboundedDeepOrganize(task.input);
+      if (unboundedResume) { delete task.input.timeoutMs; record!.data.unboundedRuntime = true; delete record!.data.sleepPaused; }
       delete record!.data.resourceStopReason;
       record!.data.authorizedAttempt = record!.attempts_started + 1;
       await this.clearStopIntent(resumedId);
       const updated = await this.engine.executeRaw(`UPDATE minion_jobs SET status='waiting',result=NULL,error_text=NULL,lock_token=NULL,lock_until=NULL,delay_until=NULL,finished_at=NULL,
         data=(data-'resourceStopReason') || ($2::jsonb - 'relations' - 'gitFiles' - 'gitResults' - 'taskBudget'),progress=$3::jsonb,updated_at=now()
         WHERE id=$1 AND queue=$4 AND status IN ('paused','cancelled','failed','dead','completed') RETURNING id`, [resumedId, record!.data, progress,record!.queue]);
+      if (unboundedResume && updated.length) await this.engine.executeRaw(`UPDATE minion_jobs SET timeout_ms=NULL, timeout_at=NULL WHERE id=$1`, [resumedId]);
       const current = await this.getRun(id);
       if (current && updated.length) return { ...current, status: 'queued' };
       return current;
     }
     throw new Error('文件任务请通过快速维护继续');
+  }
+
+  async pauseForSleep(): Promise<number> {
+    const rows = await this.engine.executeRaw<{ id: number }>(`UPDATE minion_jobs SET status='paused', lock_token=NULL, lock_until=NULL, timeout_at=NULL,
+      error_text=$2, data=jsonb_set(COALESCE(data,'{}'::jsonb), '{sleepPaused}', 'true'::jsonb), updated_at=now()
+      WHERE queue=$1 AND data->'task'->>'type'='dream' AND data->'task'->'input'->>'preset'='full'
+        AND status IN ('active','waiting','waiting-children','delayed')
+      RETURNING id`, [PRODUCT_TASK_QUEUE, SLEEP_INTERRUPT_REASON]);
+    const ids = rows.map(row => row.id);
+    if (!ids.length) return 0;
+    await this.engine.executeRaw(`UPDATE minion_jobs SET status='paused', lock_token=NULL, lock_until=NULL, timeout_at=NULL, error_text=$2, updated_at=now()
+      WHERE parent_job_id = ANY($1::int[]) AND status IN ('waiting','active','delayed','waiting-children')`, [ids, SLEEP_INTERRUPT_REASON]);
+    for (const id of ids) {
+      this.cancelTracked(id, SLEEP_INTERRUPT_REASON);
+      for (const [child, owner] of this.fileSessions) if (owner === id) this.cancelTracked(child, SLEEP_INTERRUPT_REASON);
+      const view = this.sessionViews.get(id);
+      if (view) this.sessionViews.set(id, { ...view, status: 'failed', error: SLEEP_INTERRUPT_REASON });
+    }
+    return ids.length;
+  }
+
+  async resumeAfterSleep(): Promise<number> {
+    const rows = await this.engine.executeRaw<{ id: number }>(`SELECT id FROM minion_jobs WHERE queue=$1 AND status='paused' AND data->>'sleepPaused'='true'`, [PRODUCT_TASK_QUEUE]);
+    let resumed = 0;
+    for (const row of rows) {
+      try { if (await this.retry(`task-${row.id}`)) resumed++; }
+      catch (error) { console.error('[tasks] sleep resume:', error instanceof Error ? error.message : error); }
+    }
+    return resumed;
+  }
+
+  private async clearImageBacklog(): Promise<void> {
+    const imageSuffix = (expr: string) => ['png', 'jpg', 'jpeg', 'gif', 'webp', 'heic', 'heif', 'avif'].map(ext => `lower(${expr}) LIKE '%.${ext}'`).join(' OR ');
+    const syncPath = imageSuffix(`COALESCE(data->'task'->'input'->>'relativePath','')`);
+    const ocrPath = imageSuffix(`COALESCE(data->'task'->'input'->'ocrOnly'->>'relativePath', data->'task'->'input'->>'relativePath','')`);
+    const parents = await this.engine.executeRaw<{ parent_job_id: number | null }>(`UPDATE minion_jobs SET status='cancelled', error_text=$1, lock_token=NULL, lock_until=NULL, finished_at=now(), updated_at=now()
+      WHERE status IN ('waiting','delayed','paused') AND queue=$2 AND ((name=$3 AND (COALESCE(data->'task'->'input'->'ocrOnly'->>'image','')='true' OR ${ocrPath})) OR (name=$4 AND ${syncPath}))
+      RETURNING parent_job_id`, [IMAGE_BACKLOG_REASON, SYNC_FILE_QUEUE, DOCUMENT_OCR_TASK, SYNC_FILE_TASK]);
+    for (const id of new Set(parents.map(row => row.parent_job_id).filter((value): value is number => value !== null))) await this.queue.resolveParent(id);
   }
 
   private async execute(context: MinionJobContext, quickTimeoutOwner?: number): Promise<unknown> {
@@ -810,8 +873,21 @@ export class ProductTaskRuntime {
     const record = await this.queue.getJob(context.id);
     if (!record?.lock_token) throw new Error('任务执行租约无效');
     const structuredTask = record.data.task as ProductTask;
+    if (structuredTask.type === 'dream' && structuredTask.input.preset === 'full' && structuredTask.input.dryRun !== true && record.data.vectorizationWait === true) {
+      record.data.vectorizationWait = false;
+      await this.engine.executeRaw(`UPDATE minion_jobs SET data=jsonb_set(data,'{vectorizationWait}','false'::jsonb) WHERE id=$1 AND lock_token=$2`, [context.id, record.lock_token]);
+    }
     const backgroundOcr=structuredTask.type==='import'&&!!structuredTask.input.ocrOnly;
-    if(backgroundOcr){const schedule=await this.vectorizationDecision(context.id,true);if(schedule.mode==='waiting')return this.deferMaintenance(record,`资料已保存，图片识别${schedule.reason}`,Math.max(1000,schedule.delayMs));}
+    if(structuredTask.type==='import'&&structuredTask.input.ocrOnly){
+      const ownerId=structuredTask.input.ocrOnly.maintenanceOwnerId;
+      const deepRunning=await this.engine.executeRaw<{id:number}>(`SELECT id FROM minion_jobs WHERE queue=$1 AND data->'task'->>'type'='dream' AND data->'task'->'input'->>'preset'='full' AND data->'task'->'input'->>'dryRun' IS DISTINCT FROM 'true' AND status IN ('active','waiting','waiting-children')`,[PRODUCT_TASK_QUEUE]);
+      const runningIds=deepRunning.map(row=>String(row.id));
+      if(runningIds.length&&!runningIds.includes(String(ownerId??''))){
+        await this.engine.executeRaw(`UPDATE minion_jobs SET status='delayed', delay_until=now()+interval '60 seconds', lock_token=NULL, lock_until=NULL, updated_at=now() WHERE queue=$1 AND name=$2 AND id<>$3 AND status IN ('waiting','delayed') AND COALESCE(data->'task'->'input'->'ocrOnly'->>'maintenanceOwnerId','') <> ALL($4::text[])`,[DOCUMENT_OCR_QUEUE,DOCUMENT_OCR_TASK,context.id,runningIds]);
+        return this.deferMaintenance(record,'资料已保存，深度整理进行中，图片识别稍后进行',60_000);
+      }
+      const schedule=await this.vectorizationDecision(context.id,true);if(schedule.mode==='waiting')return this.deferMaintenance(record,`资料已保存，图片识别${schedule.reason}`,Math.max(1000,schedule.delayMs));
+    }
     if (structuredTask.type === 'embed' && (structuredTask.input.searchOptimize || structuredTask.input.quickVector)) {
       const state = await this.searchOptimizeView();
       if ((structuredTask.input.quickVector || state.items.length) && (state.paused || state.schedule.mode === 'waiting')) {
@@ -1273,7 +1349,7 @@ export class ProductTaskRuntime {
           for(const step of adapter.view.steps)if(step.phases.includes('embed'))step.status='pending';
           adapter.view.background={mode:'waiting',reason:state.paused?'知识向量化已暂停':schedule.reason};
           await persist();record.progress=progress;
-          return this.deferMaintenance(record,state.paused?'知识向量化已暂停，维护成果已保存':`${schedule.reason}，维护成果已保存`,Math.max(1000,schedule.delayMs));
+          return this.deferMaintenance(record,state.paused?'知识向量化已暂停，维护成果已保存':`${schedule.reason}，维护成果已保存`,Math.max(1000,schedule.delayMs),true);
         }
         if(deferredPhase==='capture_entities'){
           await persist();record.progress=progress;
@@ -1369,17 +1445,19 @@ export class ProductTaskRuntime {
     this.sessionViews.delete(record.id);
   }
 
-  private async deferMaintenance(record: MinionJob, stage = '等待前面的整理任务完成',delayMs=1000): Promise<typeof MINION_DEFERRED> {
+  private async deferMaintenance(record: MinionJob, stage = '等待前面的整理任务完成',delayMs=1000,vectorizationWait=false): Promise<typeof MINION_DEFERRED> {
     const progress = (record.progress ?? {}) as Progress;
     delete progress.result;
     const view = progress.product ?? new TaskProgressAdapter(String(record.data.kind)).view;
     view.stage = stage; view.percent = null; view.errorReason = null;
     if(record.data.waitingForOcr||record.data.kind==='document_ocr')view.background={mode:'waiting',reason:stage};
     progress.product = view;
+    record.data.vectorizationWait = vectorizationWait;
     await this.engine.executeRaw(`UPDATE minion_jobs SET status='delayed',delay_until=now()+($4::double precision * interval '1 millisecond'),
       lock_token=NULL,lock_until=NULL,error_text=NULL,result=NULL,progress=$3::jsonb,
+      data=jsonb_set(data,'{vectorizationWait}',to_jsonb($5::boolean)),
       attempts_started=GREATEST(attempts_started-1,0),updated_at=now()
-      WHERE id=$1 AND status='active' AND lock_token=$2`, [record.id, record.lock_token, progress,delayMs]);
+      WHERE id=$1 AND status='active' AND lock_token=$2`, [record.id, record.lock_token, progress,delayMs,vectorizationWait]);
     this.sessionViews.delete(record.id);
     return MINION_DEFERRED;
   }

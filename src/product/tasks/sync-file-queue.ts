@@ -54,7 +54,7 @@ export class SyncFileQueue {
       const result={slug:'',status:'failed',chunks:0,error:sizeError,file:file.relativePath};
       if(!job){
         if(file.quickMaintenance)await this.reserveQuickCapacity(sessionId,token);
-        job=await this.queue.add(SYNC_FILE_TASK,{sessionId,kind:'sync_file',task:{type:'sync-file',input:file}},{queue:SYNC_FILE_QUEUE,delay:86400000,max_attempts:1,maxQueueSize:this.capacity,idempotency_key:`sync-file:${key}`,on_child_fail:'continue'});
+        job=await this.queue.add(SYNC_FILE_TASK,{sessionId,kind:'sync_file',task:{type:'sync-file',input:file}},{queue:SYNC_FILE_QUEUE,delay:86400000,max_attempts:1,maxQueueSize:this.capacity,capacityName:SYNC_FILE_TASK,idempotency_key:`sync-file:${key}`,on_child_fail:'continue'});
         await this.engine.executeRaw("UPDATE minion_jobs SET parent_job_id=$2,status='completed',result=$3::jsonb,finished_at=now(),updated_at=now() WHERE id=$1",[job.id,sessionId,result]);
       }
       this.observe?.({...job,parent_job_id:sessionId,status:'completed',result});
@@ -137,7 +137,7 @@ export class SyncFileQueue {
       const snapshot=((job.data.task as {input:SyncFileInput}).input).path;
       if(await stat(snapshot).catch(error=>{if(error.code==='ENOENT')return null;throw error;}))return { slug: '', status: 'skipped', chunks: 0, deferred: true,childId:job.id };
     }
-    const pending=await this.engine.executeRaw<{count:string}>("SELECT count(*)::text AS count FROM minion_jobs WHERE queue=$1 AND status NOT IN ('completed','failed','dead','cancelled')",[SYNC_FILE_QUEUE]);
+    const pending=await this.engine.executeRaw<{count:string}>("SELECT count(*)::text AS count FROM minion_jobs WHERE queue=$1 AND name=$2 AND status NOT IN ('completed','failed','dead','cancelled')",[SYNC_FILE_QUEUE,SYNC_FILE_TASK]);
     if(!job && Number(pending[0].count)>=this.capacity){
       if(file.quickMaintenance)await this.reserveQuickCapacity(sessionId,token);
       else throw new Error(`资源保护：队列容量已达到 ${this.capacity}，已拒绝新文件。请先完成或停止已有任务。`);
@@ -165,9 +165,10 @@ export class SyncFileQueue {
     const after = await this.queue.getJob(sessionId);
     if (!this.allowed(sessionId)) throw new Error('同步任务已停止');
     if (after?.status !== 'active' || after.lock_token !== token) throw new Error('同步任务已停止或租约失效');
-    const added = job && reusable ? job : await this.queue.add(SYNC_FILE_TASK, { sessionId, kind: 'sync_file', task: { type: 'sync-file', input: { ...file, path } } }, {
-      queue: SYNC_FILE_QUEUE, delay: 24 * 60 * 60 * 1000, max_attempts: 1, maxQueueSize: this.capacity,
-      timeout_ms: 6 * 60 * 60 * 1000, idempotency_key: `sync-file:${key}`, on_child_fail: 'continue',
+    const parentUnbounded = parent?.data.unboundedRuntime === true;
+    const added = job && reusable ? job : await this.queue.add(SYNC_FILE_TASK, { sessionId, kind: 'sync_file', task: { type: 'sync-file', input: { ...file, path } }, ...(parentUnbounded ? { unboundedRuntime: true } : {}) }, {
+      queue: SYNC_FILE_QUEUE, delay: 24 * 60 * 60 * 1000, max_attempts: 1, maxQueueSize: this.capacity, capacityName: SYNC_FILE_TASK,
+      ...(parentUnbounded ? {} : { timeout_ms: 6 * 60 * 60 * 1000 }), idempotency_key: `sync-file:${key}`, on_child_fail: 'continue',
     });
     if(added===job)await this.engine.executeRaw(`UPDATE minion_jobs SET data=jsonb_set(data,'{task,input}',$2::jsonb),updated_at=now()
       WHERE id=$1 AND (status IN ('paused','delayed','waiting') OR (status='cancelled' AND data->>'capacityParked'='true'))`,[added.id,{...file,path}]);
@@ -191,7 +192,7 @@ export class SyncFileQueue {
 
   private async ensureQuickCapacity(tx:BrainEngine) {
     await tx.executeRaw("SELECT pg_advisory_xact_lock(hashtext('minion_capacity:' || $1))",[SYNC_FILE_QUEUE]);
-    const [pending]=await tx.executeRaw<{count:string}>("SELECT count(*)::text AS count FROM minion_jobs WHERE queue=$1 AND status NOT IN ('completed','failed','dead','cancelled')",[SYNC_FILE_QUEUE]);
+    const [pending]=await tx.executeRaw<{count:string}>("SELECT count(*)::text AS count FROM minion_jobs WHERE queue=$1 AND name=$2 AND status NOT IN ('completed','failed','dead','cancelled')",[SYNC_FILE_QUEUE,SYNC_FILE_TASK]);
     if(Number(pending.count)>=this.capacity && !await this.parkInactiveQuickChild(tx))throw new Error(`资源保护：队列容量已达到 ${this.capacity}，已拒绝新文件。请先完成或停止已有任务。`);
   }
 

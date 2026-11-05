@@ -542,6 +542,12 @@ export interface CycleOpts {
   /** Replaces the entity-capture child handler. Production leaves this unset. */
   captureEntitiesHandler?: MinionHandler;
   captureEntitiesConcurrency?:()=>number;
+  /**
+   * Staged deep organize: slugs added or changed in this round, plus pages
+   * already implicated by that sync. Empty array means this window has no new
+   * evidence and must not fall back to a full library walk.
+   */
+  changedSlugs?: string[];
 }
 
 /** Union sync + synthesis writes without turning "no producer ran" into []. */
@@ -1059,7 +1065,9 @@ async function runPhaseSync(
     const { performSync } = await import('../commands/sync.ts');
     const gateway = await import('./ai/gateway.ts');
     const ocrEnabled = gateway.isOcrEnabled();
-    const documentOcr = !quickMaintenance && ocrEnabled;
+    const { imageOcrSwitchOn, IMAGE_OCR_ENABLED_KEY } = await import('./pmbrain-adapters/image-ocr-policy.ts');
+    const imageOcr = imageOcrSwitchOn(await engine.getConfig(IMAGE_OCR_ENABLED_KEY));
+    const documentOcr = !quickMaintenance && ocrEnabled && imageOcr;
     const useLocalPath = quickMaintenance === true || localPathOnly === true;
     // Resolve the per-source id so sync reads source-scoped last_commit
     // instead of the global config key. The global key can drift out of
@@ -1076,7 +1084,7 @@ async function runPhaseSync(
                                            // If extract isn't scheduled (e.g. `gbrain dream --phase sync`),
                                            // sync's inline extract still runs to preserve prior behavior.
       includeOffice,
-      includeImages: ocrEnabled,
+      includeImages: quickMaintenance ? ocrEnabled : documentOcr,
       documentOcr,
       excludePathPattern: useLocalPath ? (await import('./pmbrain-adapters/quick-maintenance-policy.ts')).QUICK_MAINTENANCE_EXCLUDED_PATH : undefined,
       concurrency,
@@ -1914,6 +1922,9 @@ export async function runCycle(
       }
       await checkpoint();
     }
+    if (opts.changedSlugs !== undefined) {
+      syncPagesAffected = [...new Set([...(syncPagesAffected ?? []), ...opts.changedSlugs])];
+    }
 
     for (const repairPhase of ['fence_repair', 'content_repair'] as const) {
       if (!phases.includes(repairPhase)) continue;
@@ -1930,7 +1941,8 @@ export async function runCycle(
         progress.start(`cycle.${repairPhase}`);
         const repair = await import('./cycle/maintenance-repair.ts');
         const runRepair = repairPhase === 'fence_repair' ? repair.runPhaseFenceRepair : repair.runPhaseContentRepair;
-        const { result, duration_ms } = await timePhase(() => runRepair(engine, { dryRun, sourceId: cycleSourceId, ...(opts.quickMaintenance ? { slugs: syncPagesAffected ?? [], onPage: async(slug:string)=>opts.onMaintenancePages?.([slug]), signal:opts.signal } : {}) }));
+        const scopedRepair = opts.quickMaintenance === true || opts.changedSlugs !== undefined;
+        const { result, duration_ms } = await timePhase(() => runRepair(engine, { dryRun, sourceId: cycleSourceId, ...(scopedRepair ? { slugs: syncPagesAffected ?? [], ...(opts.quickMaintenance ? { onPage: async(slug:string)=>opts.onMaintenancePages?.([slug]) } : {}), signal:opts.signal } : {}) }));
         result.duration_ms = duration_ms;
         phaseResults.push(result);
         progress.finish();
@@ -1950,6 +1962,8 @@ export async function runCycle(
         });
       } else if (brainDir === null) {
         phaseResults.push(skipNoBrainDir('synthesize'));
+      } else if (opts.changedSlugs?.length === 0) {
+        phaseResults.push({ phase: 'synthesize', status: 'skipped', duration_ms: 0, summary: '跳过', details: { reason: 'round_unchanged', message: '本轮没有新的或变化的资料，已跳过' } });
       } else {
         progress.start('cycle.synthesize');
         const { runPhaseSynthesize } = await import('./cycle/synthesize.ts');
@@ -1968,6 +1982,7 @@ export async function runCycle(
           signal: opts.signal,
           deadlineAtMs: opts.deadlineAtMs ?? null,
           privateQueueOwnerJobId: opts.privateQueueOwnerJobId ?? null,
+          changedSlugs: opts.changedSlugs,
         }));
         result.duration_ms = duration_ms;
         phaseResults.push(result);
@@ -2365,7 +2380,7 @@ export async function runCycle(
           brainDir: brainDir ?? undefined,
           sourceId: xaSourceId,
           dryRun,
-          affectedSlugs: syncFailedOpen ? [] : (opts.includePendingKnowledge || opts.knowledgeSince ? undefined : xaAffectedSlugs),
+          affectedSlugs: opts.changedSlugs !== undefined ? xaAffectedSlugs ?? [] : syncFailedOpen ? [] : (opts.includePendingKnowledge || opts.knowledgeSince ? undefined : xaAffectedSlugs),
           schemaPack:opts.schemaPack,
           since:opts.knowledgeSince,
           requireSourceQuotes:opts.includePendingKnowledge,
@@ -2486,6 +2501,8 @@ export async function runCycle(
         });
       } else if (brainDir === null) {
         phaseResults.push(skipNoBrainDir('patterns'));
+      } else if (opts.changedSlugs !== undefined && !synthesizeWrittenSlugs?.length) {
+        phaseResults.push({ phase: 'patterns', status: 'skipped', duration_ms: 0, summary: '跳过', details: { reason: 'round_unchanged', message: '本轮没有新的或变化的资料，已跳过' } });
       } else {
         progress.start('cycle.patterns');
         const { runPhasePatterns } = await import('./cycle/patterns.ts');

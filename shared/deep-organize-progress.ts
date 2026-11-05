@@ -35,11 +35,20 @@ export interface DeepStageResult {
   costCny?: number;
 }
 
+export interface DeepStageLogEntry {
+  at: string;
+  stage: string;
+  event: 'start' | 'finish';
+  durationMs?: number;
+  result?: string;
+}
+
 export interface DeepRoundProgress {
   stage: DeepStageId | 'done';
   stages: DeepStageResult[];
   scan: { scanned: number; unchanged: number; incremental?: number; total?: number; complete: boolean };
   current?: { result?: string; file?: string; startedAt?: string };
+  log?: DeepStageLogEntry[];
 }
 
 export function isStagedDeepOrganize(input: { preset?: string | null; dryRun?: boolean; phase?: string | null }): boolean {

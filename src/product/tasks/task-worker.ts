@@ -5,7 +5,7 @@ import { loadConfig } from '../../core/config.ts';
 import { reloadLiveGateway } from '../../core/ai/reload-live-gateway.ts';
 import { DEFAULT_CLI_OPTIONS, setCliOptions } from '../../core/cli-options.ts';
 import { runStructuredImport, importSyncFile } from '../../commands/import.ts';
-import { runCycle, ALL_PHASES, extractTotals, deriveStatus, type CyclePhase, type CycleReport } from '../../core/cycle.ts';
+import { runCycle, ALL_PHASES, extractTotals, deriveStatus, syncPhasePages, type CyclePhase, type CycleReport } from '../../core/cycle.ts';
 import { resolveDreamPresetPhases, resolveDreamRelationOptions, resolveBrainDir } from '../../commands/dream.ts';
 import { runQuickMaintenance, combineQuickMaintenanceReports, resolveQuickMaintenancePhases } from '../../core/quick-maintenance.ts';
 import { chooseCaptureModel, configuredCnyPrices } from '../../core/cycle/capture-entities.ts';
@@ -43,10 +43,11 @@ import { phaseHasPendingWork } from '../../../shared/dream-phase-state.ts';
 import { usesSyncFileQueue } from '../../../shared/task-progress.ts';
 import { isGinRepairAbortText } from '../../core/pglite-gin-repair.ts';
 import type { SyncStrategy } from '../../core/sync.ts';
-import { isOfficeFilePath } from '../../core/sync.ts';
+import { isOfficeFilePath, resolveSlugForPath } from '../../core/sync.ts';
 import { isImageFilePath } from '../../core/import-file.ts';
 import { QuickSyncPlan } from './quick-sync-plan';
 import { DEEP_ORGANIZE_STAGES, deepOrganizePhaseNames, isStagedDeepOrganize, summarizeDeepStage, type DeepRoundProgress } from '../../../shared/deep-organize-progress';
+import { DEEP_ORGANIZE_PHASE_HORIZON_MS } from './timeout.ts';
 import { classifyQuickScanHash, classifyQuickScanStat } from './quick-scan-index';
 import type { MaintenanceRoundProgress, MaintenanceStageId, MaintenanceStageResult } from '../../../shared/maintenance-progress';
 import {QuickVectorProgress} from './vector-progress';
@@ -353,7 +354,9 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
     if(pauseForDocumentOcr&&usesSyncFileQueue(input)&&input.phase!=='sync'&&input.preset!=='quick'){
     await engine.executeRaw(`UPDATE minion_jobs SET status='waiting',result=NULL,error_text=NULL,finished_at=NULL,data=jsonb_set(data-'ocrOwnerCancelled','{authorizedAttempt}',to_jsonb(attempts_started+1)),updated_at=now()
       WHERE name='pmbrain-document-ocr' AND data->'task'->'input'->'ocrOnly'->>'maintenanceOwnerId'=$1 AND status='cancelled' AND data->>'ocrOwnerCancelled'='true'`,[String(ownerJobId)]);
-    const waiting=await engine.executeRaw("SELECT 1 FROM pages p JOIN minion_jobs j ON j.id=(p.frontmatter->>'document_ocr_task_id')::int WHERE p.source_id=$1 AND p.deleted_at IS NULL AND p.frontmatter->>'document_ocr_deferred'='true' AND (j.status IN ('waiting','active','delayed') OR j.data->'task'->'input'->'ocrOnly'->>'maintenanceOwnerId'=$2) LIMIT 1",[sourceId,String(ownerJobId)]);
+    const waiting=await engine.executeRaw(input.preset==='full'
+      ? "SELECT 1 FROM pages p JOIN minion_jobs j ON j.id=(p.frontmatter->>'document_ocr_task_id')::int WHERE p.source_id=$1 AND p.deleted_at IS NULL AND p.frontmatter->>'document_ocr_deferred'='true' AND j.data->'task'->'input'->'ocrOnly'->>'maintenanceOwnerId'=$2 AND j.status IN ('waiting','active','delayed','paused','failed','dead') LIMIT 1"
+      : "SELECT 1 FROM pages p JOIN minion_jobs j ON j.id=(p.frontmatter->>'document_ocr_task_id')::int WHERE p.source_id=$1 AND p.deleted_at IS NULL AND p.frontmatter->>'document_ocr_deferred'='true' AND (j.status IN ('waiting','active','delayed') OR j.data->'task'->'input'->'ocrOnly'->>'maintenanceOwnerId'=$2) LIMIT 1",[sourceId,String(ownerJobId)]);
     await rpc('task.waitingOcr',[waiting.length>0]);
     if(waiting.length)throw new DocumentOcrDeferred('资料已保存，等待后台识图后继续原整理任务');
     }
@@ -388,6 +391,7 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
     embedBatchSize: constrained?32:100,
     getEmbedBatchSize:()=>constrained?32:100,
     embedTimeBudgetMs: 10 * 60 * 1000,
+    ...(input.preset === 'full' ? { deadlineAtMs: Date.now() + DEEP_ORGANIZE_PHASE_HORIZON_MS } : {}),
     embedRuntime:!input.dryRun?async(sourceId?:string)=>runMaintenanceVectorization(engine,sourceId,()=>rpc('task.maintenanceVectorizationState',[]) as Promise<MaintenanceVectorizationState>,{
       pageLimit:input.maxPages,signal:abort.signal,
       onProgress:(schedule,slug,done,total)=>send({type:'progress',background:schedule,event:{phase:'embed',file:slug,stage:`${schedule.reason} · 当前资料 ${done}/${total} 段已保存`}}),
@@ -582,17 +586,51 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
       if (!['failed', 'skipped'].includes(status) && deepRound.stages.some(stage => stage.status === 'partial' || stage.status === 'failed')) status = 'partial';
       return { schema_version: '1', timestamp: startedAt.toISOString(), duration_ms: Date.now() - startedAt.getTime(), status, brain_dir: lastReport?.brain_dir ?? null, phases, totals };
     };
+    const noteStage = (stageId: string, event: 'start' | 'finish', result?: string, durationMs?: number) => {
+      deepRound.log = [...(deepRound.log ?? []), { at: new Date().toISOString(), stage: stageId, event, ...(durationMs !== undefined ? { durationMs } : {}), ...(result ? { result } : {}) }].slice(-24);
+    };
+    const roundChanged = (): string[] | undefined => {
+      if (!deepRound.scan.complete) return undefined;
+      const syncPhases = sources.map(source => checkpoint.phases[source.id]?.find(phase => phase.phase === 'sync'));
+      const fromPhases = [...new Set(syncPhases.flatMap(phase => syncPhasePages(phase) ?? []).filter(slug => slug.length > 0))];
+      const recorded = syncPhases.every(phase => Array.isArray((phase as { pagesAffected?: unknown } | undefined)?.pagesAffected) || Array.isArray(phase?.details?.pages_affected));
+      if (recorded) return fromPhases;
+      const fromPlan = [...new Set(sources.flatMap(source => (syncPlan.sources[source.id]?.entries ?? []).map(file => resolveSlugForPath(file.relativePath))).filter(slug => slug.length > 0))];
+      if (fromPlan.length > 0) return fromPlan;
+      return (deepRound.scan.incremental ?? 0) === 0 ? [] : undefined;
+    };
     notifyDeep();
     for (const stage of DEEP_ORGANIZE_STAGES) {
       if (stageReady(stage)) continue;
       abort.signal.throwIfAborted();
       deepRound.stage = stage.id;
       deepRound.current = { result: stage.detail, startedAt: new Date().toISOString() };
+      noteStage(stage.id, 'start');
       notifyDeep();
       await rpc('task.maintenanceCheckpoint', [checkpoint]);
       pauseForDocumentOcr = stage.id !== 'check' && stage.id !== 'sync';
       try {
-        if (stage.id === 'sync') {
+        const changed = stage.id === 'check' || stage.id === 'sync' ? undefined : roundChanged();
+        let roundSlugs = changed;
+        let skippedRound = Boolean(changed && changed.length === 0);
+        if (skippedRound) {
+          const pendingOcr = await engine.executeRaw<{ slug: string | null }>(`SELECT DISTINCT data->'task'->'input'->'ocrOnly'->>'slug' AS slug FROM minion_jobs
+            WHERE name='pmbrain-document-ocr' AND data->'task'->'input'->'ocrOnly'->>'maintenanceOwnerId'=$1
+            AND status IN ('waiting','active','delayed','paused','failed','dead','cancelled')
+            AND (status<>'cancelled' OR data->>'ocrOwnerCancelled'='true')`, [String(ownerJobId ?? '')]);
+          const slugs = pendingOcr.map(row => row.slug).filter((slug): slug is string => !!slug);
+          if (slugs.length) { skippedRound = false; roundSlugs = slugs; }
+        }
+        if (skippedRound) {
+          for (const source of sources) {
+            const saved = checkpoint.phases[source.id] ?? [];
+            const extra = (stage.phases as readonly string[]).filter(phase => !saved.some(item => item.phase === phase)).map(phase => ({
+              phase: phase as CyclePhase, status: 'skipped' as const, duration_ms: 0, summary: '跳过', details: { reason: 'round_unchanged', message: '本轮没有新的或变化的资料，已跳过' },
+            }));
+            checkpoint.phases[source.id] = [...saved, ...extra];
+          }
+        }
+        if (!skippedRound && stage.id === 'sync') {
           syncPlan.preparing = true;
           for (const [index, source] of sources.entries()) {
             abort.signal.throwIfAborted();
@@ -622,14 +660,14 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
           await rpc('task.maintenanceCheckpoint', [checkpoint]);
           await syncPlan.discardLog();
         }
-        if (stage.id === 'entities' && !ingestEnabled) {
+        if (!skippedRound && stage.id === 'entities' && !ingestEnabled) {
           const summary = automaticEnabled ? '未配置可用的实体识别模型' : '实体识别已关闭';
           const reason = automaticEnabled ? 'model_unavailable' : 'disabled';
           for (const source of sources) {
             const saved = checkpoint.phases[source.id] ?? [];
             if (!saved.some(phase => phase.phase === 'capture_entities')) checkpoint.phases[source.id] = [...saved, { phase: 'capture_entities', status: 'skipped', duration_ms: 0, summary, details: { reason, pages_submitted: 0 } }];
           }
-        } else {
+        } else if (!skippedRound) {
           for (const [index, source] of sources.entries()) {
             abort.signal.throwIfAborted();
             syncPlan.sourceId = source.id;
@@ -645,6 +683,7 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
               enrichThinWhenUnset: true, enrichThinTypesWhenUnset: ['person', 'company', 'project'],
               ...(stage.id === 'sync' ? { localPathOnly: true, deferInlineExtract: true } : {}),
               ...(stage.id === 'entities' && !options.prepareEntityCapture ? { captureEntitySlugs: options.captureEntitySlugs ?? [] } : {}),
+              ...(roundSlugs !== undefined ? { changedSlugs: roundSlugs, prepareEntityCapture: undefined, ...(stage.id === 'entities' ? { captureEntitySlugs: roundSlugs } : {}) } : {}),
             });
             lastReport = report;
             deepOutput = undefined;
@@ -662,6 +701,8 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
         }
         const snapshots = sources.flatMap(source => (checkpoint.phases[source.id] ?? []).filter(phase => (stage.phases as readonly string[]).includes(phase.phase)));
         const summary = summarizeDeepStage(stage.id, snapshots, deepRound.scan);
+        if (skippedRound) { summary.result = '跳过'; summary.detail = '本轮没有新的或变化的资料，已跳过'; }
+        noteStage(stage.id, 'finish', summary.result, summary.durationMs);
         deepRound.stages = [...deepRound.stages.filter(item => item.id !== stage.id), summary];
         deepRound.current = { ...deepRound.current, result: summary.result };
         notifyDeep();
@@ -1044,6 +1085,8 @@ async function executeTask(task: ProductTask, kind: BrainEngine['kind']) {
   } else if (task.type === 'sync') {
     const results = [];
     const gateway = await import('../../core/ai/gateway.ts');
+    const { imageOcrSwitchOn, IMAGE_OCR_ENABLED_KEY } = await import('../../core/pmbrain-adapters/image-ocr-policy.ts');
+    const imageOcr = imageOcrSwitchOn(await engine.getConfig(IMAGE_OCR_ENABLED_KEY)) && gateway.isOcrEnabled();
     for (const source of (await loadAllSources(engine)).filter(row => row.local_path && parseSourceConfig(row.config).syncEnabled !== false)) {
       abort.signal.throwIfAborted();
       results.push(await performSync(engine, {
@@ -1064,7 +1107,7 @@ async function executeTask(task: ProductTask, kind: BrainEngine['kind']) {
         },
         strategy: parseSourceConfig(source.config).strategy as SyncStrategy | undefined,
         includeOffice: parseSourceConfig(source.config).includeOffice === true,
-        includeImages: gateway.isOcrEnabled(), documentOcr: gateway.isOcrEnabled(),
+        includeImages: imageOcr, documentOcr: imageOcr,
       }));
     }
     result = { results, errors: results.filter(row => ['blocked_by_failures', 'partial'].includes(row.status)).length };

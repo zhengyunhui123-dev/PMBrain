@@ -287,6 +287,55 @@ test('整批资料超过快照窗口时自动分批完成，同一任务不报�
   }
 },120000);
 
+test('图片识别占满自己的名额时，文本同步仍能进入同一队列',async()=>{
+  const queue=new MinionQueue(engine);
+  const queueName='image-text-split';
+  const ocr={queue:queueName,maxQueueSize:2,capacityName:'pmbrain-document-ocr'};
+  const sync={queue:queueName,maxQueueSize:2,capacityName:'pmbrain-sync-file'};
+  const rejected=async(name:string,opts:{queue:string;maxQueueSize:number;capacityName:string})=>{
+    try{await queue.add(name,{},opts);return '';}
+    catch(error){return error instanceof Error?error.message:String(error);}
+  };
+  await queue.add('pmbrain-document-ocr',{},ocr);
+  await queue.add('pmbrain-document-ocr',{},ocr);
+  expect(await rejected('pmbrain-document-ocr',ocr)).toContain('队列容量');
+  const text=await queue.add('pmbrain-sync-file',{},sync);
+  expect(text.id).toBeNumber();
+  await queue.add('pmbrain-sync-file',{},sync);
+  expect(await rejected('pmbrain-sync-file',sync)).toContain('队列容量');
+},30000);
+
+test('深度整理的同步文件不继承 6 小时上限，普通整理的同步文件仍保留',async()=>{
+  const dir=join(home,'unbounded-files');mkdirSync(dir);
+  const files=new SyncFileQueue(engine,undefined,()=>true,new TaskResourceGuard());
+  const parents:number[]=[];
+  const enqueue=(token:string,name:string,data:Record<string,unknown>)=>async()=>{
+    writeFileSync(join(dir,name),`# ${name}\n\n文本资料`);
+    const path=join(dir,name),info=statSync(path);
+    const [parent]=await engine.executeRaw<{id:number}>(`INSERT INTO minion_jobs(queue,name,status,lock_token,lock_until,data)
+      VALUES('pmbrain-product','pmbrain-product-task','active',$1,now()+interval '1 hour',$2::jsonb) RETURNING id`,[token,data]);
+    parents.push(parent.id);
+    const input={path,originalPath:path,relativePath:name,sourceRoot:dir,originalSize:info.size,originalMtime:info.mtimeMs,
+      hash:await streamFileHash(path),fingerprint:'capacity-fixture',modelFingerprint:'fixture',scanValidated:true,options:{sourceId:'default',noEmbed:true}};
+    return files.enqueue(parent.id,token,input);
+  };
+  try{
+    const unbounded=await enqueue('unbounded-file-token','unbounded.md',{unboundedRuntime:true,kind:'dream_full',task:{type:'dream',input:{preset:'full'}}})();
+    const kept=await engine.executeRaw<{timeout_ms:number|null;flag:boolean}>("SELECT timeout_ms, data->>'unboundedRuntime'='true' AS flag FROM minion_jobs WHERE id=$1",[unbounded.childId]);
+    expect(kept[0].timeout_ms).toBeNull();
+    expect(kept[0].flag).toBe(true);
+    const bounded=await enqueue('bounded-file-token','bounded.md',{kind:'dream_quick',task:{type:'dream',input:{preset:'quick'}}})();
+    const limited=await engine.executeRaw<{timeout_ms:number|null;flag:boolean}>("SELECT timeout_ms, COALESCE(data->>'unboundedRuntime','')='true' AS flag FROM minion_jobs WHERE id=$1",[bounded.childId]);
+    expect(limited[0].timeout_ms).toBe(21600000);
+    expect(limited[0].flag).toBe(false);
+  }finally{
+    const snapshots=await engine.executeRaw<{path:string}>("SELECT data->'task'->'input'->>'path' AS path FROM minion_jobs WHERE parent_job_id=ANY($1::int[])",[parents]);
+    for(const row of snapshots){if(!resolve(row.path).startsWith(resolve(home)+sep))throw new Error('隔离快照路径越界');if(existsSync(row.path))unlinkSync(row.path);}
+    await engine.executeRaw('DELETE FROM minion_jobs WHERE parent_job_id=ANY($1::int[])',[parents]);
+    await engine.executeRaw('DELETE FROM minion_jobs WHERE id=ANY($1::int[])',[parents]);
+  }
+},60000);
+
 test('停止任务释放可重建的快照，新任务不被旧副本阻塞，旧任务仍按原子任务续跑',async()=>{
   const queue=new MinionQueue(engine);
   const resources=new TaskResourceGuard({snapshotQuotaBytes:80});

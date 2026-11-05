@@ -1759,6 +1759,29 @@ describe('MinionQueue: v0.19.1 handleWallClockTimeouts (Layer 3 kill shot)', () 
     const after = await queue.getJob(job.id);
     expect(after?.status).toBe('active');
   });
+
+  test('unboundedRuntime keeps a null timeout alive while a normal null-timeout job is killed', async () => {
+    const kept = await queue.add('noop', { unboundedRuntime: true }, { max_stalled: 3 });
+    const killedJob = await queue.add('noop', {}, { max_stalled: 3 });
+    await engine.executeRaw(
+      `UPDATE minion_jobs
+         SET status='active',
+             timeout_ms=NULL,
+             timeout_at=NULL,
+             lock_token='wc-unbounded',
+             lock_until=now() - interval '1 second',
+             started_at=now() - interval '61 seconds',
+             attempts_started = attempts_started + 1
+       WHERE id=$1 OR id=$2`,
+      [kept.id, killedJob.id],
+    );
+    const killed = await queue.handleWallClockTimeouts(10_000);
+    expect(killed.map(job => job.id)).toContain(killedJob.id);
+    expect(killed.map(job => job.id)).not.toContain(kept.id);
+    expect((await queue.getJob(kept.id))?.status).toBe('active');
+    expect((await queue.getJob(killedJob.id))?.status).toBe('dead');
+    expect((await queue.getJob(killedJob.id))?.error_text).toBe('wall-clock timeout exceeded');
+  });
 });
 
 describe('MinionQueue: v0.19.1 maxWaiting — cap correctness + race (D2/H2)', () => {

@@ -819,7 +819,8 @@ export class MinionWorker extends EventEmitter {
       timeoutTimer = setTimeout(() => {
         if (!abort.signal.aborted) {
           console.warn(`Job ${job.id} (${job.name}) hit per-job timeout (${job.timeout_ms}ms), aborting`);
-          abort.abort(new Error('timeout'));
+          const hours = Math.max(1, Math.round((job.timeout_ms ?? 0) / 3_600_000));
+          abort.abort(new DOMException(`达到 ${hours} 小时上限`, 'AbortError'));
         }
       }, job.timeout_ms);
     }

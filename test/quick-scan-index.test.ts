@@ -30,6 +30,9 @@ test('快速维护后深度整理复用普通文档比对结果，识图资料�
   for (const path of ['scan.pdf', 'photo.png', 'slides.pptx']) {
     expect(classifyQuickScanStat(stored, 12, 20, syncFileContentFingerprint(deep), syncFileCompatibleFingerprints(deep, path))).toBe('same-bytes');
   }
+  const textOnly = { ...quick, includeImages: false, documentOcr: false };
+  expect(classifyQuickScanStat(stored, 12, 20, syncFileContentFingerprint(textOnly), syncFileCompatibleFingerprints(textOnly, 'note.md'))).toBe('unchanged');
+  expect(classifyQuickScanStat(stored, 12, 20, syncFileContentFingerprint(textOnly), syncFileCompatibleFingerprints(textOnly, 'photo.png'))).toBe('same-bytes');
   const differentSource = { ...deep, sourceId: 'other' };
   expect(classifyQuickScanStat(stored, 12, 20, syncFileContentFingerprint(differentSource), syncFileCompatibleFingerprints(differentSource, 'note.md'))).toBe('same-bytes');
 });

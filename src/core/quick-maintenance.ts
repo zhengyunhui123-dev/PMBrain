@@ -19,8 +19,8 @@ export const QUICK_MAINTENANCE_PHASES: readonly CyclePhase[] = [
 const QUICK_PHASE_SET = new Set<CyclePhase>(QUICK_MAINTENANCE_PHASES);
 
 /** Ordered Quick phases (ALWAYS derived from ALL_PHASES for Full-safe ordering). */
-export function resolveQuickMaintenancePhases(): CyclePhase[] {
-  return ALL_PHASES.filter((p) => QUICK_PHASE_SET.has(p));
+export function resolveQuickMaintenancePhases(capture = false): CyclePhase[] {
+  return ALL_PHASES.filter((p) => QUICK_PHASE_SET.has(p) || (capture && p === 'capture_entities'));
 }
 
 export type QuickMaintenanceOpts = Omit<CycleOpts, 'phases' | 'includeByMention' | 'includeNer' | 'includeHistoricalMarkdownCatchUp' | 'forcePackPhases'>;
@@ -32,7 +32,7 @@ export async function runQuickMaintenance(
   return runCycle(engine, {
     ...opts,
     quickMaintenance: true,
-    phases: resolveQuickMaintenancePhases(),
+    phases: resolveQuickMaintenancePhases(!!opts.captureEntitySlugs?.length),
     includeByMention: true,
     includeNer: true,
     includeHistoricalMarkdownCatchUp: true,
@@ -86,7 +86,8 @@ export function combineQuickMaintenanceReports(
     }
   }
 
-  const phases = resolveQuickMaintenancePhases().map((phaseName) => {
+  const includeCapture = reports.some(({ report }) => report.phases.some(phase => phase.phase === 'capture_entities'));
+  const phases = resolveQuickMaintenancePhases(includeCapture).map((phaseName) => {
     const sourcePhases = reports.flatMap(({ sourceId, report }) => {
       const phase = report.phases.find(item => item.phase === phaseName);
       return phase ? [{ sourceId, phase }] : [];

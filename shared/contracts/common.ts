@@ -37,6 +37,7 @@ export const TaskProductProgressSchema = z.object({
     })),
     scan:z.object({scanned:z.number().int().nonnegative(),unchanged:z.number().int().nonnegative(),incremental:z.number().int().nonnegative().optional(),total:z.number().int().nonnegative().optional(),complete:z.boolean()}),
     current:z.object({result:z.string().optional(),file:z.string().optional(),startedAt:z.string().optional()}).optional(),
+    log:z.array(z.object({at:z.string(),stage:z.string(),event:z.enum(['start','finish']),durationMs:z.number().nonnegative().optional(),result:z.string().optional()})).optional(),
   }).optional(),
   database:z.object({supported:z.boolean(),requests:z.number().nonnegative(),writes:z.number().nonnegative(),waitedMs:z.number().nonnegative(),stages:z.record(z.string(),z.object({requests:z.number().nonnegative(),writes:z.number().nonnegative(),waitedMs:z.number().nonnegative()}))}).optional(),
   vectorTotals:z.object({total:z.number().nonnegative(),completed:z.number().nonnegative(),pages:z.number().nonnegative(),completedPages:z.number().nonnegative(),windowMs:z.number().positive().max(1800000),windowElapsedMs:z.number().nonnegative().optional(),windowEnded:z.boolean().optional(),lastWindow:z.object({total:z.number().nonnegative(),completed:z.number().nonnegative(),elapsedMs:z.number().nonnegative(),finishedAt:z.string()}).optional()}).optional(),
