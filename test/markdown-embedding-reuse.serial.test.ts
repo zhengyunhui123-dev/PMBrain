@@ -167,17 +167,29 @@ test('real entity ingestion prepares vectors outside transactions and repeats be
   expect(await engine.executeRaw('SELECT knowledge_revision::text revision FROM pages WHERE slug=$1 AND source_id=$2',[slug,sourceId])).toEqual([revision]);
 });
 
-for(const changed of ['source','entity'] as const)test(`an ${changed} change during vector preparation rejects the stale entity commit`,async()=>{
+test('a source change during vector preparation rejects the stale entity commit',async()=>{
   const fixture=await ingestFixture();
   const old=await engine.getPage(slug,{sourceId});
   observeEmbedding=async()=>{
     observeEmbedding=undefined;
-    const target=changed==='source'?fixture.context.slug:slug;
-    const page=await engine.getPage(target,{sourceId});
-    await engine.putPage(target,{...page!,compiled_truth:'用户刚更新的内容。'},{sourceId});
+    const page=await engine.getPage(fixture.context.slug,{sourceId});
+    await engine.putPage(fixture.context.slug,{...page!,compiled_truth:'用户刚更新的内容。'},{sourceId});
   };
-  await expect(fixture.put()).rejects.toThrow(changed==='source'?'source changed':'revision conflict');
-  expect((await engine.getPage(slug,{sourceId}))?.compiled_truth).toBe(changed==='source'?old?.compiled_truth:'用户刚更新的内容。');
+  await expect(fixture.put()).rejects.toThrow('source changed');
+  expect((await engine.getPage(slug,{sourceId}))?.compiled_truth).toBe(old?.compiled_truth);
+});
+
+test('an entity change during vector preparation is preserved while the new fact is merged',async()=>{
+  const fixture=await ingestFixture();
+  observeEmbedding=async()=>{
+    observeEmbedding=undefined;
+    const page=await engine.getPage(slug,{sourceId});
+    await engine.putPage(slug,{...page!,compiled_truth:'用户刚更新的内容。'},{sourceId});
+  };
+  await fixture.put();
+  const current=await engine.getPage(slug,{sourceId});
+  expect(current?.compiled_truth).toContain('用户刚更新的内容。');
+  expect(current?.compiled_truth).toContain('补充一项事实。');
 });
 
 test('tag-only edits and an unchanged repeat make no embedding requests', async () => {

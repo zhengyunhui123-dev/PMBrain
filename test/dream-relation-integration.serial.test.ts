@@ -6,7 +6,7 @@ import { PGLiteEngine } from '../src/core/pglite-engine.ts';
 import { PostgresEngine } from '../src/core/postgres-engine.ts';
 import type { BrainEngine } from '../src/core/engine.ts';
 import { runCycle } from '../src/core/cycle.ts';
-import { runQuickMaintenance, combineQuickMaintenanceReports } from '../src/core/quick-maintenance.ts';
+import { combineQuickMaintenanceReports } from '../src/core/quick-maintenance.ts';
 import { runByMentionCore } from '../src/commands/extract.ts';
 import { resolveDreamRelationOptions } from '../src/commands/dream.ts';
 import { resetPgliteState } from './helpers/reset-pglite.ts';
@@ -53,16 +53,20 @@ async function edges() {
     "SELECT f.slug AS from_slug,t.slug AS to_slug,t.source_id AS to_source,l.link_type,l.link_source,l.link_kind FROM links l JOIN pages f ON f.id=l.from_page_id JOIN pages t ON t.id=l.to_page_id WHERE f.source_id='vault' ORDER BY f.slug,t.slug,l.link_type,l.link_source");
 }
 
-test('快速维护运行显式、正文和中英文 NER，保持 Source 与重跑幂等',()=>scoped(async()=>{
+async function runFullRelationMaintenance(sourceId='vault') {
+  return runCycle(engine,{brainDir:null,sourceId,phases:['extract'],...relations});
+}
+
+test('完整整理运行显式、正文和中英文 NER，保持 Source 与重跑幂等',()=>scoped(async()=>{
   await seed();
-  const first = await runQuickMaintenance(engine,{brainDir:null,sourceId:'vault'});
+  const first = await runFullRelationMaintenance();
   expect(first.phases.find(p=>p.phase==='extract')?.details.nerLinksCreated).toBeGreaterThanOrEqual(2);
   const rows = await edges();
   expect(rows).toContainEqual(expect.objectContaining({from_slug:'people/sam',to_slug:'companies/openai',link_type:'works_at',link_source:'mentions',link_kind:'typed_ner'}));
   expect(rows).toContainEqual(expect.objectContaining({from_slug:'people/zhang',to_slug:'companies/openai',link_type:'advises',link_kind:'typed_ner'}));
   expect(rows).toContainEqual(expect.objectContaining({from_slug:'notes/mention',to_slug:'companies/openai',link_type:'mentions'}));
   expect(rows.every(row=>row.to_source==='vault')).toBe(true);
-  const second = await runQuickMaintenance(engine,{brainDir:null,sourceId:'vault'});
+  const second = await runFullRelationMaintenance();
   expect(second.phases.find(p=>p.phase==='extract')?.details.linksCreated).toBe(0);
   expect(await edges()).toEqual(rows);
 }),60000);
@@ -89,7 +93,7 @@ test('生成概念后的收尾重扫旧 WikiLink 与正文，在孤立页检查�
 test('历史目标和别名后来出现时，两种入口补齐已扫描页面',()=>scoped(async()=>{
   await seed();
   await engine.putPage('notes/alias',{type:'note',title:'别名引用',compiled_truth:'OpenAI Labs 提供模型。'},{sourceId:'vault'});
-  await runQuickMaintenance(engine,{brainDir:null,sourceId:'vault'});
+  await runFullRelationMaintenance();
   await engine.putPage('companies/openai',{type:'company',title:'OpenAI',compiled_truth:'新增别名 OpenAI Labs。',frontmatter:{aliases:['OpenAI Labs']}},{sourceId:'vault'});
   await engine.putPage('concepts/graph',{type:'concept',title:'知识图谱',compiled_truth:''},{sourceId:'vault'});
   const report=await runCycle(engine,{brainDir:null,sourceId:'vault',phases:['extract','orphans'],...relations});
@@ -106,12 +110,12 @@ test('NER 写入失败保留原错误，重新执行能够补齐',()=>scoped(asy
     return original.call(this,rows);
   });
   try{
-    const report=await runQuickMaintenance(engine,{brainDir:null,sourceId:'vault'});
+    const report=await runFullRelationMaintenance();
     expect(report.phases.find(p=>p.phase==='extract')?.details.ner_error).toContain('Injected NER database failure');
     expect(report.status).toBe('partial');
     expect(combineQuickMaintenanceReports([{sourceId:'vault',report}]).phases.find(p=>p.phase==='extract')?.details.ner_error).toContain('vault: Injected NER database failure');
   }finally{failing.mockRestore();}
-  await runQuickMaintenance(engine,{brainDir:null,sourceId:'vault'});
+  await runFullRelationMaintenance();
   expect((await edges()).some(row=>row.link_kind==='typed_ner')).toBe(true);
 }),60000);
 
@@ -138,7 +142,7 @@ test('预览不写关系或扫描凭据',()=>scoped(async()=>{
 test('Source 配置不存在的 Pack 时保留关系索引与 NER 原生错误',()=>scoped(async()=>{
   await seed();
   await engine.setConfig('schema_pack.source.vault','missing-relations-test-pack');
-  const report=await runQuickMaintenance(engine,{brainDir:null,sourceId:'vault'});
+  const report=await runFullRelationMaintenance();
   expect(report.phases.find(p=>p.phase==='extract')?.details.ner_error).toContain('missing-relations-test-pack');
   expect(report.status).toBe('partial');
   expect(report.phases.find(p=>p.phase==='extract')?.details.by_mention_error).toContain('missing-relations-test-pack');

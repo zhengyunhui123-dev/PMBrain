@@ -8,6 +8,7 @@ export interface SyncFileInput {
   originalPath?: string;
   originalSize?: number;
   originalMtime?: number;
+  originalCtime?: number;
   hash: string;
   fingerprint: string;
   compatibleFingerprints?: string[];

@@ -237,14 +237,14 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
         const fingerprint=syncFileContentFingerprint(options);
         const compatible=syncFileCompatibleFingerprints(options,relativePath);
         const base: import('./types').SyncFileInput = { path, relativePath, sourceRoot, originalPath,
-          originalSize: snapshot.size, originalMtime: snapshot.mtimeMs, hash: '',
+          originalSize: snapshot.size, originalMtime: snapshot.mtimeMs, originalCtime: snapshot.ctimeMs, hash: '',
           quickMaintenance:true, modelFingerprint: taskModelFingerprint(),
           modelMayRun: options.documentOcr === true && (isOfficeFilePath(relativePath) || isImageFilePath(relativePath)),
           fingerprint, compatibleFingerprints: compatible, options,
         };
         const remember=async(file: import('./types').SyncFileInput, fileUnchanged: boolean)=>{
           const known=syncPlan!.stored(sourceRoot,relativePath);
-          const prepared=!fileUnchanged&&!isOfficeFilePath(relativePath)&&!known?.chunkHash?{...file,options:{...file.options,forceRechunk:true}}:file;
+          const prepared=!fileUnchanged&&(known?.repairRequired||(!isOfficeFilePath(relativePath)&&!known?.chunkHash))?{...file,options:{...file.options,forceRechunk:true}}:file;
           await syncPlan!.record(prepared,fileUnchanged);
           scanned++; if(fileUnchanged)unchanged++;
           send({type:'progress',syncScan:{scanned,unchanged,path:relativePath,bytes:snapshot.size,updatedAt:new Date().toISOString(),active:true}});
@@ -252,20 +252,20 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
         };
         if(oversized)return remember({...base,hash:`oversize:${snapshot.size}:${snapshot.mtimeMs}`},false);
         const stored=syncPlan!.stored(sourceRoot,relativePath);
-        const statDecision=classifyQuickScanStat(stored,snapshot.size,snapshot.mtimeMs,fingerprint,compatible);
+        const statDecision=classifyQuickScanStat(stored,snapshot.size,snapshot.mtimeMs,fingerprint,compatible,snapshot.ctimeMs);
         if(statDecision==='unchanged')return remember({...base,hash:stored!.hash},true);
         if(statDecision==='same-bytes')return remember({...base,hash:stored!.hash},false);
         const hash=await streamFileHash(path,abort.signal);
-        const hashed=classifyQuickScanHash(stored,hash,fingerprint,compatible,snapshot.size,snapshot.mtimeMs);
-        if(hashed.unchanged){
-          if(hashed.refresh)syncPlan!.noteRefresh(sourceRoot,relativePath,snapshot.size,snapshot.mtimeMs);
+        const hashed=classifyQuickScanHash(stored,hash,fingerprint,compatible,snapshot.size,snapshot.mtimeMs,snapshot.ctimeMs);
+        if(hashed.unchanged&&!stored?.repairRequired){
+          if(hashed.refresh)syncPlan!.noteRefresh(sourceRoot,relativePath,snapshot.size,snapshot.mtimeMs,snapshot.ctimeMs);
           return remember({...base,hash},true);
         }
         return remember({...base,hash},false);
       }
       const hash = oversized?`oversize:${snapshot.size}:${snapshot.mtimeMs}`:await streamFileHash(path,abort.signal);
       const file: import('./types').SyncFileInput = { path, relativePath, sourceRoot, originalPath,
-        originalSize: snapshot.size, originalMtime: snapshot.mtimeMs, hash,
+        originalSize: snapshot.size, originalMtime: snapshot.mtimeMs, originalCtime: snapshot.ctimeMs, hash,
         quickMaintenance:input.preset==='quick',
         modelFingerprint: taskModelFingerprint(),
         modelMayRun: options.documentOcr === true && (isOfficeFilePath(relativePath) || isImageFilePath(relativePath)),
@@ -428,7 +428,7 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
         if(saved.has(JSON.stringify([sourceId,file.relativePath,file.hash])))continue;
         abort.signal.throwIfAborted();
         const info=await stat(file.path);
-        file.originalSize=info.size;file.originalMtime=info.mtimeMs;
+        file.originalSize=info.size;file.originalMtime=info.mtimeMs;file.originalCtime=info.ctimeMs;
         let oversized=false;try{assertImportFileSize(file.relativePath,info.size);}catch{oversized=true;}
         file.hash=oversized?`oversize:${info.size}:${info.mtimeMs}`:await streamFileHash(file.path,abort.signal);
       }
@@ -613,6 +613,21 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
         const changed = stage.id === 'check' || stage.id === 'sync' ? undefined : roundChanged();
         let roundSlugs = changed;
         let skippedRound = Boolean(changed && changed.length === 0);
+        if (stage.id === 'knowledge' && knowledgeEnabled) {
+          roundSlugs = undefined;
+          skippedRound = false;
+        }
+        if (stage.id === 'entities' && ingestEnabled && !input.dryRun) {
+          for (const source of sources) {
+            const requested = await rpc('task.captureRequest', [source.id]) as string[] | undefined;
+            const slugs = [...new Set([...(checkpoint.captureRequests?.[source.id] ?? []), ...(requested ?? []), ...(roundSlugs ?? [])])];
+            if (slugs.length) {
+              checkpoint.captureRequests = { ...checkpoint.captureRequests, [source.id]: slugs };
+              skippedRound = false;
+              if (roundSlugs?.length === 0) roundSlugs = slugs;
+            }
+          }
+        }
         if (skippedRound) {
           const pendingOcr = await engine.executeRaw<{ slug: string | null }>(`SELECT DISTINCT data->'task'->'input'->'ocrOnly'->>'slug' AS slug FROM minion_jobs
             WHERE name='pmbrain-document-ocr' AND data->'task'->'input'->'ocrOnly'->>'maintenanceOwnerId'=$1
@@ -683,7 +698,7 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
               enrichThinWhenUnset: true, enrichThinTypesWhenUnset: ['person', 'company', 'project'],
               ...(stage.id === 'sync' ? { localPathOnly: true, deferInlineExtract: true } : {}),
               ...(stage.id === 'entities' && !options.prepareEntityCapture ? { captureEntitySlugs: options.captureEntitySlugs ?? [] } : {}),
-              ...(roundSlugs !== undefined ? { changedSlugs: roundSlugs, prepareEntityCapture: undefined, ...(stage.id === 'entities' ? { captureEntitySlugs: roundSlugs } : {}) } : {}),
+              ...(roundSlugs !== undefined ? { changedSlugs: roundSlugs, prepareEntityCapture: undefined, ...(stage.id === 'entities' ? { captureEntitySlugs: [...new Set([...(options.captureEntitySlugs ?? []), ...roundSlugs])] } : {}) } : {}),
             });
             lastReport = report;
             deepOutput = undefined;

@@ -1,13 +1,13 @@
 import { describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const script = join(import.meta.dir, '..', 'load-env.ps1');
 const marker = 'sk-test-LEAK-MARKER';
 const powershell = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
-const windowsTest = test.skipIf(process.platform !== 'win32');
+const windowsTest = test.skipIf(process.platform !== 'win32' || !existsSync(script));
 
 function combinedOutput(result: { stdout?: string | null; stderr?: string | null }): string {
   return `${result.stdout ?? ''}\n${result.stderr ?? ''}`;

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "reviewed_at": "2026-10-20",
-  "product_version": "1.5.8",
+  "reviewed_at": "2026-11-05",
+  "product_version": "1.5.79",
   "subsystem": "entity-relations",
   "status": "release-blocked-pending-package-acceptance",
   "upstream": {
@@ -746,7 +746,7 @@
       "path": "src/core/cycle/synthesize.ts",
       "upstream_path": "src/core/cycle/synthesize.ts",
       "mode": "adapted",
-      "sha256": "16fe50b3d2217438b506dc3c391e384946d3a59dbcc1590675fd3abec679ef27",
+      "sha256": "15e976a12f5ab5e314dbb02e05e4be80308543499ef06681bdecfc2773170a77",
       "upstream_sha256": "6ec1e0b7e59714e5f2fe078b1956b20218486c89fdccf9982e8b129ba2c03fda"
     },
     {

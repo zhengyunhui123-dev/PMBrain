@@ -39,11 +39,11 @@ export class QuickSyncPlan {
     if (this.fingerprints.has(this.sourceId)) return;
     this.fingerprints.set(this.sourceId, await loadQuickScanFingerprints(engine, this.sourceId, sourceRoot, root, paths));
   }
-  noteRefresh(sourceRoot: string, relativePath: string, size: number, mtimeMs: number) {
+  noteRefresh(sourceRoot: string, relativePath: string, size: number, mtimeMs: number, ctimeMs?: number) {
     const key = quickScanManifestKey(this.sourceId, sourceRoot, relativePath);
     const stored = this.fingerprints.get(this.sourceId)?.get(key);
     if (!stored) return;
-    const next = refreshedManifest(stored, size, mtimeMs);
+    const next = refreshedManifest(stored, size, mtimeMs, ctimeMs);
     this.fingerprints.get(this.sourceId)!.set(key, next);
     const bucket = this.refreshes.get(this.sourceId) ?? new Map<string, string>();
     bucket.set(key, JSON.stringify(next));

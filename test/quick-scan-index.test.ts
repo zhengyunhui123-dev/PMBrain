@@ -65,12 +65,19 @@ test('大小和修改时间相同就跳过读全文；变了才比哈希', () =>
   expect(classifyQuickScanHash(undefined, 'abc', 'finger', undefined, 12, 20)).toEqual({ unchanged: false, refresh: false });
 });
 
+test('内容替换但大小和修改时间恢复原值时，文件状态时间会触发一次复核；损坏分块会强制重新导入', () => {
+  const stored = manifest({ ctime: 30 });
+  expect(classifyQuickScanStat(stored, 12, 20, 'finger', undefined, 31)).toBe('read');
+  expect(classifyQuickScanStat(manifest({ ctime: 20, repairRequired: true }), 12, 20, 'finger', undefined, 20)).toBe('same-bytes');
+  expect(classifyQuickScanHash(stored, 'abc', 'finger', undefined, 12, 20, 31)).toEqual({ unchanged: true, refresh: true });
+});
+
 test('比对表按批读取和写回，不按文件各打一次库', async () => {
   const calls: string[] = [];
   const engine = { async executeRaw(sql: string) { calls.push(sql); return sql.startsWith('SELECT') ? [{ key: 'sync.file.sha256:test', value: JSON.stringify(manifest()) }] : []; } } as unknown as BrainEngine;
   const paths = Array.from({ length: 501 }, (_, index) => join(home, `note-${index}.md`));
   const loaded = await loadQuickScanFingerprints(engine, 'default', home, home, paths);
-  expect(calls.filter(sql => sql.startsWith('SELECT'))).toHaveLength(2);
+  expect(calls.filter(sql => sql.startsWith('SELECT'))).toHaveLength(3);
   expect(loaded.size).toBe(1);
   await saveQuickScanFingerprints(engine, [{ key: 'sync.file.sha256:test', value: '{}' }]);
   expect(calls.some(sql => sql.includes('unnest'))).toBe(true);

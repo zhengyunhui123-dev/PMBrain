@@ -400,18 +400,18 @@ export class SyncFileQueue {
 export async function validateSyncFileSnapshot(file: SyncFileInput,hashFile:(path:string)=>Promise<string>=streamFileHash) {
   if(file.quickMaintenance&&file.originalPath&&resolve(file.path)===resolve(file.originalPath)){
     const current=await stat(file.originalPath);
-    if(current.size!==file.originalSize||current.mtimeMs!==file.originalMtime||await hashFile(file.originalPath)!==file.hash)throw new Error('原始文件在处理期间已改变，请继续同步');
+    if(current.size!==file.originalSize||current.mtimeMs!==file.originalMtime||(file.originalCtime!==undefined&&current.ctimeMs!==file.originalCtime)||await hashFile(file.originalPath)!==file.hash)throw new Error('原始文件在处理期间已改变，请继续同步');
     return;
   }
   if (await hashFile(file.path) !== file.hash) throw new Error('文件任务快照已改变');
   if (file.originalPath) {
     const current = await stat(file.originalPath);
-    if (current.size !== file.originalSize || current.mtimeMs !== file.originalMtime
+    if (current.size !== file.originalSize || current.mtimeMs !== file.originalMtime || (file.originalCtime !== undefined && current.ctimeMs !== file.originalCtime)
       || await hashFile(file.originalPath) !== file.hash) throw new Error('原始文件在处理期间已改变，请继续同步');
   }
 }
 
-export interface SyncFileManifest {hash:string;fingerprint:string;slug:string;pageHash:string;size?:number;mtime?:number;chunks?:number;chunkHash?:string;contentMatched?:boolean;}
+export interface SyncFileManifest {hash:string;fingerprint:string;slug:string;pageHash:string;size?:number;mtime?:number;ctime?:number;chunks?:number;chunkHash?:string;contentMatched?:boolean;repairRequired?:boolean;}
 export function syncFileManifest(file:SyncFileInput,slug:string,pageHash:string,chunks?:number,contentMatched=false,chunkHash?:string):SyncFileManifest {
-  return {hash:file.hash,fingerprint:file.fingerprint,slug,pageHash,size:file.originalSize,mtime:file.originalMtime,chunks,...(chunkHash?{chunkHash}:{}),...(contentMatched?{contentMatched:true}:{})};
+  return {hash:file.hash,fingerprint:file.fingerprint,slug,pageHash,size:file.originalSize,mtime:file.originalMtime,ctime:file.originalCtime,chunks,...(chunkHash?{chunkHash}:{}),...(contentMatched?{contentMatched:true}:{})};
 }
