@@ -93,16 +93,18 @@ test('uncommitted changes sync, commit locally, show real relations, repeat with
 
 test('disabling auto commit still syncs; a failed file never prevents committing successful files',async()=>{
   const before=git('rev-parse','HEAD');
+  writeFileSync(join(repo,'other.txt'),'user staged');git('add','other.txt');
   await db.setConfig('sync.auto_git_commit','false');
   writeFileSync(join(repo,'disabled.md'),'# 示例资料\n\n关闭自动提交后仍同步本地修改。');
   expect((await finish((await runtime.submitDream({preset:'quick',sourceId})).id)).status).toBe('completed');
   expect(await db.getPage('disabled',{sourceId})).not.toBeNull();
   expect(git('rev-parse','HEAD')).toBe(before);
   await db.setConfig('sync.auto_git_commit','true');
+  writeFileSync(join(repo,'disabled.md'),'# 示例资料\n\n开启自动提交后再次同步这份资料。');
   writeFileSync(join(repo,'bad.md'),'# Bad\n\n'+'x'.repeat(5_000_001));
   const partial=await finish((await runtime.submitDream({preset:'quick',sourceId})).id);
   expect((partial.result as Record<string, unknown>)?.status, JSON.stringify(partial.result)).toBe('partial');
-  expect(git('show','HEAD:disabled.md')).toContain('仍同步');
+  expect(git('show','HEAD:disabled.md')).toContain('再次同步');
   expect(git('ls-tree','--name-only','HEAD')).not.toContain('bad.md');
   expect(git('diff','--cached','--name-only')).toBe('other.txt');
   writeFileSync(join(repo,'bad.md'),'# 修复后资料\n\n失败后继续同步。');

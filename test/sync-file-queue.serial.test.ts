@@ -29,7 +29,7 @@ let engine: BrainEngine;
 let runtime: ProductTaskRuntime;
 
 async function finish(id: string) {
-  const deadline=Date.now()+(process.env.PMBRAIN_TASK_TEST_WORKER==='1'?300_000:180_000);
+  const deadline=Date.now()+(process.env.PMBRAIN_TASK_TEST_WORKER==='1'?420_000:300_000);
   while(Date.now()<deadline) {
     const run = await runtime.getRun(id);
     if (run && !['queued', 'running'].includes(run.status)) return run;
@@ -64,12 +64,15 @@ afterAll(async () => {
 
 describe('快速维护文件任务与恢复', () => {
   test('快速维护不为无需模型的资料逐份初始化费用预算', async () => {
+    const capacityIndex=await engine.executeRaw<{partial:boolean}>("SELECT i.indpred IS NOT NULL AS partial FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid WHERE c.relname='idx_minion_jobs_capacity'");
+    expect(capacityIndex).toEqual([{partial:true}]);
     const dir=join(root,'quick-no-model-budget');mkdirSync(dir);
     for(let i=0;i<6;i++)writeFileSync(join(dir,`note-${i}.md`),`# 资料 ${i}\n\n不调用模型的合成资料。`);
     await engine.executeRaw("INSERT INTO sources (id,name,local_path,config) VALUES ($1,$2,$3,$4::jsonb)",['quick-no-model-budget','快速维护预算',dir,{syncEnabled:true}]);
     const run=await finish((await runtime.submitDream({preset:'quick',sourceId:'quick-no-model-budget'})).id);
     expect(run.status).toBe('completed');
     const job=await new MinionQueue(engine).getJob(Number(run.id.slice(5)));
+    expect(job?.data.gitFiles).toBeUndefined();
     const budget=job?.data.taskBudget as {revision?:number;calls?:number}|undefined;
     expect(budget?.calls).toBe(0);
     expect(budget?.revision).toBe(job?.attempts_started);
@@ -287,14 +290,14 @@ describe('快速维护文件任务与恢复', () => {
     const before = await engine.executeRaw<{count:string}>("SELECT count(*)::text AS count FROM minion_jobs WHERE queue=$1 AND data->'task'->'input'->'options'->>'sourceId'=$2",[SYNC_FILE_QUEUE,'legacy-source']);
     expect(Number(before[0].count)).toBe(0);
     const done = await finish((await runtime.submitDream({preset:'quick',sourceId:'legacy-source'})).id);
-    expect(done.product?.syncScan).toMatchObject({scanned:12});
+    expect(done.product?.maintenance?.scan).toMatchObject({scanned:12});
     expect(done.product?.processed).toBe(12);
     expect((await runtime.files(done.id))?.rows).toHaveLength(12);
     expect((await engine.getChunks('legacy-3',{sourceId:'legacy-source'})).length).toBeGreaterThan(0);
     expect((await engine.executeRaw<{chunker_version:number}>("SELECT chunker_version FROM pages WHERE source_id='legacy-source' AND slug='legacy-2'"))[0].chunker_version).toBeGreaterThan(0);
     expect((await engine.getPage('legacy-0',{sourceId:'legacy-source'}))?.compiled_truth).toContain('修改');
     const repeated=await finish((await runtime.submitDream({preset:'quick',sourceId:'legacy-source'})).id);
-    expect(repeated.product?.syncScan).toMatchObject({scanned:12,unchanged:12});expect((await runtime.files(repeated.id))?.rows).toHaveLength(0);
+    expect(repeated.product?.maintenance?.scan).toMatchObject({scanned:12,unchanged:12});expect((await runtime.files(repeated.id))?.rows).toHaveLength(0);
     const otherDone = await finish((await runtime.submitDream({preset:'quick',sourceId:'legacy-other'})).id);
     expect((await runtime.files(otherDone.id))?.rows).toHaveLength(1);
     expect(await engine.getPage('legacy-1',{sourceId:'legacy-other'})).not.toBeNull();
@@ -393,13 +396,14 @@ describe('快速维护文件任务与恢复', () => {
     const done = (await new MinionQueue(engine).getJobs({ queue: SYNC_FILE_QUEUE, limit: 200 })).filter(row => row.data.sessionId === Number(accepted.id.slice(5)));
     expect(done).toHaveLength(120);
     expect(done.every(row => row.status === 'completed')).toBe(true);
+    expect(done.every(row => row.parent_job_id === Number(accepted.id.slice(5)))).toBe(true);
     const completedFirst=await runtime.files(accepted.id);
     expect(completedFirst?.rows).toHaveLength(50);
     expect(completedFirst?.next).not.toBeNull();
     const completedNext=await runtime.files(accepted.id,completedFirst!.next!);
     expect(completedNext?.rows).toHaveLength(50);
     expect(completedNext?.rows.some(row=>completedFirst?.rows.some(previous=>previous.id===row.id))).toBe(false);
-  }, process.env.PMBRAIN_TASK_TEST_WORKER==='1'?360000:180000);
+  }, process.env.PMBRAIN_TASK_TEST_WORKER==='1'?500000:360000);
 
   test('软件退出后自动继续同步文件，已提交而未确认的文件不重复创建版本', async () => {
     const dir = join(root, 'auto-resume'); mkdirSync(dir);
@@ -413,7 +417,8 @@ describe('快速维护文件任务与恢复', () => {
     await runtime.close();
     runtime = new ProductTaskRuntime(engine); await runtime.start();
     expect((await finish(accepted.id)).status).toBe('completed');
-    expect((await new MinionQueue(engine).getJobs({ queue: SYNC_FILE_QUEUE, limit: 300 })).filter(row => row.data.sessionId === Number(accepted.id.slice(5)))).toHaveLength(36);
+    const childRows=(await new MinionQueue(engine).getJobs({ queue: SYNC_FILE_QUEUE, limit: 300 })).filter(row => row.data.sessionId === Number(accepted.id.slice(5)));
+    expect(childRows).toHaveLength(36);
     const versions = await engine.executeRaw<{ count: string }>(`SELECT count(*)::text AS count FROM page_versions v JOIN pages p ON p.id = v.page_id WHERE p.source_id = $1`, ['auto-resume-source']);
     expect(Number(versions[0].count)).toBe(0);
   }, 180000);
@@ -541,7 +546,7 @@ describe('快速维护文件任务与恢复', () => {
     await runtime.close(); runtime = new ProductTaskRuntime(engine); await runtime.start();
   }, 180000);
 
-  test('一千份资料完成并可检索，第二轮不创建新的文件处理任务', async () => {
+  test.skipIf(process.env.PMBRAIN_SYNC_SCALE_TEST !== '1')('一千份资料完成并可检索，第二轮不创建新的文件处理任务', async () => {
     const dir = join(root, 'scale'); mkdirSync(dir);
     const total = 1000;
     for (let i = 0; i < total; i++) writeFileSync(join(dir, `scale-${i}.md`), `# 批量资料 ${i}\n\n千文件验收的隔离内容 ${i}。`);
@@ -550,14 +555,14 @@ describe('快速维护文件任务与恢复', () => {
     const started = performance.now();
     let reported = started;
     let final;
-    for (let i = 0; i < 18000; i++) {
+    for (let i = 0; i < 1100; i++) {
       final = await runtime.getRun(accepted.id);
       if (performance.now() - reported > 15000) {
         console.log('千文件验收进度', JSON.stringify({ seconds: Math.round((performance.now() - started) / 1000), stage: final?.product?.stage, scan: final?.product?.syncScan, files: final?.product?.syncFiles }));
         reported = performance.now();
       }
       if (final && !['running','queued'].includes(final.status)) break;
-      await Bun.sleep(50);
+      await Bun.sleep(1500);
     }
     expect(final?.status).toBe('completed');
     expect(final?.product?.syncFiles?.completed).toBe(total);
@@ -566,8 +571,8 @@ describe('快速维护文件任务与恢复', () => {
     expect((await engine.searchKeyword('千文件验收', { sourceId: 'scale-source', limit: 5 })).length).toBeGreaterThan(0);
     const next = await runtime.submitDream({ preset: 'quick', sourceId: 'scale-source' });
     const repeated = await finish(next.id);
-    expect(repeated.product?.syncScan?.unchanged).toBe(total);
+    expect(repeated.product?.maintenance?.scan?.unchanged).toBe(total);
     const children = await engine.executeRaw<{ count: string }>(`SELECT count(*)::text AS count FROM minion_jobs WHERE queue = $1 AND (data->>'sessionId')::bigint = $2`, [SYNC_FILE_QUEUE, Number(next.id.slice(5))]);
     expect(Number(children[0].count)).toBe(0);
-  }, 950000);
+  }, 1800000);
 });

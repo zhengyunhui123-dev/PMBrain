@@ -45,7 +45,6 @@ export class SyncFileQueue {
     if (!this.allowed(sessionId)) throw new Error('同步任务已停止');
     const parent = await this.queue.getJob(sessionId);
     if (parent?.status !== 'active' || parent.lock_token !== token) throw new Error('同步任务已停止或租约失效');
-    await this.resources.assertImportDisk();
     const key = createHash('sha256').update(JSON.stringify([sessionId, file.options.sourceId, file.sourceRoot, file.relativePath, file.hash, file.fingerprint])).digest('hex');
     const existing=await this.engine.executeRaw<Record<string,unknown>>('SELECT * FROM minion_jobs WHERE idempotency_key=$1',[`sync-file:${key}`]);
     let job=existing.length?rowToMinionJob(existing[0]):undefined;
@@ -60,7 +59,8 @@ export class SyncFileQueue {
       this.observe?.({...job,parent_job_id:sessionId,status:'completed',result});
       return {slug:'',status:'error',chunks:0,error:sizeError};
     }
-    if(!job){
+    const fixedQuickFile=file.quickMaintenance===true&&file.scanValidated===true;
+    if(!job&&!fixedQuickFile){
       const candidates=await this.engine.executeRaw<Record<string,unknown>>(`SELECT * FROM minion_jobs WHERE queue=$1 AND parent_job_id=$2
         AND data->'task'->'input'->>'relativePath'=$3 AND data->'task'->'input'->>'sourceRoot'=$4
         AND COALESCE(data->'task'->'input'->'options'->>'sourceId','default')=$5 AND data->'task'->'input'->>'hash'=$6
@@ -71,7 +71,7 @@ export class SyncFileQueue {
         if(syncFileContentFingerprint(input.options)===file.fingerprint){job=current;break;}
       }
     }
-    await this.engine.executeRaw(`UPDATE minion_jobs SET data=jsonb_set(data,'{superseded}','true'::jsonb),
+    if(!fixedQuickFile)await this.engine.executeRaw(`UPDATE minion_jobs SET data=jsonb_set(data,'{superseded}','true'::jsonb),
       status=CASE WHEN status IN ('paused','delayed','waiting') THEN 'cancelled' ELSE status END,updated_at=now()
       WHERE queue=$1 AND parent_job_id=$2 AND data->'task'->'input'->>'relativePath'=$3
       AND data->'task'->'input'->'options'->>'sourceId'=$4 AND data->'task'->'input'->>'hash' <> $5`,
@@ -82,7 +82,7 @@ export class SyncFileQueue {
         const stored = job.result as unknown as ImportResult & { pageHash?: string;chunkHash?:string };
         if (!stored.pageHash&&(!stored.slug||!['imported','skipped'].includes(stored.status))) return stored;
         const page = await this.completePage(stored.slug,file,stored.status==='skipped');
-        if (page && ['imported','skipped'].includes(stored.status) && page.content_hash === stored.pageHash && !file.options.forceRechunk
+        if (page && ['imported','skipped'].includes(stored.status) && page.content_hash === stored.pageHash
           && (stored.chunkHash===page.chunkHash || (!stored.chunkHash&&isOfficeFilePath(file.relativePath)))
           && (stored.chunks===page.chunks || (stored.status==='skipped'&&stored.chunks===0))) {
           await this.validate(file);
@@ -112,7 +112,7 @@ export class SyncFileQueue {
       }
     }
     if(!manifest?.chunkHash&&!isOfficeFilePath(file.relativePath))file.options={...file.options,forceRechunk:true};
-    if (file.options.noEmbed && !(file.options.session && isSessionExportPath(file.relativePath)) && !isCodeFilePath(file.relativePath)
+    if (!fixedQuickFile && file.options.noEmbed && !(file.options.session && isSessionExportPath(file.relativePath)) && !isCodeFilePath(file.relativePath)
       && !isImageFilePath(file.relativePath) && !(file.options.documentOcr && isOfficeFilePath(file.relativePath))) {
       const inspected = isOfficeFilePath(file.relativePath)
         ? await (await import('../../core/office-import.ts')).importOfficeFile(this.engine,file.path,file.relativePath,{...file.options,checkOnly:true})
@@ -136,11 +136,6 @@ export class SyncFileQueue {
         WHERE id=$1 AND (status IN ('paused','delayed','waiting') OR (status='cancelled' AND data->>'capacityParked'='true'))`,[job.id,{...file,path:((job.data.task as {input:SyncFileInput}).input).path}]);
       const snapshot=((job.data.task as {input:SyncFileInput}).input).path;
       if(await stat(snapshot).catch(error=>{if(error.code==='ENOENT')return null;throw error;}))return { slug: '', status: 'skipped', chunks: 0, deferred: true,childId:job.id };
-    }
-    const pending=await this.engine.executeRaw<{count:string}>("SELECT count(*)::text AS count FROM minion_jobs WHERE queue=$1 AND name=$2 AND status NOT IN ('completed','failed','dead','cancelled')",[SYNC_FILE_QUEUE,SYNC_FILE_TASK]);
-    if(!job && Number(pending[0].count)>=this.capacity){
-      if(file.quickMaintenance)await this.reserveQuickCapacity(sessionId,token);
-      else throw new Error(`资源保护：队列容量已达到 ${this.capacity}，已拒绝新文件。请先完成或停止已有任务。`);
     }
     const size=(await stat(file.path)).size;
     await this.resources.assertImportDisk(size*2);
@@ -166,14 +161,21 @@ export class SyncFileQueue {
     if (!this.allowed(sessionId)) throw new Error('同步任务已停止');
     if (after?.status !== 'active' || after.lock_token !== token) throw new Error('同步任务已停止或租约失效');
     const parentUnbounded = parent?.data.unboundedRuntime === true;
-    const added = job && reusable ? job : await this.queue.add(SYNC_FILE_TASK, { sessionId, kind: 'sync_file', task: { type: 'sync-file', input: { ...file, path } }, ...(parentUnbounded ? { unboundedRuntime: true } : {}) }, {
+    const addChild=()=>this.queue.add(SYNC_FILE_TASK, { sessionId, kind: 'sync_file', task: { type: 'sync-file', input: { ...file, path } }, ...(parentUnbounded ? { unboundedRuntime: true } : {}) }, {
       queue: SYNC_FILE_QUEUE, delay: 24 * 60 * 60 * 1000, max_attempts: 1, maxQueueSize: this.capacity, capacityName: SYNC_FILE_TASK,
       ...(parentUnbounded ? {} : { timeout_ms: 6 * 60 * 60 * 1000 }), idempotency_key: `sync-file:${key}`, on_child_fail: 'continue',
     });
+    let added:MinionJob;
+    if(job&&reusable)added=job;
+    else try{added=await addChild();}catch(error){
+      if(!file.quickMaintenance||!isSyncCapacityError(error))throw error;
+      await this.reserveQuickCapacity(sessionId,token);
+      added=await addChild();
+    }
     if(added===job)await this.engine.executeRaw(`UPDATE minion_jobs SET data=jsonb_set(data,'{task,input}',$2::jsonb),updated_at=now()
       WHERE id=$1 AND (status IN ('paused','delayed','waiting') OR (status='cancelled' AND data->>'capacityParked'='true'))`,[added.id,{...file,path}]);
     queued=true;
-    await this.engine.executeRaw('UPDATE minion_jobs SET parent_job_id=$1 WHERE id=$2',[sessionId,added.id]);
+    if(!fixedQuickFile)await this.engine.executeRaw('UPDATE minion_jobs SET parent_job_id=$1 WHERE id=$2',[sessionId,added.id]);
     added.parent_job_id=sessionId;
     this.observe?.(added);
     return { slug: '', status: 'skipped', chunks: 0, deferred: true,childId:added.id };
@@ -218,6 +220,32 @@ export class SyncFileQueue {
         delay_until=NULL,updated_at=now() WHERE id=$1 AND parent_job_id=$2 AND queue=$3
         AND (status IN ('delayed','paused','waiting','active','completed','dead','failed') OR (status='cancelled' AND data->>'capacityParked'='true')) RETURNING id`,[childId,sessionId,SYNC_FILE_QUEUE]);
       if(!child.length)throw new Error('同步文件任务不存在或已停止');
+    });
+  }
+
+  async activateDuringQuickScanBatch(sessionId:number,token:string,childIds:number[]) {
+    const ids=[...new Set(childIds)];
+    if(!ids.length)return;
+    await this.engine.transaction(async tx=>{
+      await tx.executeRaw("SELECT pg_advisory_xact_lock(hashtext('minion_capacity:' || $1))",[SYNC_FILE_QUEUE]);
+      const parent=await tx.executeRaw("SELECT id FROM minion_jobs WHERE id=$1 AND status='active' AND lock_token=$2 FOR UPDATE",[sessionId,token]);
+      if(!parent.length)throw new Error('同步任务已停止或租约失效');
+      const children=await tx.executeRaw<{id:number;status:string;parked:boolean}>("SELECT id,status,data->>'capacityParked'='true' AS parked FROM minion_jobs WHERE id=ANY($1::bigint[]) AND queue=$2 AND data->>'sessionId'=$4 AND (parent_job_id IS NULL OR parent_job_id=$3) FOR UPDATE",[ids,SYNC_FILE_QUEUE,sessionId,String(sessionId)]);
+      if(children.length!==ids.length)throw new Error('同步文件任务不存在或已停止');
+      for(const child of children){
+        if(['waiting','active','completed','dead','failed'].includes(child.status))continue;
+        if(child.status==='cancelled'&&child.parked)continue;
+        if(!['delayed','paused'].includes(child.status))throw new Error('同步文件任务不存在或已停止');
+      }
+      if(children.some(child=>child.status==='cancelled'&&child.parked))await this.ensureQuickCapacity(tx);
+      const updated=await tx.executeRaw(`UPDATE minion_jobs SET parent_job_id=$2,
+        status=CASE WHEN status IN ('delayed','paused','cancelled') THEN 'waiting' ELSE status END,
+        data=data-'capacityParked',delay_until=NULL,updated_at=now()
+        WHERE id=ANY($1::bigint[]) AND queue=$3 AND data->>'sessionId'=$4
+          AND (parent_job_id IS NULL OR parent_job_id=$2)
+          AND (status IN ('delayed','paused','waiting','active','completed','dead','failed') OR (status='cancelled' AND data->>'capacityParked'='true'))
+        RETURNING id`,[ids,sessionId,SYNC_FILE_QUEUE,String(sessionId)]);
+      if(updated.length!==ids.length)throw new Error('同步文件任务不存在或已停止');
     });
   }
 

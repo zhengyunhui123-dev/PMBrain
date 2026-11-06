@@ -15,6 +15,13 @@ describePostgres('P1 PostgreSQL parity', () => {
     await getConn().unsafe(`DELETE FROM pages WHERE slug IN ('p1-postgres-page', 'p1-postgres-legacy')`);
   });
 
+  test('Current migrations index only pending jobs for queue capacity checks', async () => {
+    const indexes=await getConn().unsafe<{partial:boolean}[]>(
+      `SELECT i.indpred IS NOT NULL AS partial FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid WHERE c.relname='idx_minion_jobs_capacity'`,
+    );
+    expect(indexes).toEqual([{partial:true}]);
+  });
+
   test('Schema 121 exposes embedding, OAuth, context and usage contracts', async () => {
     const columns = await getConn().unsafe<{ table_name: string; column_name: string }[]>(
       `SELECT table_name, column_name FROM information_schema.columns

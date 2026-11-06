@@ -26,6 +26,7 @@ import { SyncFileQueue, SYNC_FILE_QUEUE, SYNC_FILE_TASK } from './sync-file-queu
 import type { MaintenanceCheckpoint, SyncFileInput } from './types.ts';
 import { resolveSourceId } from '../../core/source-resolver.ts';
 import { recordSyncedGitFile, recordSyncedGitFiles, commitQuickMaintenanceSource } from './synced-git.ts';
+import { isSourceGitRepository } from '../../core/source-git.ts';
 import type { SyncResult } from '../../commands/sync.ts';
 import { maintenanceFailure } from './maintenance-orchestration.ts';
 import { claimMaintenanceCapture } from './maintenance-orchestration.ts';
@@ -1040,6 +1041,14 @@ export class ProductTaskRuntime {
     });
     const gitOperations = new Set<Promise<unknown>>();
     const quickGitFiles=new Map<string,{sourceId:string;path:string;hash:string}>();
+    const quickGitRepositories=new Map<string,boolean>();
+    const quickChildIds:number[]=[];
+    const flushQuickChildIds=async()=>{
+      if(!quickChildIds.length)return;
+      const batch=quickChildIds.splice(0,quickChildIds.length);
+      try{await this.fileQueue.activateDuringQuickScanBatch(context.id,record.lock_token!,batch);}
+      catch(error){quickChildIds.unshift(...batch);throw error;}
+    };
     const flushQuickGitFiles=async()=>{
       if(!quickGitFiles.size)return;
       const batch=[...quickGitFiles.entries()];
@@ -1060,7 +1069,7 @@ export class ProductTaskRuntime {
       settleReject(new Error(reason??'任务已取消'));
     };
     const finished = (async () => {
-      try { return await result; }
+      try { const value=await result;await flushQuickChildIds();return value; }
       finally {
         threadClosing = true;
         clearInterval(flush);
@@ -1174,11 +1183,15 @@ export class ProductTaskRuntime {
             const file = message.args[0] as SyncFileInput;
             const quick=structuredTask.type==='dream'&&structuredTask.input.preset==='quick';
             const inlineSync=quick||file.quickMaintenance===true;
+            const quickBatch=quick&&file.quickMaintenance===true&&file.scanValidated===true;
             let result:import('../../core/import-file.ts').ImportResult & {deferred?:boolean;capacityReached?:boolean;childId?:number};
             for(;;){
               try{
                 result=await this.fileQueue.enqueue(context.id,record.lock_token!,file);
-                if(inlineSync&&result.deferred&&result.childId)result=await this.waitForQuickFile(context.id,record.lock_token!,result.childId,gitController.signal);
+                if(result.deferred&&result.childId){
+                  if(quickBatch){quickChildIds.push(result.childId);if(quickChildIds.length>=10)await flushQuickChildIds();}
+                  else if(inlineSync)result=await this.waitForQuickFile(context.id,record.lock_token!,result.childId,gitController.signal);
+                }
                 break;
               }catch(error){
                 if(!isSyncCapacityError(error)||this.stopIntents.has(context.id)||this.paused)throw error;
@@ -1191,8 +1204,14 @@ export class ProductTaskRuntime {
             if (!result.deferred && ['imported', 'skipped'].includes(result.status)) {
               const sourceId=file.options.sourceId??'default';
               if(structuredTask.type==='dream'&&structuredTask.input.preset==='quick'){
-                quickGitFiles.set(JSON.stringify([sourceId,file.relativePath]),{sourceId,path:file.relativePath,hash:file.hash});
-                if(quickGitFiles.size>=32)await flushQuickGitFiles();
+                if(file.sourceRoot){
+                  let repository=quickGitRepositories.get(file.sourceRoot);
+                  if(repository===undefined){repository=isSourceGitRepository(file.sourceRoot);quickGitRepositories.set(file.sourceRoot,repository);}
+                  if(repository){
+                    quickGitFiles.set(JSON.stringify([sourceId,file.relativePath]),{sourceId,path:file.relativePath,hash:file.hash});
+                    if(quickGitFiles.size>=32)await flushQuickGitFiles();
+                  }
+                }
               }else await recordSyncedGitFile(this.engine,context.id,sourceId,{path:file.relativePath,hash:file.hash});
             }
             return result;

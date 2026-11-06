@@ -140,7 +140,7 @@ export class MinionQueue {
       // 1. Idempotency fast path — if a row already exists for this key, return it
       //    without doing any other work. The unique partial index guarantees
       //    no second row can be inserted with the same non-null key.
-      if (opts?.idempotency_key) {
+      if (opts?.idempotency_key && opts.maxQueueSize === undefined) {
         const existing = await tx.executeRaw<Record<string, unknown>>(
           `SELECT * FROM minion_jobs WHERE idempotency_key = $1`,
           [opts.idempotency_key]
