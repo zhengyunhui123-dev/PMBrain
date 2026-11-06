@@ -28,6 +28,16 @@ test('task timeout rejects invalid and overflowing timer values',()=>{
   expect(parseTaskTimeout('420000')).toBe(420000);
 });
 
+test('retry reopens a saved report with failed files and keeps completed source reports',()=>{
+  const sync:PhaseResult={phase:'sync',status:'warn',summary:'一份资料未完成',duration_ms:1,details:{failedFiles:1}};
+  const finished={status:'partial',phases:[]};
+  const checkpoint:MaintenanceCheckpoint={phases:{one:[sync],done:[]},reports:{one:{status:'partial',phases:[sync]},done:finished}};
+  resumeMaintenanceCheckpoint(checkpoint,false,true);
+  expect(checkpoint.reports.one).toBeUndefined();
+  expect(checkpoint.phases.one).toEqual([]);
+  expect(checkpoint.reports.done).toBe(finished);
+});
+
 test('retry preserves informational warnings but reruns errors and incomplete stages',()=>{
   const lint:PhaseResult={phase:'lint',status:'warn',summary:'格式提示',duration_ms:1,details:{issues:1}};
   const sync:PhaseResult={phase:'sync',status:'ok',summary:'已同步',duration_ms:1,details:{}};

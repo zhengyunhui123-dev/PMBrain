@@ -800,6 +800,7 @@ export class ProductTaskRuntime {
       await this.clearStopIntent(jobId);
       await this.fileQueue.resume(jobId);
       if (unboundedResume) await this.engine.executeRaw(`UPDATE minion_jobs SET timeout_ms=NULL, timeout_at=NULL, data=CASE WHEN id=$1 THEN data ELSE jsonb_set(data,'{unboundedRuntime}','true'::jsonb) END WHERE id=$1 OR (queue=$2 AND parent_job_id=$1 AND name=$3)`, [jobId, SYNC_FILE_QUEUE, SYNC_FILE_TASK]);
+      this.sessionViews.delete(jobId);
       return this.getRun(id);
     }
     if (task.type !== 'sync-file') {
@@ -819,6 +820,7 @@ export class ProductTaskRuntime {
         data=(data-'resourceStopReason') || ($2::jsonb - 'relations' - 'gitFiles' - 'gitResults' - 'taskBudget'),progress=$3::jsonb,updated_at=now()
         WHERE id=$1 AND queue=$4 AND status IN ('paused','cancelled','failed','dead','completed') RETURNING id`, [resumedId, record!.data, progress,record!.queue]);
       if (unboundedResume && updated.length) await this.engine.executeRaw(`UPDATE minion_jobs SET timeout_ms=NULL, timeout_at=NULL WHERE id=$1`, [resumedId]);
+      this.sessionViews.delete(resumedId);
       const current = await this.getRun(id);
       if (current && updated.length) return { ...current, status: 'queued' };
       return current;
@@ -1195,7 +1197,10 @@ export class ProductTaskRuntime {
                 break;
               }catch(error){
                 if(!isSyncCapacityError(error)||this.stopIntents.has(context.id)||this.paused)throw error;
-                if(inlineSync&&await this.waitForQuickCapacity(gitController.signal))continue;
+                if(inlineSync){
+                  await flushQuickChildIds();
+                  if(await this.waitForQuickCapacity(gitController.signal))continue;
+                }
                 const counts=await this.fileQueue.counts(context.id);
                 if(counts.remaining>0){result={slug:'',status:'skipped',chunks:0,deferred:true,capacityReached:true};break;}
                 throw error;
@@ -1648,7 +1653,7 @@ export class ProductTaskRuntime {
     const onFinished=(job:MinionJob)=>{if(job.id===childId){version++;wake?.();}};
     this.fileWorker.on('job-finished',onFinished);
     try{
-      await this.fileQueue.activateDuringQuickScan(sessionId,token,childId);
+      await this.fileQueue.activateDuringQuickScanBatch(sessionId,token,[childId]);
       for(;;){
         signal.throwIfAborted();
         const seen=version;
@@ -1657,6 +1662,7 @@ export class ProductTaskRuntime {
         if(child.status==='completed'){
           const value=child.result as Record<string,unknown>|null;
           if(!value)throw new Error('同步文件任务没有完成结果');
+          await this.fileQueue.cleanupCompleted(child);
           const status=value.status==='failed'?'error':value.status;
           if(!['imported','skipped','partial','error'].includes(String(status)))throw new Error('同步文件任务结果无效');
           return {...value,status} as import('../../core/import-file.ts').ImportResult;

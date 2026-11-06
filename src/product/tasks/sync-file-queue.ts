@@ -254,7 +254,8 @@ export class SyncFileQueue {
       const rows = await tx.executeRaw<{ id: number }>(`SELECT id FROM minion_jobs WHERE id = $1 AND status = 'active' AND lock_token = $2 FOR UPDATE`, [sessionId, token]);
       if (!rows.length) throw new Error('同步任务已停止或租约失效');
       await tx.executeRaw(`UPDATE minion_jobs SET parent_job_id = $1, status = CASE WHEN status IN ('delayed','paused') THEN 'waiting' ELSE status END,
-        delay_until = NULL, updated_at = now() WHERE queue = $2 AND (data->>'sessionId')::bigint = $1 AND data->>'superseded' IS DISTINCT FROM 'true'`, [sessionId, SYNC_FILE_QUEUE]);
+        delay_until = NULL, updated_at = now() WHERE queue = $2 AND (data->>'sessionId')::bigint = $1 AND data->>'superseded' IS DISTINCT FROM 'true'
+          AND (parent_job_id IS DISTINCT FROM $1 OR status IN ('delayed','paused') OR delay_until IS NOT NULL)`, [sessionId, SYNC_FILE_QUEUE]);
       await tx.executeRaw(`UPDATE minion_jobs SET status = CASE WHEN EXISTS (
         SELECT 1 FROM minion_jobs WHERE parent_job_id = $1 AND data->>'superseded' IS DISTINCT FROM 'true' AND status NOT IN ('completed','dead','failed','cancelled')
         ) THEN 'waiting-children' ELSE 'waiting' END, lock_token = NULL, lock_until = NULL, updated_at = now() WHERE id = $1`, [sessionId]);

@@ -165,8 +165,9 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
   if (input.preset === 'quick' && input.allSources && checkpoint.quickSync) {
     for (const [id, raw] of Object.entries(checkpoint.reports)) {
       const report = raw as { status?: string; brain_dir?: string | null; phases?: Array<{ status?: string }> };
-      if (checkpoint.quickSync.sources[id] || report.status === 'failed' || report.phases?.some(phase => phase.status === 'fail')) continue;
-      checkpoint.quickSync.sources[id] = {
+      const plan = checkpoint.quickSync.sources[id];
+      if ((plan && !(plan.complete && plan.paths.length === 0 && plan.entries.length === 0)) || report.status === 'failed' || report.phases?.some(phase => phase.status === 'fail')) continue;
+      checkpoint.quickSync.sources[id] ??= {
         root: report.brain_dir ?? '', paths: [], checked: 0, checkedPaths: [], unchanged: 0, entries: [], complete: true,
       };
       legacyCompletedReports.add(id);
@@ -426,11 +427,14 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
       const saved=new Set(completed.map(file=>JSON.stringify([file.sourceId,file.relativePath,file.hash])));
       for(const [sourceId,plan] of Object.entries(quickPlan.sources))for(const file of plan.entries){
         if(saved.has(JSON.stringify([sourceId,file.relativePath,file.hash])))continue;
+        delete checkpoint.reports[sourceId];
+        checkpoint.phases[sourceId]=[];
         abort.signal.throwIfAborted();
         const info=await stat(file.path);
         file.originalSize=info.size;file.originalMtime=info.mtimeMs;file.originalCtime=info.ctimeMs;
         let oversized=false;try{assertImportFileSize(file.relativePath,info.size);}catch{oversized=true;}
         file.hash=oversized?`oversize:${info.size}:${info.mtimeMs}`:await streamFileHash(file.path,abort.signal);
+        file.scanValidated=false;
       }
       input.refreshPendingSync=false;await rpc('task.maintenanceCheckpoint',[checkpoint,true]);
     }
@@ -617,6 +621,10 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
           roundSlugs = undefined;
           skippedRound = false;
         }
+        if (stage.id === 'concepts' && knowledgeEnabled) {
+          roundSlugs = undefined;
+          skippedRound = false;
+        }
         if (stage.id === 'entities' && ingestEnabled && !input.dryRun) {
           for (const source of sources) {
             const requested = await rpc('task.captureRequest', [source.id]) as string[] | undefined;
@@ -669,7 +677,33 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
               }
             } catch (error) { if (!(error instanceof SyncFilesDeferred)) throw error; }
           }
+          for (const source of sources) {
+            syncPlan.sourceId = source.id;
+            await syncPlan.restore(source.id);
+            if (syncPlan.current && !syncPlan.current.complete) await syncPlan.finish();
+          }
           syncPlan.preparing = false; pendingFiles = false; capacityReached = false;
+          for (const [index, source] of sources.entries()) {
+            abort.signal.throwIfAborted();
+            syncPlan.sourceId = source.id;
+            if (!syncPlan.current?.complete) continue;
+            send({ type: 'progress', scope: { name: source.name, index, total: sources.length } });
+            try {
+              const report = await runCycle(engine, {
+                ...common, sourceId: source.id, brainDir: await quickBrainDir(source.id), syncFileRuntime: fileRuntime,
+                phases: ['sync'], phaseWindow: ['sync'], localPathOnly: true, deferInlineExtract: true, quickMaintenance: false, includeOffice: true,
+              });
+              lastReport = report;
+              if (report.reason === 'cycle_already_running') return report;
+              const failure = report.phases.find(phase => phase.phase === 'sync' && phase.status === 'fail');
+              if (failure) throw new Error(failure.error?.message ?? failure.summary);
+              const syncPhase = report.phases.find(phase => phase.phase === 'sync');
+              if (syncPhase && syncPhase.status !== 'fail') {
+                const saved = checkpoint.phases[source.id] ?? [];
+                checkpoint.phases[source.id] = [...saved.filter(phase => phase.phase !== 'sync'), syncPhase];
+              }
+            } catch (error) { if (!(error instanceof SyncFilesDeferred)) throw error; }
+          }
           deepRound.scan = syncPlan.scan(true);
           notifyDeep();
           await rpc('task.maintenanceCheckpoint', [checkpoint]);
@@ -682,7 +716,7 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
             const saved = checkpoint.phases[source.id] ?? [];
             if (!saved.some(phase => phase.phase === 'capture_entities')) checkpoint.phases[source.id] = [...saved, { phase: 'capture_entities', status: 'skipped', duration_ms: 0, summary, details: { reason, pages_submitted: 0 } }];
           }
-        } else if (!skippedRound) {
+        } else if (!skippedRound && stage.id !== 'sync') {
           for (const [index, source] of sources.entries()) {
             abort.signal.throwIfAborted();
             syncPlan.sourceId = source.id;
@@ -696,7 +730,6 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
               quickMaintenance: false, quickEntitiesOnly: true, reuseDuplicateKnowledgeSources: true,
               schemaPack: knowledgePack, includePendingKnowledge: knowledgeEnabled,
               enrichThinWhenUnset: true, enrichThinTypesWhenUnset: ['person', 'company', 'project'],
-              ...(stage.id === 'sync' ? { localPathOnly: true, deferInlineExtract: true } : {}),
               ...(stage.id === 'entities' && !options.prepareEntityCapture ? { captureEntitySlugs: options.captureEntitySlugs ?? [] } : {}),
               ...(roundSlugs !== undefined ? { changedSlugs: roundSlugs, prepareEntityCapture: undefined, ...(stage.id === 'entities' ? { captureEntitySlugs: [...new Set([...(options.captureEntitySlugs ?? []), ...roundSlugs])] } : {}) } : {}),
             });

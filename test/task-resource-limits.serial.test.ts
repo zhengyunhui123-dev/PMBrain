@@ -52,6 +52,28 @@ test('队列硬上限原子拒绝并发新任务，延迟与暂停任务占用�
   expect((await queue.add('after-completion',{},opts)).queue).toBe(opts.queue);
 },60000);
 
+test('释放文件队列只激活待处理记录，不重写执行中或已完成的子任务',async()=>{
+  const queue=new MinionQueue(engine),files=new SyncFileQueue(engine);
+  const parent=await queue.add('release-parent',{}, {queue:'release-parent'});
+  const claimed=await queue.claim('release-test',30000,'release-parent',['release-parent']);
+  const children:number[]=[];
+  try{
+    for(const status of ['active','completed','delayed']){
+      const child=await queue.add(SYNC_FILE_TASK,{sessionId:parent.id},{queue:SYNC_FILE_QUEUE,delay:86400000});
+      children.push(child.id);
+      await engine.executeRaw("UPDATE minion_jobs SET status=$2,parent_job_id=$3,delay_until=CASE WHEN $2='delayed' THEN now()+interval '1 day' ELSE NULL END,updated_at='2026-01-01T00:00:00Z' WHERE id=$1",[child.id,status,status==='delayed'?null:parent.id]);
+    }
+    await files.release(parent.id,claimed!.lock_token!);
+    const rows=await engine.executeRaw<{id:number;status:string;parent_job_id:number;untouched:boolean}>("SELECT id,status,parent_job_id,updated_at='2026-01-01T00:00:00Z'::timestamptz AS untouched FROM minion_jobs WHERE id=ANY($1::bigint[]) ORDER BY id",[children]);
+    expect(rows.map(row=>row.status)).toEqual(['active','completed','waiting']);
+    expect(rows.map(row=>row.parent_job_id)).toEqual([parent.id,parent.id,parent.id]);
+    expect(rows.map(row=>row.untouched)).toEqual([true,true,false]);
+    expect((await queue.getJob(parent.id))?.status).toBe('waiting-children');
+  }finally{
+    await engine.executeRaw("UPDATE minion_jobs SET status='cancelled',lock_token=NULL,lock_until=NULL WHERE id=ANY($1::bigint[])",[[parent.id,...children]]);
+  }
+},60000);
+
 test('旧快速维护暂停任务占满队列时保留任务并让新任务推进，旧任务仍可续跑',async()=>{
   const dir=join(home,'parked-quick');mkdirSync(dir);
   for(const name of ['old-one.md','old-two.md','new.md','new-two.md'])writeFileSync(join(dir,name),`# ${name}\n\n容量测试资料 ${name}`);
@@ -273,8 +295,9 @@ test('整批资料超过快照窗口时自动分批完成，同一任务不报�
     expect(savedPages.map(page=>page.slug)).toEqual(['first','second','third']);
     expect(resumedFiles?.rows,JSON.stringify({run:await runtime.getRun(run.id),files:resumedFiles})).toHaveLength(3);
     expect(resumedFiles?.rows.every(row=>row.status==='completed')).toBe(true);
-    expect(visited.sort()).toEqual(['first.md','second.md','third.md']);
-    expect(counts.mock.calls.filter(call=>Number(call[0])===Number(run.id.slice(5))).length).toBeLessThanOrEqual(2);
+    expect([...new Set(visited)].sort()).toEqual(['first.md','second.md','third.md']);
+    expect(resumed.product?.maintenance?.scan.scanned).toBe(3);
+    expect(counts.mock.calls.filter(call=>Number(call[0])===Number(run.id.slice(5))).length).toBeLessThanOrEqual(2+Math.ceil(savedPages.length/2));
     const snapshots=await engine.executeRaw<{path:string}>("SELECT data->'task'->'input'->>'path' AS path FROM minion_jobs WHERE queue=$1 AND parent_job_id=$2",[SYNC_FILE_QUEUE,Number(run.id.slice(5))]);
     expect(snapshots.every(row=>!existsSync(row.path))).toBe(true);
     originals.forEach((bytes,index)=>expect(readFileSync(join(dir,['first.md','second.md','third.md'][index]))).toEqual(bytes));

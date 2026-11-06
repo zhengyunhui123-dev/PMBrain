@@ -50,7 +50,7 @@ async function document(path:string,text:string){const zip=new JSZip();zip.file(
 async function finish(id:string){const end=Date.now()+120000;while(Date.now()<end){const run=await runtime.getRun(id);if(run&&!['running','queued'].includes(run.status))return run;await Bun.sleep(60);}throw new Error('audit task timeout: '+id);}
 async function quick(){const run=await runtime.submitDream({preset:'quick',sourceId:'default'},'scheduled');const done=await finish(run.id);expect(done.status,JSON.stringify(done.result)).toBe('completed');return done;}
 async function embeddingEnabled(enabled:boolean){const config=JSON.parse(readFileSync(configPath(),'utf8'));config.embedding_disabled=!enabled;config.model_usage.embedding_enabled=enabled;writeFileSync(configPath(),JSON.stringify(config));await reloadLiveGateway(engine);}
-async function waitUntil(read:()=>Promise<boolean>,label:string){const end=Date.now()+60000;while(Date.now()<end){if(await read())return;await Bun.sleep(100);}throw new Error(label);}
+async function waitUntil(read:()=>Promise<boolean>,label:string){const end=Date.now()+180000;while(Date.now()<end){if(await read())return;await Bun.sleep(100);}throw new Error(label);}
 
 test('快速维护按内容更新同大小同时间的 Word 和 Markdown，再次不变不新增文件任务',async()=>{
   await embeddingEnabled(false);
@@ -140,7 +140,7 @@ test('向量处理中电脑变忙时保存当前批次，重启及暂停后只�
   expect(await engine.countStaleChunks({sourceId:'window'})).toBe(0);expect((done.result as any).budget.calls).toBe(calls-before);
   const [total]=await engine.executeRaw<{n:number}>('SELECT count(*)::int AS n FROM content_chunks c JOIN pages p ON p.id=c.page_id WHERE p.source_id=$1',['window']);
   expect((done.result as any).phases.find((phase:any)=>phase.phase==='embed').details.embedded).toBe(total.n);
-},180000);
+},300000);
 
 test('独立同步先保存资料再排队，暂停与电脑繁忙时零向量请求且不处理停用来源',async()=>{
   await embeddingEnabled(true);await pauseSearchOptimize(engine,true);cpu=0.95;

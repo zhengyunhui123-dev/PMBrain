@@ -2,6 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:tes
 import { buildContextDelta } from '../../src/core/context/context-pack.ts';
 import { makeEngineChatUsageSink } from '../../src/core/ai/chat-usage.ts';
 import { LATEST_VERSION, runMigrations } from '../../src/core/migrate.ts';
+import { PMBRAIN_SCHEMA_VERSION_KEY } from '../../src/core/pmbrain-adapters/migration-ledger.ts';
 import { getConn, getEngine, hasDatabase, setupDB, teardownDB } from './helpers.ts';
 
 const describePostgres = hasDatabase() ? describe : describe.skip;
@@ -16,10 +17,11 @@ describePostgres('P1 PostgreSQL parity', () => {
   });
 
   test('Current migrations index only pending jobs for queue capacity checks', async () => {
-    const indexes=await getConn().unsafe<{partial:boolean}[]>(
+    const indexes = await getConn().unsafe<{ partial: boolean }[]>(
       `SELECT i.indpred IS NOT NULL AS partial FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid WHERE c.relname='idx_minion_jobs_capacity'`,
     );
-    expect(indexes).toEqual([{partial:true}]);
+    expect(indexes).toHaveLength(1);
+    expect(indexes[0]?.partial).toBe(true);
   });
 
   test('Schema 121 exposes embedding, OAuth, context and usage contracts', async () => {
@@ -99,6 +101,7 @@ describePostgres('P1 PostgreSQL parity', () => {
     await getConn().unsafe(`UPDATE content_chunks SET embedded_text_hash = NULL WHERE page_id = (SELECT id FROM pages WHERE slug = 'p1-postgres-legacy')`);
     await getConn().unsafe(`UPDATE pages SET embedding_signature = NULL WHERE slug = 'p1-postgres-legacy'`);
     await engine.setConfig('version', '120');
+    await engine.setConfig(PMBRAIN_SCHEMA_VERSION_KEY, '120');
 
     await runMigrations(engine);
 

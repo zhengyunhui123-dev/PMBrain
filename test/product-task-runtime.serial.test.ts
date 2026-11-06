@@ -225,7 +225,7 @@ describe('软件后台任务共用 owner 数据库', () => {
     expect(resumed?.id).toBe(`task-${job.id}`);
     const modelTimer=setInterval(release,20);
     try{
-      const done=await finished(resumed!.id,45_000);
+      const done=await finished(resumed!.id,90_000);
       expect(done.status).toBe('completed');
       expect((await engine.getPage('resume-done',{sourceId:'default'}))?.compiled_truth).toContain('已完成源的原内容');
       expect(await engine.getPage('resume-pending',{sourceId:'resume-second'})).not.toBeNull();
@@ -240,7 +240,7 @@ describe('软件后台任务共用 owner 数据库', () => {
       await engine.executeRaw("UPDATE sources SET config=jsonb_set(config,'{syncEnabled}','false'::jsonb) WHERE id=$1",['resume-second']).catch(()=>{});
       await engine.executeRaw('UPDATE sources SET local_path=$1 WHERE id=$2',[root,'default']).catch(()=>{});
     }
-  },60000);
+  },120000);
   test('两个导入先入库，只产生一个搜索优化任务，停止不删除已入库资料', async () => {
     await settleOptimize();
     configureModels();

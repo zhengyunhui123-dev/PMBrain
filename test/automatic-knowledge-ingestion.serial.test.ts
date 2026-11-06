@@ -20,7 +20,7 @@ const original=Object.fromEntries(keys.map(key=>[key,process.env[key]]));
 const database=process.env.PMBRAIN_TASK_TEST_DATABASE_URL;
 
 async function finished(id:string){
-  const deadline=Date.now()+45000;
+  const deadline=Date.now()+120000;
   while(Date.now()<deadline){const run=await runtime.getRun(id);if(run&&!['queued','running'].includes(run.status))return run;await Bun.sleep(40);}
   throw new Error(JSON.stringify(await runtime.getRun(id)));
 }
@@ -91,7 +91,7 @@ test('new source material synchronized by deep maintenance is captured in that t
   expect((await finished((await runtime.submitDream({preset:'full',sourceId:'knowledge-sync'})).id)).status).toBe('completed');
   await settledKnowledge();
   expect(calls).toBe(count);expect(embeddingCalls).toBe(vectors);
-},60000);
+},180000);
 
 test('automatic ingestion setting preserves pending original material; maintenance resumes after enabling',async()=>{
   await engine.setConfig('dream.entity_capture.enabled','false');

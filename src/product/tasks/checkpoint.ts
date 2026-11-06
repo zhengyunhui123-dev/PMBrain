@@ -34,7 +34,8 @@ export function retireAutomaticCapture(checkpoint: MaintenanceCheckpoint): void 
 
 export function resumeMaintenanceCheckpoint(checkpoint:MaintenanceCheckpoint,retryCompleted=false,preserveWarnings=false):void {
   for(const [source,report] of Object.entries(checkpoint.reports)) {
-    if(retryCompleted && !['ok','clean'].includes(String(report.status)))delete checkpoint.reports[source];
+    if((Array.isArray(report.phases)&&report.phases.some(phase=>phase.status==='fail'||phaseHasPendingWork(phase)))
+      || retryCompleted && !['ok','clean'].includes(String(report.status)))delete checkpoint.reports[source];
   }
   for(const [source,phases] of Object.entries(checkpoint.phases)) {
     if(checkpoint.reports[source])continue;

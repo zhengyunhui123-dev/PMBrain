@@ -1,6 +1,6 @@
 import { expect } from 'bun:test';
 import type { BrainEngine, FactKind } from '../../src/core/engine.ts';
-import { MIGRATIONS, runMigrations } from '../../src/core/migrate.ts';
+import { LATEST_VERSION, MIGRATIONS, runMigrations } from '../../src/core/migrate.ts';
 import { PMBRAIN_SCHEMA_VERSION_KEY } from '../../src/core/pmbrain-adapters/migration-ledger.ts';
 
 export async function verifyIdeaMigration(engine: BrainEngine) {
@@ -68,8 +68,8 @@ export async function verifyStuckFactKindConstraint(engine: BrainEngine) {
   await engine.setConfig('version', '138');
   await engine.setConfig(PMBRAIN_SCHEMA_VERSION_KEY, '138');
   const applied = await runMigrations(engine);
-  expect(applied.current).toBe(139);
-  expect(await engine.getConfig('version')).toBe('139');
+  expect(applied.current).toBe(LATEST_VERSION);
+  expect(await engine.getConfig('version')).toBe(String(LATEST_VERSION));
   expect(await engine.executeRaw('SELECT id, fact, kind, source_id, visibility FROM facts WHERE source = $1 ORDER BY id', ['idea-constraint-repair'])).toEqual(before);
   await engine.insertFact({ fact: '建议先试点，尚未决定实施。', kind: 'idea', source: 'idea-constraint-repair' }, { source_id: 'default' });
   await migration.handler!(engine);

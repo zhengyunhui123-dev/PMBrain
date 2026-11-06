@@ -116,6 +116,8 @@ test('失败不计作已导入；修复原文件后仅核对未完成文件，�
   const original=await engine.getPage('good',{sourceId:'fixed-failed'});
   writeFileSync(join(dir,'bad.md'),'# 修复后的资料\n\n继续时只重读这份失败资料。');
   const resumed=await runtime.retry(run.id);expect(resumed?.id).toBe(run.id);
+  expect(resumed?.status).not.toBe('failed');
+  expect((await runtime.getRun(run.id))?.status).not.toBe('failed');
   const done=await finished(run.id);
   expect(done.status,JSON.stringify(done.result)).toBe('completed');
   expect(done.product?.syncFiles).toMatchObject({total:2,completed:2,failed:0});
