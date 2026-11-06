@@ -129,7 +129,7 @@ test('启动时清掉图片积压，深度整理进行时图片识别让出文�
   }
 }, 60000);
 
-test('没有新资料时深度整理跳过后续步骤，并记下每一步的开始和结束', async () => {
+test('没有新文件时跳过内容综合，并续接已提交的实体识别', async () => {
   const repo = join(home, 'quiet-source');
   mkdirSync(repo);
   writeFileSync(join(repo, 'note.md'), '# 安静资料\n\n这份资料已经整理过，再跑一轮不应整库重做。');
@@ -152,10 +152,14 @@ test('没有新资料时深度整理跳过后续步骤，并记下每一步的�
     modelCalls = 0;
     const full = await ended((await runtime.submitDream({ preset: 'full', sourceId: 'deep-quiet', maxPages: 1 })).id);
     expect(full.status, JSON.stringify(full)).toBe('completed');
-    expect(modelCalls, JSON.stringify(full.product?.deep)).toBe(0);
-    const later = (full.product?.deep?.stages ?? []).filter(stage => !['check', 'sync'].includes(stage.id));
-    expect(later.length).toBeGreaterThan(0);
-    expect(later.every(stage => stage.status === 'skipped' && stage.result === '跳过'), JSON.stringify(later)).toBe(true);
+    expect(modelCalls, JSON.stringify(full.product?.deep)).toBe(1);
+    const stages = full.product?.deep?.stages ?? [];
+    const stage = (id: string) => stages.find(item => item.id === id);
+    expect(stage('relations')?.status).toBe('skipped');
+    expect(stage('relations')?.result).toBe('跳过');
+    expect(stage('entities')?.status).not.toBe('skipped');
+    expect(stage('entities')?.result).toContain('写入 0 个实体');
+    for (const id of ['concepts', 'index', 'review']) expect(stage(id)?.status, JSON.stringify(stage(id))).toBe('skipped');
     const log = full.product?.deep?.log ?? [];
     expect(log.some(entry => entry.event === 'start' && entry.stage === 'relations')).toBe(true);
     expect(log.some(entry => entry.event === 'finish' && entry.stage === 'relations' && entry.result === '跳过' && typeof entry.durationMs === 'number')).toBe(true);

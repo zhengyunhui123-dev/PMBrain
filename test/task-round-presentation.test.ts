@@ -19,9 +19,9 @@ describe('整理按本轮成果展示',()=>{
     const live=taskPhaseSummary(run,Date.parse('2026-10-20T09:28:02Z'));
     expect(live.duration).toBe('7 秒');expect(live.durationLabel).toBe('阶段耗时');
   });
-  test('结束的部分整理显示本轮完成，不把原始0页进度改成100%',()=>{
+  test('结束的部分整理显示部分完成，不把原始0页进度改成100%',()=>{
     const run=sample(),before=JSON.stringify(run);
-    expect(taskStatus(run)).toBe('本轮已完成');expect(taskRoundCompleted(run)).toBe(true);expect(taskPercent(run)).toBeNull();
+    expect(taskStatus(run)).toBe('部分完成');expect(taskRoundCompleted(run)).toBe(true);expect(taskPercent(run)).toBeNull();
     expect(taskHasRemaining(run)).toBe(true);expect(JSON.stringify(run)).toBe(before);expect(run.product?.percent).toBe(0);
   });
   test('真实成果先展示，待检查和剩余页分开，不把Token与预算当成果',()=>{
