@@ -28,12 +28,23 @@ test('task timeout rejects invalid and overflowing timer values',()=>{
   expect(parseTaskTimeout('420000')).toBe(420000);
 });
 
+test('retry reopens a saved report with failed files and keeps completed source reports',()=>{
+  const sync:PhaseResult={phase:'sync',status:'warn',summary:'一份资料未完成',duration_ms:1,details:{failedFiles:1}};
+  const finished={status:'partial',phases:[]};
+  const checkpoint:MaintenanceCheckpoint={phases:{one:[sync],done:[]},reports:{one:{status:'partial',phases:[sync]},done:finished}};
+  resumeMaintenanceCheckpoint(checkpoint,false,true);
+  expect(checkpoint.reports.one).toBeUndefined();
+  expect(checkpoint.phases.one).toEqual([]);
+  expect(checkpoint.reports.done).toBe(finished);
+});
+
 test('retry preserves informational warnings but reruns errors and incomplete stages',()=>{
   const lint:PhaseResult={phase:'lint',status:'warn',summary:'格式提示',duration_ms:1,details:{issues:1}};
   const sync:PhaseResult={phase:'sync',status:'ok',summary:'已同步',duration_ms:1,details:{}};
   for(const details of [{ner_error:'temporary error'},{by_mention_error:'temporary error'},{relation_backfill_error:'temporary error'},{pages_remaining:2}]){
     const extract:PhaseResult={phase:'extract',status:'warn',summary:'未完成',duration_ms:1,details};
-    if(!('pages_remaining' in details))expect(maintenanceFailure({status:'partial',phases:[lint,sync,extract]})).toBe('temporary error');
+    if(!('pages_remaining' in details))expect(maintenanceFailure({status:'partial',phases:[lint,sync,extract]})).toBe('实体摄入失败：temporary error');
+    expect(maintenanceFailure({status:'failed',phases:[{phase:'extract_facts',status:'fail',error:{message:'new row for relation "facts" violates check constraint "facts_kind_check"'}}]})).toBe('提炼事实失败：new row for relation "facts" violates check constraint "facts_kind_check"');
     expect(maintenanceFailure({status:'partial',phases:[lint,sync]})).toBeNull();
     const checkpoint:MaintenanceCheckpoint={phases:{one:[lint,sync,extract]},reports:{one:{status:'partial'}}};
     resumeMaintenanceCheckpoint(checkpoint,true,true);

@@ -40,6 +40,7 @@ export async function readMentionCoverage(engine: Pick<BrainEngine, 'executeRaw'
     `SELECT source_id, state, pending, counted_at, last_pass_at FROM mention_index_status WHERE source_id = ANY($1::text[])`, [sourceIds]);
   const bySource = new Map(rows.map(r => [r.source_id, r]));
   let pending = 0;
+  let pendingIndex = false;
   let failed = false;
   let last: string | null = null;
   for (const sourceId of sourceIds) {
@@ -53,6 +54,7 @@ export async function readMentionCoverage(engine: Pick<BrainEngine, 'executeRaw'
       continue;
     }
     if (row.state === 'failed') failed = true;
+    if (row.state === 'pending') pendingIndex = true;
     // Pages written at or after the last count that are not scanned at their current content (the index on updated_at keeps it small).
     const [since] = await engine.executeRaw<{ n: number }>(
       `SELECT count(*)::int AS n FROM pages p LEFT JOIN page_mention_state s ON s.page_id = p.id
@@ -61,13 +63,13 @@ export async function readMentionCoverage(engine: Pick<BrainEngine, 'executeRaw'
       [sourceId, toIso(row.counted_at) ?? '-infinity', MENTION_EXTRACTOR_VERSION]);
     pending += Number(row.pending ?? 0) + Number(since?.n ?? 0);
   }
-  const state: CoverageState = !policy.enabled ? 'disabled' : failed ? 'failed' : pending > 0 ? 'pending' : 'complete';
+  const state: CoverageState = !policy.enabled ? 'disabled' : failed ? 'failed' : pending > 0 || pendingIndex ? 'pending' : 'complete';
   return { state, pending_pages: policy.enabled ? pending : 0, last_pass_at: last, ...(state === 'complete' ? {} : { degraded: true as const }) };
 }
 
 const WHY: Record<Exclude<CoverageState, 'complete'>, (c: MentionCoverage) => string> = {
-  pending: c => `${c.pending_pages} page(s) have not been scanned for entity names yet, so references from them are missing; ` +
-    'a short or empty list is not proof that nothing else mentions this entity.',
+  pending: c => (c.pending_pages > 0 ? `${c.pending_pages} page(s) have not been scanned for entity names yet` : 'Entity name index changes are awaiting a catch-up scan') +
+    ', so a short or empty list is not proof that nothing else mentions this entity.',
   disabled: () => 'Mention linking is off (auto_link or mentions.auto_link is false), so only explicit links are listed, not pages that name this entity.',
   type_not_linkable: () => 'This page type is not a linkable entity type, so pages that only name it are not listed; explicit links are. ' +
     'Add the type with `gbrain config set mentions.entity_types +<type>` to link it.',

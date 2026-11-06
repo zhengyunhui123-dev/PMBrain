@@ -300,6 +300,7 @@ export interface SynthesizePhaseOpts {
   signal?: AbortSignal;
   deadlineAtMs?: number | null;
   privateQueueOwnerJobId?: number | null;
+  changedSlugs?: string[];
 }
 
 export async function loadDreamWriteSettings(
@@ -406,9 +407,16 @@ export async function runPhaseSynthesize(
           to: opts.to,
           bypassGuard: opts.bypassDreamGuard,
         }));
-    const { transcripts, duplicateInputSkips } = explicitInputIsDirectory
+    const deduped = explicitInputIsDirectory
       ? dedupeExplicitInputTranscripts(rawTranscripts)
       : { transcripts: rawTranscripts, duplicateInputSkips: [] };
+    const duplicateInputSkips = deduped.duplicateInputSkips;
+    const wanted = opts.changedSlugs === undefined ? null : new Set(opts.changedSlugs.map(slug => slug.replace(/\\/g, '/').toLowerCase()));
+    const transcripts = wanted === null ? deduped.transcripts : deduped.transcripts.filter(transcript => {
+      const path = transcript.filePath.replace(/\\/g, '/').toLowerCase();
+      for (const slug of wanted) if (path.endsWith('/' + slug) || path.endsWith('/' + slug + '.md') || path.endsWith('/' + slug + '.txt') || path.includes('/' + slug + '.') || path.endsWith(slug)) return true;
+      return false;
+    });
 
     if (transcripts.length === 0) {
       return ok('no transcripts to process', {

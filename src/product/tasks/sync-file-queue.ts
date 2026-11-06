@@ -14,6 +14,8 @@ import { isSessionExportPath } from '../../core/conversation-parser/session-impo
 import { syncFileContentFingerprint } from './checkpoint.ts';
 import { TaskResourceGuard, SYNC_QUEUE_CAPACITY, streamFileHash, copyFileSnapshot, assertImportFileSize, isSyncCapacityError } from './resource-guard.ts';
 import {readDocumentChunkManifest} from '../../core/document/chunk-manifest.ts';
+import { syncFileManifestKey } from '../../core/sync-file-identity.ts';
+export { syncFileManifestKey } from '../../core/sync-file-identity.ts';
 
 export const SYNC_FILE_QUEUE = 'pmbrain-sync-files';
 export const SYNC_FILE_TASK = 'pmbrain-sync-file';
@@ -21,15 +23,19 @@ export const SYNC_FILE_TASK = 'pmbrain-sync-file';
 export class SyncFileQueue {
   private queue: MinionQueue;
   private enqueueTail:Promise<unknown>=Promise.resolve();
-  constructor(private engine: BrainEngine, private observe?: (job:MinionJob)=>void, private allowed: (id:number)=>boolean = ()=>true, private resources=new TaskResourceGuard()) { this.queue = new MinionQueue(engine); }
+  constructor(private engine: BrainEngine, private observe?: (job:MinionJob)=>void, private allowed: (id:number)=>boolean = ()=>true, private resources=new TaskResourceGuard(),private capacity=SYNC_QUEUE_CAPACITY) { this.queue = new MinionQueue(engine); }
 
-  async enqueue(sessionId: number, token: string, file: SyncFileInput): Promise<ImportResult & { deferred?: boolean; unchanged?: boolean }> {
+  async enqueue(sessionId: number, token: string, file: SyncFileInput): Promise<ImportResult & { deferred?: boolean; unchanged?: boolean; childId?:number }> {
     const operation=this.enqueueTail.then(()=>this.enqueueCore(sessionId,token,file));
     this.enqueueTail=operation.catch(()=>{});
     return operation;
   }
 
-  private async enqueueCore(sessionId:number,token:string,file:SyncFileInput):Promise<ImportResult & {deferred?:boolean;unchanged?:boolean}>{
+  async inspect(sessionId:number,token:string,file:SyncFileInput) {
+    return this.enqueueCore(sessionId,token,file,true);
+  }
+
+  private async enqueueCore(sessionId:number,token:string,file:SyncFileInput,inspectOnly=false):Promise<ImportResult & {deferred?:boolean;unchanged?:boolean;childId?:number;preparedFile?:SyncFileInput}>{
     file={...file,options:{...file.options}};
     let sizeError:string|undefined;
     try{assertImportFileSize(file.relativePath,(await stat(file.path)).size);}catch(error){
@@ -39,20 +45,22 @@ export class SyncFileQueue {
     if (!this.allowed(sessionId)) throw new Error('同步任务已停止');
     const parent = await this.queue.getJob(sessionId);
     if (parent?.status !== 'active' || parent.lock_token !== token) throw new Error('同步任务已停止或租约失效');
-    await this.resources.assertImportDisk();
     const key = createHash('sha256').update(JSON.stringify([sessionId, file.options.sourceId, file.sourceRoot, file.relativePath, file.hash, file.fingerprint])).digest('hex');
     const existing=await this.engine.executeRaw<Record<string,unknown>>('SELECT * FROM minion_jobs WHERE idempotency_key=$1',[`sync-file:${key}`]);
     let job=existing.length?rowToMinionJob(existing[0]):undefined;
     if(sizeError){
+      if(inspectOnly)return {slug:'',status:'error',chunks:0,error:sizeError};
       const result={slug:'',status:'failed',chunks:0,error:sizeError,file:file.relativePath};
       if(!job){
-        job=await this.queue.add(SYNC_FILE_TASK,{sessionId,kind:'sync_file',task:{type:'sync-file',input:file}},{queue:SYNC_FILE_QUEUE,delay:86400000,max_attempts:1,maxQueueSize:SYNC_QUEUE_CAPACITY,idempotency_key:`sync-file:${key}`,on_child_fail:'continue'});
+        if(file.quickMaintenance)await this.reserveQuickCapacity(sessionId,token);
+        job=await this.queue.add(SYNC_FILE_TASK,{sessionId,kind:'sync_file',task:{type:'sync-file',input:file}},{queue:SYNC_FILE_QUEUE,delay:86400000,max_attempts:1,maxQueueSize:this.capacity,capacityName:SYNC_FILE_TASK,idempotency_key:`sync-file:${key}`,on_child_fail:'continue'});
         await this.engine.executeRaw("UPDATE minion_jobs SET parent_job_id=$2,status='completed',result=$3::jsonb,finished_at=now(),updated_at=now() WHERE id=$1",[job.id,sessionId,result]);
       }
       this.observe?.({...job,parent_job_id:sessionId,status:'completed',result});
       return {slug:'',status:'error',chunks:0,error:sizeError};
     }
-    if(!job){
+    const fixedQuickFile=file.quickMaintenance===true&&file.scanValidated===true;
+    if(!job&&!fixedQuickFile){
       const candidates=await this.engine.executeRaw<Record<string,unknown>>(`SELECT * FROM minion_jobs WHERE queue=$1 AND parent_job_id=$2
         AND data->'task'->'input'->>'relativePath'=$3 AND data->'task'->'input'->>'sourceRoot'=$4
         AND COALESCE(data->'task'->'input'->'options'->>'sourceId','default')=$5 AND data->'task'->'input'->>'hash'=$6
@@ -63,22 +71,22 @@ export class SyncFileQueue {
         if(syncFileContentFingerprint(input.options)===file.fingerprint){job=current;break;}
       }
     }
-    await this.engine.executeRaw(`UPDATE minion_jobs SET data=jsonb_set(data,'{superseded}','true'::jsonb),
+    if(!fixedQuickFile)await this.engine.executeRaw(`UPDATE minion_jobs SET data=jsonb_set(data,'{superseded}','true'::jsonb),
       status=CASE WHEN status IN ('paused','delayed','waiting') THEN 'cancelled' ELSE status END,updated_at=now()
       WHERE queue=$1 AND parent_job_id=$2 AND data->'task'->'input'->>'relativePath'=$3
       AND data->'task'->'input'->'options'->>'sourceId'=$4 AND data->'task'->'input'->>'hash' <> $5`,
       [SYNC_FILE_QUEUE,sessionId,file.relativePath,file.options.sourceId??'default',file.hash]);
     if (job) {
       this.observe?.(job);
-      if (job?.result && (job.status === 'completed' || (job.result.pageHash && ['paused','delayed','waiting'].includes(job.status)))) {
+      if (job?.result && (job.status === 'completed' || (job.result.pageHash && (['paused','delayed','waiting'].includes(job.status)||(job.status==='cancelled'&&job.data.capacityParked===true))))) {
         const stored = job.result as unknown as ImportResult & { pageHash?: string;chunkHash?:string };
         if (!stored.pageHash&&(!stored.slug||!['imported','skipped'].includes(stored.status))) return stored;
         const page = await this.completePage(stored.slug,file,stored.status==='skipped');
-        if (page && ['imported','skipped'].includes(stored.status) && page.content_hash === stored.pageHash && !file.options.forceRechunk
+        if (page && ['imported','skipped'].includes(stored.status) && page.content_hash === stored.pageHash
           && (stored.chunkHash===page.chunkHash || (!stored.chunkHash&&isOfficeFilePath(file.relativePath)))
           && (stored.chunks===page.chunks || (stored.status==='skipped'&&stored.chunks===0))) {
           await this.validate(file);
-          if (job.status !== 'completed') await this.engine.executeRaw(`UPDATE minion_jobs SET status = 'completed', finished_at = now(), lock_token = NULL, lock_until = NULL WHERE id = $1 AND status IN ('paused','delayed','waiting')`, [job.id]);
+          if (job.status !== 'completed') await this.engine.executeRaw(`UPDATE minion_jobs SET status = 'completed', data=data-'capacityParked', finished_at = now(), lock_token = NULL, lock_until = NULL WHERE id = $1 AND (status IN ('paused','delayed','waiting') OR (status='cancelled' AND data->>'capacityParked'='true'))`, [job.id]);
           if(stored.status==='skipped'){await this.validate(file);await this.remember(file,stored);}
           return stored;
         }
@@ -87,23 +95,24 @@ export class SyncFileQueue {
         job=undefined;
       } else {
         if (['dead', 'failed'].includes(job.status)) throw new Error(job.error_text ?? '文件任务执行失败');
-        if(job.status==='active')return { slug: '', status: 'skipped', chunks: 0, deferred: true };
+        if(job.status==='active')return { slug: '', status: 'skipped', chunks: 0, deferred: true,childId:job.id };
       }
     }
+    if(!file.scanValidated){
     const rawManifest=await this.engine.getConfig(syncFileManifestKey(file));
     const manifest=rawManifest?JSON.parse(rawManifest) as SyncFileManifest:null;
-    if(manifest?.hash===file.hash && manifest.fingerprint===file.fingerprint && !file.options.forceRechunk){
+    if(manifest?.hash===file.hash && (manifest.fingerprint===file.fingerprint || file.compatibleFingerprints?.includes(manifest.fingerprint)) && !file.options.forceRechunk){
       const page=await this.completePage(manifest.slug,file,manifest.contentMatched===true);
       if(page?.content_hash===manifest.pageHash && (manifest.chunks!==page.chunks || manifest.chunkHash!==page.chunkHash))file.options={...file.options,forceRechunk:true};
       if(page?.content_hash===manifest.pageHash && manifest.chunks===page.chunks && manifest.chunkHash===page.chunkHash){
         await this.validate(file);
-        if(manifest.size!==file.originalSize||manifest.mtime!==file.originalMtime||manifest.chunks===undefined)await this.remember(file,{slug:manifest.slug,status:'skipped',chunks:page.chunks,pageHash:manifest.pageHash});
+        if(manifest.size!==file.originalSize||manifest.mtime!==file.originalMtime||manifest.chunks===undefined)await this.remember({...file,fingerprint:manifest.fingerprint},{slug:manifest.slug,status:'skipped',chunks:page.chunks,pageHash:manifest.pageHash});
         await this.retireUnchanged(job);
         return {slug:manifest.slug,status:'skipped',chunks:0,unchanged:true};
       }
     }
     if(!manifest?.chunkHash&&!isOfficeFilePath(file.relativePath))file.options={...file.options,forceRechunk:true};
-    if (file.options.noEmbed && !(file.options.session && isSessionExportPath(file.relativePath)) && !isCodeFilePath(file.relativePath)
+    if (!fixedQuickFile && file.options.noEmbed && !(file.options.session && isSessionExportPath(file.relativePath)) && !isCodeFilePath(file.relativePath)
       && !isImageFilePath(file.relativePath) && !(file.options.documentOcr && isOfficeFilePath(file.relativePath))) {
       const inspected = isOfficeFilePath(file.relativePath)
         ? await (await import('../../core/office-import.ts')).importOfficeFile(this.engine,file.path,file.relativePath,{...file.options,checkOnly:true})
@@ -119,21 +128,22 @@ export class SyncFileQueue {
         return { ...inspected, unchanged: true };
       }
     }
-    if(job && ['paused','delayed','waiting'].includes(job.status)){
-      await this.engine.executeRaw(`UPDATE minion_jobs SET data=jsonb_set(data,'{task,input}', $2::jsonb),updated_at=now()
-        WHERE id=$1 AND status IN ('paused','delayed','waiting')`,[job.id,{...file,path:((job.data.task as {input:SyncFileInput}).input).path}]);
-      const snapshot=((job.data.task as {input:SyncFileInput}).input).path;
-      if(await stat(snapshot).catch(error=>{if(error.code==='ENOENT')return null;throw error;}))return { slug: '', status: 'skipped', chunks: 0, deferred: true };
+    if(inspectOnly)return {slug:'',status:'skipped',chunks:0,deferred:true,preparedFile:file};
     }
-    const pending=await this.engine.executeRaw<{count:string}>("SELECT count(*)::text AS count FROM minion_jobs WHERE queue=$1 AND status NOT IN ('completed','failed','dead','cancelled')",[SYNC_FILE_QUEUE]);
-    if(!job && Number(pending[0].count)>=SYNC_QUEUE_CAPACITY)throw new Error(`资源保护：队列容量已达到 ${SYNC_QUEUE_CAPACITY}，已拒绝新文件。请先完成或停止已有任务。`);
+    const reusable=Boolean(job&&(['paused','delayed','waiting'].includes(job.status)||(job.status==='cancelled'&&job.data.capacityParked===true)));
+    if(job && reusable){
+      await this.engine.executeRaw(`UPDATE minion_jobs SET data=jsonb_set(data,'{task,input}', $2::jsonb),updated_at=now()
+        WHERE id=$1 AND (status IN ('paused','delayed','waiting') OR (status='cancelled' AND data->>'capacityParked'='true'))`,[job.id,{...file,path:((job.data.task as {input:SyncFileInput}).input).path}]);
+      const snapshot=((job.data.task as {input:SyncFileInput}).input).path;
+      if(await stat(snapshot).catch(error=>{if(error.code==='ENOENT')return null;throw error;}))return { slug: '', status: 'skipped', chunks: 0, deferred: true,childId:job.id };
+    }
     const size=(await stat(file.path)).size;
     await this.resources.assertImportDisk(size*2);
     const config = loadConfig();
     const brain = createHash('sha256').update(JSON.stringify([config?.engine, config?.database_path, config?.database_url])).digest('hex').slice(0, 24);
     const dir = join(gbrainPath('task-artifacts'), 'sync-files', brain, String(sessionId));
     await mkdir(dir, { recursive: true });
-    const path = this.snapshotPath(sessionId,job && ['paused','delayed','waiting'].includes(job.status)
+    const path = this.snapshotPath(sessionId,job && reusable
       ? ((job.data.task as {input:SyncFileInput}).input).path : join(dir, `${key}-${basename(file.path)}`));
     const releaseReservation=await this.resources.reserveSnapshot(size).catch(async error=>{
       if(!isSyncCapacityError(error))throw error;
@@ -150,18 +160,93 @@ export class SyncFileQueue {
     const after = await this.queue.getJob(sessionId);
     if (!this.allowed(sessionId)) throw new Error('同步任务已停止');
     if (after?.status !== 'active' || after.lock_token !== token) throw new Error('同步任务已停止或租约失效');
-    const added = job && ['paused','delayed','waiting'].includes(job.status) ? job : await this.queue.add(SYNC_FILE_TASK, { sessionId, kind: 'sync_file', task: { type: 'sync-file', input: { ...file, path } } }, {
-      queue: SYNC_FILE_QUEUE, delay: 24 * 60 * 60 * 1000, max_attempts: 1, maxQueueSize: SYNC_QUEUE_CAPACITY,
-      timeout_ms: 6 * 60 * 60 * 1000, idempotency_key: `sync-file:${key}`, on_child_fail: 'continue',
+    const parentUnbounded = parent?.data.unboundedRuntime === true;
+    const addChild=()=>this.queue.add(SYNC_FILE_TASK, { sessionId, kind: 'sync_file', task: { type: 'sync-file', input: { ...file, path } }, ...(parentUnbounded ? { unboundedRuntime: true } : {}) }, {
+      queue: SYNC_FILE_QUEUE, delay: 24 * 60 * 60 * 1000, max_attempts: 1, maxQueueSize: this.capacity, capacityName: SYNC_FILE_TASK,
+      ...(parentUnbounded ? {} : { timeout_ms: 6 * 60 * 60 * 1000 }), idempotency_key: `sync-file:${key}`, on_child_fail: 'continue',
     });
+    let added:MinionJob;
+    if(job&&reusable)added=job;
+    else try{added=await addChild();}catch(error){
+      if(!file.quickMaintenance||!isSyncCapacityError(error))throw error;
+      await this.reserveQuickCapacity(sessionId,token);
+      added=await addChild();
+    }
     if(added===job)await this.engine.executeRaw(`UPDATE minion_jobs SET data=jsonb_set(data,'{task,input}',$2::jsonb),updated_at=now()
-      WHERE id=$1 AND status IN ('paused','delayed','waiting')`,[added.id,{...file,path}]);
+      WHERE id=$1 AND (status IN ('paused','delayed','waiting') OR (status='cancelled' AND data->>'capacityParked'='true'))`,[added.id,{...file,path}]);
     queued=true;
-    await this.engine.executeRaw('UPDATE minion_jobs SET parent_job_id=$1 WHERE id=$2',[sessionId,added.id]);
+    if(!fixedQuickFile)await this.engine.executeRaw('UPDATE minion_jobs SET parent_job_id=$1 WHERE id=$2',[sessionId,added.id]);
     added.parent_job_id=sessionId;
     this.observe?.(added);
-    return { slug: '', status: 'skipped', chunks: 0, deferred: true };
+    return { slug: '', status: 'skipped', chunks: 0, deferred: true,childId:added.id };
     } catch(error){if(!queued){releaseReservation();await unlink(path).catch(failure=>{if(failure.code!=='ENOENT')throw failure;});}throw error;}
+  }
+
+  private async parkInactiveQuickChild(tx:BrainEngine) {
+    const rows=await tx.executeRaw<{id:number}>(`SELECT child.id FROM minion_jobs child JOIN minion_jobs parent ON parent.id=child.parent_job_id
+      WHERE child.queue=$1 AND child.status='paused' AND child.data->>'superseded' IS DISTINCT FROM 'true'
+      AND parent.queue='pmbrain-product' AND (parent.data->'task'->'input'->>'preset'='quick' OR parent.data->>'kind'='dream_quick')
+      AND parent.status IN ('cancelled','paused','dead','failed','completed') ORDER BY child.id LIMIT 1 FOR UPDATE OF child,parent`,[SYNC_FILE_QUEUE]);
+    if(!rows.length)return false;
+    await tx.executeRaw("UPDATE minion_jobs SET status='cancelled',data=jsonb_set(data,'{capacityParked}','true'::jsonb),updated_at=now() WHERE id=$1",[rows[0].id]);
+    return true;
+  }
+
+  private async ensureQuickCapacity(tx:BrainEngine) {
+    await tx.executeRaw("SELECT pg_advisory_xact_lock(hashtext('minion_capacity:' || $1))",[SYNC_FILE_QUEUE]);
+    const [pending]=await tx.executeRaw<{count:string}>("SELECT count(*)::text AS count FROM minion_jobs WHERE queue=$1 AND name=$2 AND status NOT IN ('completed','failed','dead','cancelled')",[SYNC_FILE_QUEUE,SYNC_FILE_TASK]);
+    if(Number(pending.count)>=this.capacity && !await this.parkInactiveQuickChild(tx))throw new Error(`资源保护：队列容量已达到 ${this.capacity}，已拒绝新文件。请先完成或停止已有任务。`);
+  }
+
+  private async reserveQuickCapacity(sessionId:number,token:string) {
+    await this.engine.transaction(async tx=>{
+      await this.ensureQuickCapacity(tx);
+      const parent=await tx.executeRaw("SELECT id FROM minion_jobs WHERE id=$1 AND status='active' AND lock_token=$2 FOR UPDATE",[sessionId,token]);
+      if(!parent.length)throw new Error('同步任务已停止或租约失效');
+    });
+  }
+
+  async activateDuringQuickScan(sessionId:number,token:string,childId:number) {
+    await this.engine.transaction(async tx=>{
+      await tx.executeRaw("SELECT pg_advisory_xact_lock(hashtext('minion_capacity:' || $1))",[SYNC_FILE_QUEUE]);
+      const parent=await tx.executeRaw('SELECT id FROM minion_jobs WHERE id=$1 AND status=\'active\' AND lock_token=$2 FOR UPDATE',[sessionId,token]);
+      if(!parent.length)throw new Error('同步任务已停止或租约失效');
+      const [existing]=await tx.executeRaw<{status:string;parked:boolean}>("SELECT status,data->>'capacityParked'='true' AS parked FROM minion_jobs WHERE id=$1 AND parent_job_id=$2 AND queue=$3 FOR UPDATE",[childId,sessionId,SYNC_FILE_QUEUE]);
+      if(!existing)throw new Error('同步文件任务不存在或已停止');
+      if(['waiting','active','completed','dead','failed'].includes(existing.status))return;
+      if(existing?.status==='cancelled'&&existing.parked)await this.ensureQuickCapacity(tx);
+      const child=await tx.executeRaw(`UPDATE minion_jobs SET status=CASE WHEN status IN ('delayed','paused','cancelled') THEN 'waiting' ELSE status END,
+        data=data-'capacityParked',
+        delay_until=NULL,updated_at=now() WHERE id=$1 AND parent_job_id=$2 AND queue=$3
+        AND (status IN ('delayed','paused','waiting','active','completed','dead','failed') OR (status='cancelled' AND data->>'capacityParked'='true')) RETURNING id`,[childId,sessionId,SYNC_FILE_QUEUE]);
+      if(!child.length)throw new Error('同步文件任务不存在或已停止');
+    });
+  }
+
+  async activateDuringQuickScanBatch(sessionId:number,token:string,childIds:number[]) {
+    const ids=[...new Set(childIds)];
+    if(!ids.length)return;
+    await this.engine.transaction(async tx=>{
+      await tx.executeRaw("SELECT pg_advisory_xact_lock(hashtext('minion_capacity:' || $1))",[SYNC_FILE_QUEUE]);
+      const parent=await tx.executeRaw("SELECT id FROM minion_jobs WHERE id=$1 AND status='active' AND lock_token=$2 FOR UPDATE",[sessionId,token]);
+      if(!parent.length)throw new Error('同步任务已停止或租约失效');
+      const children=await tx.executeRaw<{id:number;status:string;parked:boolean}>("SELECT id,status,data->>'capacityParked'='true' AS parked FROM minion_jobs WHERE id=ANY($1::bigint[]) AND queue=$2 AND data->>'sessionId'=$4 AND (parent_job_id IS NULL OR parent_job_id=$3) FOR UPDATE",[ids,SYNC_FILE_QUEUE,sessionId,String(sessionId)]);
+      if(children.length!==ids.length)throw new Error('同步文件任务不存在或已停止');
+      for(const child of children){
+        if(['waiting','active','completed','dead','failed'].includes(child.status))continue;
+        if(child.status==='cancelled'&&child.parked)continue;
+        if(!['delayed','paused'].includes(child.status))throw new Error('同步文件任务不存在或已停止');
+      }
+      if(children.some(child=>child.status==='cancelled'&&child.parked))await this.ensureQuickCapacity(tx);
+      const updated=await tx.executeRaw(`UPDATE minion_jobs SET parent_job_id=$2,
+        status=CASE WHEN status IN ('delayed','paused','cancelled') THEN 'waiting' ELSE status END,
+        data=data-'capacityParked',delay_until=NULL,updated_at=now()
+        WHERE id=ANY($1::bigint[]) AND queue=$3 AND data->>'sessionId'=$4
+          AND (parent_job_id IS NULL OR parent_job_id=$2)
+          AND (status IN ('delayed','paused','waiting','active','completed','dead','failed') OR (status='cancelled' AND data->>'capacityParked'='true'))
+        RETURNING id`,[ids,sessionId,SYNC_FILE_QUEUE,String(sessionId)]);
+      if(updated.length!==ids.length)throw new Error('同步文件任务不存在或已停止');
+    });
   }
 
   async release(sessionId: number, token: string) {
@@ -169,7 +254,8 @@ export class SyncFileQueue {
       const rows = await tx.executeRaw<{ id: number }>(`SELECT id FROM minion_jobs WHERE id = $1 AND status = 'active' AND lock_token = $2 FOR UPDATE`, [sessionId, token]);
       if (!rows.length) throw new Error('同步任务已停止或租约失效');
       await tx.executeRaw(`UPDATE minion_jobs SET parent_job_id = $1, status = CASE WHEN status IN ('delayed','paused') THEN 'waiting' ELSE status END,
-        delay_until = NULL, updated_at = now() WHERE queue = $2 AND (data->>'sessionId')::bigint = $1 AND data->>'superseded' IS DISTINCT FROM 'true'`, [sessionId, SYNC_FILE_QUEUE]);
+        delay_until = NULL, updated_at = now() WHERE queue = $2 AND (data->>'sessionId')::bigint = $1 AND data->>'superseded' IS DISTINCT FROM 'true'
+          AND (parent_job_id IS DISTINCT FROM $1 OR status IN ('delayed','paused') OR delay_until IS NOT NULL)`, [sessionId, SYNC_FILE_QUEUE]);
       await tx.executeRaw(`UPDATE minion_jobs SET status = CASE WHEN EXISTS (
         SELECT 1 FROM minion_jobs WHERE parent_job_id = $1 AND data->>'superseded' IS DISTINCT FROM 'true' AND status NOT IN ('completed','dead','failed','cancelled')
         ) THEN 'waiting-children' ELSE 'waiting' END, lock_token = NULL, lock_until = NULL, updated_at = now() WHERE id = $1`, [sessionId]);
@@ -178,7 +264,8 @@ export class SyncFileQueue {
 
   async pause(sessionId: number) {
     await this.engine.executeRaw(`UPDATE minion_jobs SET status = 'paused', lock_token = NULL, lock_until = NULL, finished_at = NULL, updated_at = now()
-      WHERE queue = $1 AND (data->>'sessionId')::bigint = $2 AND status IN ('waiting','delayed','active','cancelled')`, [SYNC_FILE_QUEUE, sessionId]);
+      WHERE queue = $1 AND (data->>'sessionId')::bigint = $2 AND status IN ('waiting','delayed','active','cancelled')
+      AND (status<>'cancelled' OR data->>'capacityParked' IS DISTINCT FROM 'true')`, [SYNC_FILE_QUEUE, sessionId]);
   }
 
   async resume(sessionId: number) {
@@ -203,8 +290,8 @@ export class SyncFileQueue {
 
   private async retireUnchanged(job:MinionJob|undefined){
     if(!job)return;
-    await this.engine.executeRaw(`UPDATE minion_jobs SET status='cancelled',data=jsonb_set(data,'{superseded}','true'::jsonb),updated_at=now()
-      WHERE id=$1 AND status IN ('paused','delayed','waiting')`,[job.id]);
+    await this.engine.executeRaw(`UPDATE minion_jobs SET status='cancelled',data=jsonb_set(data-'capacityParked','{superseded}','true'::jsonb),updated_at=now()
+      WHERE id=$1 AND (status IN ('paused','delayed','waiting') OR (status='cancelled' AND data->>'capacityParked'='true'))`,[job.id]);
   }
 
   private async completePage(slug:string,file:SyncFileInput,contentMatched=false){
@@ -339,19 +426,21 @@ export class SyncFileQueue {
   }
 }
 
-export async function validateSyncFileSnapshot(file: SyncFileInput) {
-  if (await streamFileHash(file.path) !== file.hash) throw new Error('文件任务快照已改变');
+export async function validateSyncFileSnapshot(file: SyncFileInput,hashFile:(path:string)=>Promise<string>=streamFileHash) {
+  if(file.quickMaintenance&&file.originalPath&&resolve(file.path)===resolve(file.originalPath)){
+    const current=await stat(file.originalPath);
+    if(current.size!==file.originalSize||current.mtimeMs!==file.originalMtime||(file.originalCtime!==undefined&&current.ctimeMs!==file.originalCtime)||await hashFile(file.originalPath)!==file.hash)throw new Error('原始文件在处理期间已改变，请继续同步');
+    return;
+  }
+  if (await hashFile(file.path) !== file.hash) throw new Error('文件任务快照已改变');
   if (file.originalPath) {
     const current = await stat(file.originalPath);
-    if (current.size !== file.originalSize || current.mtimeMs !== file.originalMtime
-      || await streamFileHash(file.originalPath) !== file.hash) throw new Error('原始文件在处理期间已改变，请继续同步');
+    if (current.size !== file.originalSize || current.mtimeMs !== file.originalMtime || (file.originalCtime !== undefined && current.ctimeMs !== file.originalCtime)
+      || await hashFile(file.originalPath) !== file.hash) throw new Error('原始文件在处理期间已改变，请继续同步');
   }
 }
 
-export interface SyncFileManifest {hash:string;fingerprint:string;slug:string;pageHash:string;size?:number;mtime?:number;chunks?:number;chunkHash?:string;contentMatched?:boolean;}
-export function syncFileManifestKey(file:Pick<SyncFileInput,'options'|'sourceRoot'|'relativePath'>){
-  return 'sync.file.sha256:'+createHash('sha256').update(JSON.stringify([file.options.sourceId??'default',file.sourceRoot,file.relativePath])).digest('hex');
-}
+export interface SyncFileManifest {hash:string;fingerprint:string;slug:string;pageHash:string;size?:number;mtime?:number;ctime?:number;chunks?:number;chunkHash?:string;contentMatched?:boolean;repairRequired?:boolean;}
 export function syncFileManifest(file:SyncFileInput,slug:string,pageHash:string,chunks?:number,contentMatched=false,chunkHash?:string):SyncFileManifest {
-  return {hash:file.hash,fingerprint:file.fingerprint,slug,pageHash,size:file.originalSize,mtime:file.originalMtime,chunks,...(chunkHash?{chunkHash}:{}),...(contentMatched?{contentMatched:true}:{})};
+  return {hash:file.hash,fingerprint:file.fingerprint,slug,pageHash,size:file.originalSize,mtime:file.originalMtime,ctime:file.originalCtime,chunks,...(chunkHash?{chunkHash}:{}),...(contentMatched?{contentMatched:true}:{})};
 }

@@ -144,6 +144,8 @@ export interface MinionJobInput {
    */
   maxPending?: number;
   maxQueueSize?: number;
+  /** When set, maxQueueSize counts only this job name. Omitted counts every name on the queue. */
+  capacityName?: string;
 
   // v12: scheduler polish
   /**

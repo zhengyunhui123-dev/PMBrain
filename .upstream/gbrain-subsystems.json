@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "reviewed_at": "2026-10-20",
-  "product_version": "1.5.8",
+  "reviewed_at": "2026-11-05",
+  "product_version": "1.5.79",
   "subsystem": "entity-relations",
   "status": "release-blocked-pending-package-acceptance",
   "upstream": {
@@ -410,7 +410,7 @@
       "path": "src/core/mentions/pass.ts",
       "upstream_path": "src/core/mentions/pass.ts",
       "mode": "adapted",
-      "sha256": "5fa188c028302c7d02a564d16a92f73fef7f8d54bc9cf17f12458acb43983062",
+      "sha256": "c3ebbcfe4e11e7b106e328d098fb45eba0837061737799d2decd853960a2e68e",
       "upstream_sha256": "fde8f033481a3fa776b235dbf40a899196c09ee6f20b8c3adf66f724a0d3e6e6"
     },
     {
@@ -424,7 +424,7 @@
       "path": "src/core/mentions/coverage.ts",
       "upstream_path": "src/core/mentions/coverage.ts",
       "mode": "adapted",
-      "sha256": "70a34c7f6b170974633bfaa790623f5600f1f3f1ec81af3e4bba479beba03c2b",
+      "sha256": "c54a3b8c4ead4973a5a570887e8d52a79bfb82a48d27991514d522d2a15228dd",
       "upstream_sha256": "d52dc9a4d94185cdea1abf1850c38253d0936a73e825527ec7bfe7750e60a461"
     },
     {
@@ -697,7 +697,7 @@
       "path": "src/core/cycle/extract-atoms.ts",
       "upstream_path": "src/core/cycle/extract-atoms.ts",
       "mode": "adapted",
-      "sha256": "bbef7ef432b5828dfbae53ed948d16a5ca02da5540b152a82f0862420ac8b6ad",
+      "sha256": "f362108b633ed9ca15c35acdb4174602f1d1c2c57b0085ca022d1dd7179194af",
       "upstream_sha256": "d0f3a747b615808b92be26486b7842e7cbc509724f273484d25de78a4c85127a"
     },
     {
@@ -746,14 +746,14 @@
       "path": "src/core/cycle/synthesize.ts",
       "upstream_path": "src/core/cycle/synthesize.ts",
       "mode": "adapted",
-      "sha256": "16fe50b3d2217438b506dc3c391e384946d3a59dbcc1590675fd3abec679ef27",
+      "sha256": "15e976a12f5ab5e314dbb02e05e4be80308543499ef06681bdecfc2773170a77",
       "upstream_sha256": "6ec1e0b7e59714e5f2fe078b1956b20218486c89fdccf9982e8b129ba2c03fda"
     },
     {
       "path": "src/core/cycle/synthesize-concepts.ts",
       "upstream_path": "src/core/cycle/synthesize-concepts.ts",
       "mode": "adapted",
-      "sha256": "64544887f9e633df7b6c455aa15f47650aafaa1249e72a404bb37c9a25dfe7d3",
+      "sha256": "da1b9e6e6809bea7652d3cac36d0d5b649535a1d75093ea01c9028e72e8024bd",
       "upstream_sha256": "7146c5c44544059ca135f9df65f39bd1af480eff87c401b4845d0f9fe6df621e"
     },
     {

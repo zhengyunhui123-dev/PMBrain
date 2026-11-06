@@ -48,6 +48,7 @@ import { join } from 'path';
 import { hostname } from 'os';
 import { gbrainPath } from './config.ts';
 import type { BrainEngine } from './engine.ts';
+import type { MaintenanceRelationFailure } from '../../shared/maintenance-progress.ts';
 import type { MinionHandler } from './minions/types.ts';
 import { SyncFilesDeferred, type SyncFileRuntime } from './sync-file-runtime.ts';
 import { createProgress, type ProgressReporter } from './progress.ts';
@@ -392,6 +393,9 @@ export interface CycleReport {
 }
 
 export interface CycleOpts {
+  quickMaintenance?: boolean;
+  localPathOnly?: boolean;
+  deferInlineExtract?: boolean;
   quickEntitiesOnly?: boolean;
   reuseDuplicateKnowledgeSources?: boolean;
   captureEntitySlugs?: string[];
@@ -401,6 +405,8 @@ export interface CycleOpts {
   syncFileRuntime?: SyncFileRuntime;
   afterSync?: (sourceId: string, root: string, result: import('../commands/sync.ts').SyncResult) => Promise<unknown>;
   completedPhases?: PhaseResult[];
+  phaseWindow?: CyclePhase[];
+  onMaintenancePages?: (slugs: string[]) => Promise<void>;
   phaseCheckpoint?: (phases: PhaseResult[]) => Promise<void>;
   /** If true, no writes to filesystem or DB. All phases honor this. */
   dryRun?: boolean;
@@ -536,6 +542,12 @@ export interface CycleOpts {
   /** Replaces the entity-capture child handler. Production leaves this unset. */
   captureEntitiesHandler?: MinionHandler;
   captureEntitiesConcurrency?:()=>number;
+  /**
+   * Staged deep organize: slugs added or changed in this round, plus pages
+   * already implicated by that sync. Empty array means this window has no new
+   * evidence and must not fall back to a full library walk.
+   */
+  changedSlugs?: string[];
 }
 
 /** Union sync + synthesis writes without turning "no producer ran" into []. */
@@ -942,6 +954,15 @@ interface SyncPhaseResult extends PhaseResult {
   pagesAffected?: string[];
 }
 
+export function syncPhasePages(phase: PhaseResult | undefined): string[] | undefined {
+  if (!phase || phase.phase !== 'sync') return undefined;
+  const listed = (phase as SyncPhaseResult).pagesAffected;
+  if (Array.isArray(listed)) return listed.filter((item): item is string => typeof item === 'string');
+  const nested = phase.details?.pages_affected;
+  if (Array.isArray(nested)) return nested.filter((item): item is string => typeof item === 'string');
+  return undefined;
+}
+
 /**
  * Resolve the source id for a brain directory by looking up the sources
  * table. Returns undefined when no registered source matches (falls back
@@ -1037,11 +1058,17 @@ async function runPhaseSync(
   fileRuntime?: SyncFileRuntime,
   signal?: AbortSignal,
   afterSync?: CycleOpts['afterSync'],
+  quickMaintenance?: boolean,
+  localPathOnly?: boolean,
 ): Promise<SyncPhaseResult> {
   try {
     const { performSync } = await import('../commands/sync.ts');
     const gateway = await import('./ai/gateway.ts');
-    const documentOcr = gateway.isOcrEnabled();
+    const ocrEnabled = gateway.isOcrEnabled();
+    const { imageOcrSwitchOn, IMAGE_OCR_ENABLED_KEY } = await import('./pmbrain-adapters/image-ocr-policy.ts');
+    const imageOcr = imageOcrSwitchOn(await engine.getConfig(IMAGE_OCR_ENABLED_KEY));
+    const documentOcr = !quickMaintenance && ocrEnabled && imageOcr;
+    const useLocalPath = quickMaintenance === true || localPathOnly === true;
     // Resolve the per-source id so sync reads source-scoped last_commit
     // instead of the global config key. The global key can drift out of
     // git history (force push, GC) causing a full reimport of all files.
@@ -1049,6 +1076,7 @@ async function runPhaseSync(
     const result = await performSync(engine, {
       repoPath: brainDir,
       sourceId,
+      localPathOnly: useLocalPath,
       dryRun,
       noPull: !pull,
       noEmbed: true,                       // embed is a separate phase
@@ -1056,8 +1084,9 @@ async function runPhaseSync(
                                            // If extract isn't scheduled (e.g. `gbrain dream --phase sync`),
                                            // sync's inline extract still runs to preserve prior behavior.
       includeOffice,
-      includeImages: documentOcr,
+      includeImages: quickMaintenance ? ocrEnabled : documentOcr,
       documentOcr,
+      excludePathPattern: useLocalPath ? (await import('./pmbrain-adapters/quick-maintenance-policy.ts')).QUICK_MAINTENANCE_EXCLUDED_PATH : undefined,
       concurrency,
       fileRuntime,
       workingTree: fileRuntime ? fileRuntime.workingTree ?? true : undefined,
@@ -1087,6 +1116,7 @@ async function runPhaseSync(
         dryRun,
         ...(git ? { git } : {}),
         ...(result.uncommitted ? { uncommitted: result.uncommitted } : {}),
+        pages_affected: result.pagesAffected ?? [],
       },
       pagesAffected: result.pagesAffected,
     };
@@ -1619,7 +1649,7 @@ export async function runCycle(
   const requestedPhases = opts.phases ?? DEFAULT_PHASES;
   const resolvedPhases = resolveCyclePhases(opts.phases, opts.sourceId);
   const restored = (opts.completedPhases ?? []).filter(item => resolvedPhases.includes(item.phase));
-  const phases = resolvedPhases.filter(phase => !restored.some(item => item.phase === phase));
+  const phases = resolvedPhases.filter(phase => !restored.some(item => item.phase === phase) && (!opts.phaseWindow || opts.phaseWindow.includes(phase)));
   const excludedPhases = requestedPhases.filter(phase => !resolvedPhases.includes(phase));
   const dryRun = !!opts.dryRun;
   const pull = !!opts.pull;
@@ -1828,9 +1858,12 @@ export async function runCycle(
     // Track which slugs sync touched so extract can run incrementally,
     // and which slugs synthesize wrote so recompute_emotional_weight can
     // pick up the union of (sync ∪ synthesize) for v0.29 incremental mode.
-    let syncPagesAffected: string[] | undefined = (restored.find(item => item.phase === 'sync') as SyncPhaseResult | undefined)?.pagesAffected;
+    let syncPagesAffected: string[] | undefined = syncPhasePages(restored.find(item => item.phase === 'sync'));
     let syncAttempted = restored.some(item => item.phase === 'sync');
-    let synthesizeWrittenSlugs: string[] | undefined;
+    const restoredSynthesize = restored.find(item => item.phase === 'synthesize');
+    let synthesizeWrittenSlugs: string[] | undefined = Array.isArray(restoredSynthesize?.details.written_slugs)
+      ? restoredSynthesize.details.written_slugs.filter((item): item is string => typeof item === 'string')
+      : undefined;
     const restoredCapture=restored.find(item=>item.phase==='capture_entities');
     let entityCaptureSlugs: string[] = restoredCapture?['written_slugs','source_slugs','relation_slugs'].flatMap(key=>Array.isArray(restoredCapture.details[key])?restoredCapture.details[key] as string[]:[]):[];
     let stopDbWrites = false;
@@ -1871,21 +1904,26 @@ export async function runCycle(
           brainDir,
           dryRun,
           pull,
-          phases.includes('extract'),
+          opts.quickMaintenance === true || opts.deferInlineExtract === true || phases.includes('extract'),
           opts.includeOffice === true,
           opts.syncConcurrency,
           opts.syncFileRuntime,
           opts.signal,
           opts.afterSync,
+          opts.quickMaintenance,
+          opts.localPathOnly,
         ));
         result.duration_ms = duration_ms;
         // Capture changed slugs for incremental extract.
-        syncPagesAffected = (result as SyncPhaseResult).pagesAffected;
+        syncPagesAffected = syncPhasePages(result);
         phaseResults.push(result);
         noteSearchIndexAbort(result);
         progress.finish();
       }
       await checkpoint();
+    }
+    if (opts.changedSlugs !== undefined) {
+      syncPagesAffected = [...new Set([...(syncPagesAffected ?? []), ...opts.changedSlugs])];
     }
 
     for (const repairPhase of ['fence_repair', 'content_repair'] as const) {
@@ -1903,7 +1941,8 @@ export async function runCycle(
         progress.start(`cycle.${repairPhase}`);
         const repair = await import('./cycle/maintenance-repair.ts');
         const runRepair = repairPhase === 'fence_repair' ? repair.runPhaseFenceRepair : repair.runPhaseContentRepair;
-        const { result, duration_ms } = await timePhase(() => runRepair(engine, { dryRun, sourceId: cycleSourceId }));
+        const scopedRepair = opts.quickMaintenance === true || opts.changedSlugs !== undefined;
+        const { result, duration_ms } = await timePhase(() => runRepair(engine, { dryRun, sourceId: cycleSourceId, ...(scopedRepair ? { slugs: syncPagesAffected ?? [], ...(opts.quickMaintenance ? { onPage: async(slug:string)=>opts.onMaintenancePages?.([slug]) } : {}), signal:opts.signal } : {}) }));
         result.duration_ms = duration_ms;
         phaseResults.push(result);
         progress.finish();
@@ -1923,6 +1962,8 @@ export async function runCycle(
         });
       } else if (brainDir === null) {
         phaseResults.push(skipNoBrainDir('synthesize'));
+      } else if (opts.changedSlugs?.length === 0) {
+        phaseResults.push({ phase: 'synthesize', status: 'skipped', duration_ms: 0, summary: '跳过', details: { reason: 'round_unchanged', message: '本轮没有新的或变化的资料，已跳过' } });
       } else {
         progress.start('cycle.synthesize');
         const { runPhaseSynthesize } = await import('./cycle/synthesize.ts');
@@ -1941,6 +1982,7 @@ export async function runCycle(
           signal: opts.signal,
           deadlineAtMs: opts.deadlineAtMs ?? null,
           privateQueueOwnerJobId: opts.privateQueueOwnerJobId ?? null,
+          changedSlugs: opts.changedSlugs,
         }));
         result.duration_ms = duration_ms;
         phaseResults.push(result);
@@ -1954,13 +1996,20 @@ export async function runCycle(
       await checkpoint();
     }
 
-    const refreshRelations = async (
+    const refreshRelationsPass = async (
       engine: BrainEngine,
       result: PhaseResult,
       prioritySlugs?: string[],
       limits?: { maxHistoricalPages?: number; nerSlugs?: string[] },
     ) => {
-      const relationNerSlugs=new Set([...(prioritySlugs ?? []),...(limits?.nerSlugs ?? [])]);
+      const relationNerSlugs=new Set([...(opts.quickMaintenance ? [] : prioritySlugs ?? []),...(limits?.nerSlugs ?? [])]);
+      const failures:MaintenanceRelationFailure[]=[];
+      const recordFailure=(failure:MaintenanceRelationFailure)=>{if(!failures.some(item=>item.slug===failure.slug&&item.sourceId===failure.sourceId&&item.step===failure.step&&item.error===failure.error))failures.push(failure);result.details.relationFailures=failures;};
+      const onPageError=(step:string)=>opts.quickMaintenance?(slug:string,sourceId:string,error:unknown)=>{
+        if((error as {code?:string}|null)?.code==='revision_conflict')return;
+        recordFailure({slug,sourceId,step,error:error instanceof Error?error.message:String(error)});
+      }:undefined;
+      const noteFailure=(step:string,error:unknown)=>{if(opts.quickMaintenance)recordFailure({sourceId:filesystemSourceId??'default',step,error:error instanceof Error?error.message:String(error)});};
       checkAborted(opts.signal);
       if (opts.includeHistoricalMarkdownCatchUp && !dryRun) {
         try {
@@ -1970,13 +2019,17 @@ export async function runCycle(
             dryRun: false,
             jsonMode: false,
             includeFrontmatter: true,
-            catalogAware: true,
+            catalogAware: !opts.quickMaintenance,
+            excludePathPattern: opts.quickMaintenance ? (await import('./pmbrain-adapters/quick-maintenance-policy.ts')).QUICK_MAINTENANCE_EXCLUDED_PATH : undefined,
+            slugs: opts.quickMaintenance ? prioritySlugs ?? [] : undefined,
             sourceIdFilter: filesystemSourceId,
-            catchUp: opts.markdownCatchUpMaxHistorical == null,
+            catchUp: !opts.quickMaintenance && opts.markdownCatchUpMaxHistorical == null,
+            timeBudgetMs: opts.quickMaintenance ? opts.byMentionTimeBudgetMs ?? Infinity : undefined,
             quiet: !getCliOptions().progressJson,
             signal: opts.signal,
             yieldDuringPhase: buildYieldDuringPhase(lock, opts.yieldDuringPhase),
             maxPages: opts.markdownCatchUpMaxHistorical,
+            onPageError:onPageError('显式关系'),
           });
           for(const ref of catchUp.processedSlugs)relationNerSlugs.add(ref.slug);
           result.details = {
@@ -1986,7 +2039,8 @@ export async function runCycle(
             relationLinksCreated: Number(result.details.relationLinksCreated ?? 0) + catchUp.linksCreated,
             relationTimelineCreated: Number(result.details.relationTimelineCreated ?? 0) + catchUp.timelineCreated,
             relationPagesProcessed: Number(result.details.relationPagesProcessed ?? 0) + catchUp.pagesProcessed,
-            relationHistoricalRemaining: catchUp.staleRemaining,
+            relationHistoricalRemaining: opts.quickMaintenance ? 0 : catchUp.staleRemaining,
+            ...(opts.quickMaintenance ? { relationScopeRemaining: catchUp.staleRemaining } : {}),
             relationUnresolvedReferences: catchUp.unresolvedReferences,
             relationSkippedMissingTarget: catchUp.skippedMissingTarget,
             relationSkippedCrossSource: catchUp.skippedCrossSource,
@@ -1998,6 +2052,10 @@ export async function runCycle(
             `${result.summary}; historical relations +${catchUp.linksCreated} link(s) ` +
             `from ${catchUp.pagesProcessed} page(s) (${catchUp.staleRemaining} stale remaining, ` +
             `${catchUp.unresolvedReferences + catchUp.skippedMissingTarget + catchUp.skippedCrossSource} unresolved/skipped)`;
+          if (opts.quickMaintenance && catchUp.staleRemaining > 0) {
+            result.status = result.status === 'fail' ? 'fail' : 'warn';
+            result.details.remaining = catchUp.staleRemaining;
+          }
           result.duration_ms += Math.round(performance.now() - catchUpStart);
           if (result.status === 'skipped' && catchUp.pagesProcessed > 0) {
             result.status = 'ok';
@@ -2005,6 +2063,7 @@ export async function runCycle(
         } catch (e) {
           checkAborted(opts.signal);
           const message = e instanceof Error ? e.message : String(e);
+          noteFailure('显式关系',e);
           if (isGinRepairAbortText(e)) {
             result.status = 'fail';
             result.error = makeErrorFromException(e);
@@ -2025,6 +2084,12 @@ export async function runCycle(
           const mentionStart = performance.now();
           const mention = await runByMentionCore(engine, {
             prioritySlugs,
+            singlePass: opts.quickMaintenance,
+            priorityOnly: opts.quickMaintenance,
+            quickEntityTypes: opts.quickMaintenance,
+            onPages: opts.quickMaintenance ? opts.onMaintenancePages : undefined,
+            onPageError:onPageError('名称提及'),
+            excludePathPattern: opts.quickMaintenance ? (await import('./pmbrain-adapters/quick-maintenance-policy.ts')).QUICK_MAINTENANCE_EXCLUDED_PATH : undefined,
             maxHistoricalPages: limits && Object.prototype.hasOwnProperty.call(limits, 'maxHistoricalPages')
               ? limits.maxHistoricalPages
               : opts.byMentionMaxHistorical,
@@ -2046,14 +2111,20 @@ export async function runCycle(
             mentionPriorityPagesProcessed: Number(result.details.mentionPriorityPagesProcessed ?? 0) + mention.priorityPages,
             mentionHistoricalPagesProcessed: Number(result.details.mentionHistoricalPagesProcessed ?? 0) + mention.historicalPages,
             mentionHistoricalRemaining: mention.historicalRemaining,
+            ...(opts.quickMaintenance ? { mentionScopeRemaining: mention.scopeRemaining ?? 0 } : {}),
             mentionTimeBudgetReached: mention.timeBudgetReached,
             mentionTimeBudgetMs: opts.byMentionTimeBudgetMs ?? null,
             mentionAmbiguousNames: mention.ambiguousNames,
+            ...(opts.quickMaintenance && mention.disabled ? { by_mention_disabled: true } : {}),
             by_mention: true,
           };
           result.summary =
             `${result.summary}; by-mention +${mention.created}/-${mention.removed} link(s) ` +
             `(${mention.pages} page(s), ${mention.historicalRemaining} historical remaining)`;
+          if (opts.quickMaintenance && (mention.scopeRemaining ?? 0) > 0) {
+            result.status = result.status === 'fail' ? 'fail' : 'warn';
+            result.details.remaining = Math.max(Number(result.details.remaining ?? 0), mention.scopeRemaining ?? 0);
+          }
           result.duration_ms += mentionMs;
           if (result.status === 'skipped' && mention.pages > 0) {
             result.status = 'ok';
@@ -2061,6 +2132,7 @@ export async function runCycle(
         } catch (e) {
           checkAborted(opts.signal);
           const message = e instanceof Error ? e.message : String(e);
+          noteFailure('名称提及',e);
           if (isGinRepairAbortText(e)) {
             result.status = 'fail';
             result.error = makeErrorFromException(e);
@@ -2079,17 +2151,22 @@ export async function runCycle(
 
 
       if (result.error && isGinRepairAbortText(result.error.message)) return;
-      if (opts.includeNer && !dryRun) {
+      if (opts.includeNer && !dryRun && (!opts.quickMaintenance || relationNerSlugs.size > 0 && result.details.by_mention_disabled !== true)) {
         const started = performance.now();
         try {
           const { extractNerLinks } = await import('./extract-ner.ts');
+          const gazetteer = opts.quickMaintenance ? await (await import('./pmbrain-adapters/quick-maintenance-policy.ts')).buildQuickMaintenanceGazetteer(engine) : undefined;
           const ner = await extractNerLinks(engine, {
             sourceIdFilter: filesystemSourceId, signal: opts.signal,
             yieldDuringPhase: buildYieldDuringPhase(lock, opts.yieldDuringPhase),
             slugs: [...relationNerSlugs],
+            excludePathPattern: opts.quickMaintenance ? (await import('./pmbrain-adapters/quick-maintenance-policy.ts')).QUICK_MAINTENANCE_EXCLUDED_PATH : undefined,
+            gazetteer,
+            includeProjectTargets: opts.quickMaintenance,
+            onPageError:onPageError('关系类型'),
           });
           const { runMentionPass }=await import('./mentions/pass.ts');
-          const settled=await runMentionPass(engine,{sourceId:filesystemSourceId,slugs:[...relationNerSlugs],signal:opts.signal});
+          const settled=await runMentionPass(engine,{sourceId:filesystemSourceId,slugs:[...relationNerSlugs],signal:opts.signal,quickEntityTypes:opts.quickMaintenance,onPageError:onPageError('名称提及'),excludePathPattern:opts.quickMaintenance ? (await import('./pmbrain-adapters/quick-maintenance-policy.ts')).QUICK_MAINTENANCE_EXCLUDED_PATH : undefined});
           if(settled.state==='failed')throw new Error(settled.error);
           result.details = {
             ...result.details,
@@ -2104,6 +2181,7 @@ export async function runCycle(
         } catch (error) {
           checkAborted(opts.signal);
           const message = error instanceof Error ? error.message : String(error);
+          noteFailure('关系类型',error);
           result.status = isGinRepairAbortText(error) ? 'fail' : result.status === 'fail' ? 'fail' : 'warn';
           result.error = makeErrorFromException(error);
           for(const slug of relationNerSlugs)await engine.executeRaw('UPDATE page_mention_state SET mention_revision=NULL WHERE page_id IN (SELECT id FROM pages WHERE slug=$1 AND ($2::text IS NULL OR source_id=$2))',[slug,filesystemSourceId ?? null]);
@@ -2112,6 +2190,48 @@ export async function runCycle(
         }
         result.duration_ms += Math.round(performance.now() - started);
       }
+      if(opts.quickMaintenance&&!dryRun){
+        const slugs=[...new Set(prioritySlugs??[])],sourceId=filesystemSourceId??'default';
+        const {QUICK_MAINTENANCE_EXCLUDED_PATH:excludePathPattern}=await import('./pmbrain-adapters/quick-maintenance-policy.ts');
+        const {LINK_EXTRACTOR_VERSION_TS}=await import('./link-extraction.ts');
+        const explicitPending=(await engine.listStalePagesForExtraction({batchSize:Math.max(1,slugs.length),afterPageId:0,sourceId,slugs,versionTs:LINK_EXTRACTOR_VERSION_TS,excludePathPattern})).map(page=>page.slug);
+        const pending=new Set(explicitPending);let mentionPending:string[]=[];
+        if(result.details.by_mention_disabled!==true){
+          const {listMentionDueSlugs}=await import('./mentions/pass.ts');
+          mentionPending=await listMentionDueSlugs(engine,sourceId,excludePathPattern,slugs);
+          for(const slug of mentionPending)pending.add(slug);
+        }
+        for(const failure of failures)for(const slug of failure.slug?[failure.slug]:slugs)pending.add(slug);
+        if(failures.some(failure=>failure.slug)){
+          const paths=await engine.executeRaw<{slug:string;source_path:string|null}>('SELECT slug,source_path FROM pages WHERE source_id=$1 AND slug=ANY($2::text[])',[sourceId,failures.flatMap(failure=>failure.slug?[failure.slug]:[])]);
+          for(const failure of failures){const path=paths.find(row=>row.slug===failure.slug)?.source_path;if(path)failure.path=path;}
+        }
+        const completed=slugs.filter(slug=>!pending.has(slug));
+        result.details={...result.details,relationScopeRemaining:explicitPending.length,mentionScopeRemaining:mentionPending.length,relationCompletedSlugs:completed,relationPendingSlugs:[...pending],relationFailures:failures,remaining:pending.size};
+        if(pending.size||failures.length)result.status=result.status==='fail'?'fail':'warn';
+        await opts.onMaintenancePages?.(completed);
+      }
+    };
+
+    const refreshRelations = async (...args:Parameters<typeof refreshRelationsPass>) => {
+      if(!opts.quickMaintenance||dryRun||opts.markdownCatchUpMaxHistorical!==undefined||opts.byMentionMaxHistorical!==undefined||opts.byMentionTimeBudgetMs!==undefined||args[3]?.maxHistoricalPages!==undefined)return refreshRelationsPass(...args);
+      const [engine,result,prioritySlugs]=args,scope=[...new Set(prioritySlugs??[])];
+      const completed=new Set<string>(),failed=new Set<string>(),failures:MaintenanceRelationFailure[]=[];
+      let pending=scope;
+      do {
+        checkAborted(opts.signal);
+        await refreshRelationsPass(engine,result,pending,args[3]);
+        for(const slug of result.details.relationCompletedSlugs as string[]??[])completed.add(slug);
+        for(const failure of result.details.relationFailures as MaintenanceRelationFailure[]??[]){
+          failures.push(failure);
+          for(const slug of failure.slug?[failure.slug]:pending)failed.add(slug);
+        }
+        pending=(result.details.relationPendingSlugs as string[]??[]).filter(slug=>!failed.has(slug));
+        if(pending.length)await buildYieldDuringPhase(lock,opts.yieldDuringPhase)?.();
+      }while(pending.length);
+      const remaining=scope.filter(slug=>!completed.has(slug)||failed.has(slug)),remainingSet=new Set(remaining);
+      result.details={...result.details,relationCompletedSlugs:scope.filter(slug=>!remainingSet.has(slug)),relationPendingSlugs:remaining,relationFailures:failures,remaining:remaining.length};
+      if(!remaining.length&&!failures.length&&!result.error)result.status='ok';
     };
 
 
@@ -2135,7 +2255,11 @@ export async function runCycle(
         // is undefined → extract falls back to full walk (safe default).
         let result: PhaseResult;
         let progressStarted = false;
-        if (brainDir === null) {
+        if (opts.quickMaintenance) {
+          progress.start('cycle.extract');
+          progressStarted = true;
+          result = { phase: 'extract', status: 'ok', duration_ms: 0, summary: '增量检查已有知识关联', details: { incremental: true } };
+        } else if (brainDir === null) {
           result = skipNoBrainDir('extract');
           result.details = { ...result.details, filesystem_skipped: true };
         } else {
@@ -2148,6 +2272,17 @@ export async function runCycle(
         }
 
         await refreshRelations(engine, result, resolveIncrementalExtractSlugs(syncPagesAffected, synthesizeWrittenSlugs));
+        if (!opts.quickMaintenance && engine && synthesizeWrittenSlugs?.length) {
+          try {
+            const { auditDreamLinks } = await import('./cycle/dream-link-audit.ts');
+            const audit = await auditDreamLinks(engine, filesystemSourceId, synthesizeWrittenSlugs);
+            const synthesized = [...phaseResults].reverse().find(item => item.phase === 'synthesize');
+            if (synthesized && synthesized.status !== 'fail' && synthesized.status !== 'skipped') {
+              synthesized.details = { ...synthesized.details, unresolved_links: audit.unresolved, new_orphans: audit.unlinked };
+              if (audit.unresolved.length > 0 && synthesized.status === 'ok') synthesized.status = 'warn';
+            }
+          } catch {}
+        }
 
         phaseResults.push(result);
         noteSearchIndexAbort(result);
@@ -2235,18 +2370,17 @@ export async function runCycle(
         // v0.41.2.1 (D9 #5): union sync + synthesize affected slugs so the
         // incremental discovery path doesn't miss pages just-written by the
         // synthesize phase that ran earlier in the same cycle.
-        const xaAffectedSlugs =
-          syncPagesAffected || synthesizeWrittenSlugs
-            ? [
-                ...(syncPagesAffected ?? []),
-                ...(synthesizeWrittenSlugs ?? []),
-              ]
+        const syncFailedOpen = phaseResults.some(item => item.phase === 'sync' && item.status === 'fail') && syncPagesAffected === undefined;
+        const xaAffectedSlugs = syncFailedOpen
+          ? []
+          : syncPagesAffected !== undefined || synthesizeWrittenSlugs !== undefined
+            ? [...new Set([...(syncPagesAffected ?? []), ...(synthesizeWrittenSlugs ?? [])])]
             : undefined;
         const { result, duration_ms } = await timePhase(() => runPhaseExtractAtoms(engine, {
           brainDir: brainDir ?? undefined,
           sourceId: xaSourceId,
           dryRun,
-          affectedSlugs: opts.includePendingKnowledge||opts.knowledgeSince?undefined:xaAffectedSlugs,
+          affectedSlugs: opts.changedSlugs !== undefined ? xaAffectedSlugs ?? [] : syncFailedOpen ? [] : (opts.includePendingKnowledge || opts.knowledgeSince ? undefined : xaAffectedSlugs),
           schemaPack:opts.schemaPack,
           since:opts.knowledgeSince,
           requireSourceQuotes:opts.includePendingKnowledge,
@@ -2309,7 +2443,7 @@ export async function runCycle(
         progress.start('cycle.capture_entities');
         let captureReportedDone = 0;
         const { runPhaseCaptureEntities } = await import('./cycle/capture-entities.ts');
-        const captureSlugs=opts.prepareEntityCapture?await opts.prepareEntityCapture():opts.captureEntitySlugs;
+        const captureSlugs=opts.prepareEntityCapture?(await opts.prepareEntityCapture())??[]:opts.captureEntitySlugs;
         const { result, duration_ms } = await timePhase(() => runPhaseCaptureEntities(engine, {
           sourceId: cycleSourceId,
           quickEntitiesOnly:opts.quickEntitiesOnly,
@@ -2367,6 +2501,8 @@ export async function runCycle(
         });
       } else if (brainDir === null) {
         phaseResults.push(skipNoBrainDir('patterns'));
+      } else if (opts.changedSlugs !== undefined && !synthesizeWrittenSlugs?.length) {
+        phaseResults.push({ phase: 'patterns', status: 'skipped', duration_ms: 0, summary: '跳过', details: { reason: 'round_unchanged', message: '本轮没有新的或变化的资料，已跳过' } });
       } else {
         progress.start('cycle.patterns');
         const { runPhasePatterns } = await import('./cycle/patterns.ts');
@@ -2776,7 +2912,8 @@ export async function runCycle(
       await checkpoint();
     }
 
-    if (opts.refreshRelationsAfterGeneration && engine && !dryRun && resolvedPhases.includes('extract')) {
+    const generatedRelationsThisCycle = phases.includes('extract') || phases.includes('capture_entities') || phases.includes('synthesize');
+    if (opts.refreshRelationsAfterGeneration && engine && !dryRun && generatedRelationsThisCycle) {
       checkAborted(opts.signal);
       const extract = phaseResults.find(result => result.phase === 'extract');
       if (extract && !skipIfSearchIndexUnusable('extract')) {
@@ -3007,7 +3144,7 @@ function emptyTotals(): CycleReport['totals'] {
   };
 }
 
-function extractTotals(phases: PhaseResult[]): CycleReport['totals'] {
+export function extractTotals(phases: PhaseResult[]): CycleReport['totals'] {
   const t = emptyTotals();
   for (const p of phases) {
     if (p.phase === 'lint' && p.details) {
@@ -3063,7 +3200,7 @@ function extractTotals(phases: PhaseResult[]): CycleReport['totals'] {
   return t;
 }
 
-function deriveStatus(phases: PhaseResult[], totals: CycleReport['totals']): CycleStatus {
+export function deriveStatus(phases: PhaseResult[], totals: CycleReport['totals']): CycleStatus {
   // Scope exclusions are bookkeeping, not attempted work. Ignoring them also
   // prevents six failed freshness phases plus many exclusions from looking
   // merely partial and incorrectly stamping a Source fresh.

@@ -350,11 +350,12 @@ window.pmbrainDesktop = {
   openExternal: async () => {},
   checkUpdates: async () => null,
   installUpdate: async () => {},
-  listPgliteUpgradeBackups: async () => ({ databasePath: null, backupRoot: null, keep: 2, totalBytes: 0, backups: [] }),
+  listPgliteUpgradeBackups: async () => ({ databasePath: null, backupRoot: null, keep: 1, totalBytes: 0, backups: [], enabled: false }),
   prunePgliteUpgradeBackups: async () => ({ status: 'pruned', deleted: [], kept: [], listing: await window.pmbrainDesktop.listPgliteUpgradeBackups() }),
   deletePgliteUpgradeBackup: async () => ({ status: 'deleted', listing: await window.pmbrainDesktop.listPgliteUpgradeBackups() }),
   restorePgliteUpgradeBackup: async () => ({ status: 'restored', listing: await window.pmbrainDesktop.listPgliteUpgradeBackups() }),
   setPgliteUpgradeBackupRoot: async () => ({ status: 'unchanged', listing: await window.pmbrainDesktop.listPgliteUpgradeBackups() }),
+  setPgliteUpgradeBackupEnabled: async () => ({ status: 'unchanged', listing: await window.pmbrainDesktop.listPgliteUpgradeBackups() }),
   openPgliteUpgradeBackup: async () => {},
   getPgliteRecoveryStatus: async () => ({
     state: 'active', pid: 37564, ownerType: 'desktop-sidecar',

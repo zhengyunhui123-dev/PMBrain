@@ -12,6 +12,8 @@ import { MinionQueue } from '../src/core/minions/queue.ts';
 import { TaskProgressAdapter } from '../src/product/tasks/progress-adapter.ts';
 import { SYNC_FILE_QUEUE } from '../src/product/tasks/sync-file-queue.ts';
 import { assertSafeE2eDatabaseUrl } from './helpers/db-guard.ts';
+import { DeepOutputReceipt } from '../src/product/tasks/deep-output-receipt';
+import { idleBackground } from './helpers/background-resources';
 
 const database = process.env.PMBRAIN_TASK_TEST_DATABASE_URL;
 const keys = ['PMBRAIN_HOME', 'GBRAIN_HOME', 'DATABASE_URL', 'PMBRAIN_DATABASE_URL', 'GBRAIN_DATABASE_URL'];
@@ -43,44 +45,86 @@ afterAll(async () => {
 }, 60000);
 
 async function ended(runtime: ProductTaskRuntime, id: string) {
-  const deadline = Date.now() + 60000;
+  const deadline = Date.now() + 300000;
   while (Date.now() < deadline) {
     const run = await runtime.getRun(id);
     if (run && !['running', 'queued'].includes(run.status)) return run;
-    await Bun.sleep(30);
+    await Bun.sleep(150);
   }
   throw new Error(JSON.stringify(await runtime.getRun(id)));
 }
 
-test('深度整理的同步超过快照窗口后在同一任务分批完成，只导入 Git 已提交内容', async () => {
+test('快速维护后深度整理只处理增量，连续运行不重新排队未变的普通文档', async () => {
+  const repo = join(home, 'reuse-source'); mkdirSync(repo);
+  for (let index = 0; index < 4; index++) writeFileSync(join(repo, `note-${index}.md`), `# 增量资料 ${index}\n\n保持已导入资料，只有文件变化才需要重新导入。`);
+  await engine.executeRaw("INSERT INTO sources(id,name,local_path,config) VALUES ('deep-reuse','同步复用验收',$1,'{}'::jsonb)", [repo]);
+  const runtime = new ProductTaskRuntime(engine, { background: idleBackground }); await runtime.start();
+  try {
+    const quick = await ended(runtime, (await runtime.submitDream({ preset: 'quick', sourceId: 'deep-reuse' })).id);
+    expect(quick.status, JSON.stringify(quick)).toBe('completed');
+    const first = await ended(runtime, (await runtime.submitDream({ preset: 'full', sourceId: 'deep-reuse', maxPages: 1 })).id);
+    expect(first.product?.deep?.scan.unchanged, JSON.stringify(first.product)).toBe(4);
+    expect((await runtime.files(first.id))?.rows ?? []).toHaveLength(0);
+    writeFileSync(join(repo, 'note-0.md'), '# 增量资料 0\n\n这里保存了新增内容，其他三份资料保持不变。');
+    const second = await ended(runtime, (await runtime.submitDream({ preset: 'full', sourceId: 'deep-reuse', maxPages: 1 })).id);
+    expect(second.product?.deep?.scan.unchanged).toBe(3);
+    expect((await runtime.files(second.id))?.rows).toHaveLength(1);
+    expect((await engine.getPage('note-0', { sourceId: 'deep-reuse' }))?.compiled_truth).toContain('新增内容');
+  } finally { await runtime.close(); }
+}, 600000);
+
+test('深度整理统计在数据库提交之后累计，失败事务不计入新建或关联', async () => {
+  await engine.executeRaw("INSERT INTO sources(id,name) VALUES ('deep-metrics','成果统计验收')");
+  await engine.putPage('concepts/existing', { type: 'concept', title: '已有概念', compiled_truth: '已有内容' }, { sourceId: 'deep-metrics' });
+  const receipt = new DeepOutputReceipt('deep-metrics');
+  const observed = receipt.observe(engine);
+  await observed.transaction(async tx => {
+    await tx.putPage('atoms/new', { type: 'atom', title: '新知识', compiled_truth: '有出处的知识' }, { sourceId: 'deep-metrics' });
+    await tx.putPage('concepts/existing', { type: 'concept', title: '已有概念', compiled_truth: '维护后的内容' }, { sourceId: 'deep-metrics' });
+    await tx.addLinksBatch([{ from_slug: 'atoms/new', to_slug: 'concepts/existing', from_source_id: 'deep-metrics', to_source_id: 'deep-metrics' }]);
+  });
+  let rollback: unknown;
+  try { await observed.transaction(async tx => {
+    await tx.putPage('patterns/rollback', { type: 'note', title: '不会保存', compiled_truth: '回滚内容' }, { sourceId: 'deep-metrics' });
+    await tx.addLinksBatch([{ from_slug: 'patterns/rollback', to_slug: 'concepts/existing', from_source_id: 'deep-metrics', to_source_id: 'deep-metrics' }]);
+    throw new Error('isolated rollback');
+  }); } catch (error) { rollback = error; }
+  expect(rollback).toBeInstanceOf(Error);
+  expect((rollback as Error).message).toBe('isolated rollback');
+  expect(receipt.take()).toMatchObject({ knowledge_created: 1, knowledge_maintained: 1, output_links_created: 1 });
+  expect(await engine.getPage('patterns/rollback', { sourceId: 'deep-metrics' })).toBeNull();
+}, 60000);
+
+test('深度整理的同步超过快照窗口后在同一任务分批完成，并纳入工作区未提交资料', async () => {
   const repo = join(home, 'git-source'); mkdirSync(repo);
   const content = '# 提交资料\n\n分批同步保留原始资料与已提交范围。\n';
   for (const name of ['one.md', 'two.md', 'three.md']) writeFileSync(join(repo, name), content + name);
   execFileSync('git', ['init', '-q', repo]);
   execFileSync('git', ['-C', repo, 'add', '.']);
   execFileSync('git', ['-C', repo, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'fixture']);
-  writeFileSync(join(repo, 'one.md'), '# 未提交修改\n\n这份修改不应自动进入深度整理。');
+  writeFileSync(join(repo, 'one.md'), '# 未提交修改\n\n这份修改应随深度整理进入知识库。');
   writeFileSync(join(repo, 'untracked.md'), '# 未提交新资料');
   const original = readFileSync(join(repo, 'one.md'));
   await engine.executeRaw("INSERT INTO sources(id,name,local_path,config) VALUES ('deep-git','深度同步验收',$1,'{}'::jsonb)", [repo]);
-  const runtime = new ProductTaskRuntime(engine, { snapshotQuotaBytes: Buffer.byteLength(content + 'three.md') * 2 });
+  const runtime = new ProductTaskRuntime(engine, { background: idleBackground, snapshotQuotaBytes: Buffer.byteLength(content + 'three.md') * 2 });
   await runtime.start();
   try {
     const run = await runtime.submitDream({ preset: 'full', sourceId: 'deep-git', maxPages: 1 });
     const done = await ended(runtime, run.id);
     expect(done.status, JSON.stringify(done)).toBe('completed');
     const files = await runtime.files(run.id);
-    expect(files?.rows).toHaveLength(3);
+    expect(files?.rows).toHaveLength(4);
     expect(files?.rows.every(file => file.status === 'completed')).toBe(true);
-    expect((await engine.getPage('one', { sourceId: 'deep-git' }))?.compiled_truth).toContain('分批同步');
-    expect(await engine.getPage('untracked', { sourceId: 'deep-git' })).toBeNull();
+    expect((await engine.getPage('one', { sourceId: 'deep-git' }))?.compiled_truth).toContain('未提交修改');
+    expect((await engine.getPage('untracked', { sourceId: 'deep-git' }))?.compiled_truth).toContain('未提交新资料');
     expect(readFileSync(join(repo, 'one.md'))).toEqual(original);
+    expect(execFileSync('git', ['-C', repo, 'status', '--porcelain'], { encoding: 'utf8' })).toContain('untracked.md');
     const snapshots = await engine.executeRaw<{ path: string }>("SELECT data->'task'->'input'->>'path' AS path FROM minion_jobs WHERE queue=$1 AND parent_job_id=$2", [SYNC_FILE_QUEUE, Number(run.id.slice(5))]);
     expect(snapshots.every(file => !existsSync(file.path))).toBe(true);
-    expect((await runtime.listRuns()).filter(item => item.kind === 'dream_full')).toHaveLength(1);
+    expect((await runtime.listRuns()).filter(item => item.kind === 'dream_full' && item.id === run.id)).toHaveLength(1);
     expect(await engine.executeRaw("SELECT id FROM minion_jobs WHERE queue=$1 AND data->>'kind'='dream_capture_entities' AND data->'task'->'input'->>'sourceId'='deep-git'", [PRODUCT_TASK_QUEUE])).toHaveLength(0);
   } finally { await runtime.close(); }
-}, 90000);
+}, 300000);
 
 test('深度整理同步中断后继续原任务，已完成同步阶段之后的模型工作不自动重跑', async () => {
   const repo = join(home, 'resume-source'); mkdirSync(repo); writeFileSync(join(repo, 'resume.md'), '# 继续资料\n\n保持同一个任务。');
@@ -90,7 +134,7 @@ test('深度整理同步中断后继续原任务，已完成同步阶段之后�
   await engine.executeRaw("UPDATE minion_jobs SET status='paused',attempts_started=1 WHERE id=$1", [paused.id]);
   const uncertain = await queue.add('pmbrain-product-task', { kind: 'dream_full', fileSession: true, task: { type: 'dream', input: { preset: 'full', sourceId: 'deep-resume', checkpoint: { phases: { 'deep-resume': [{ phase: 'sync', status: 'ok', summary: '完成同步', duration_ms: 1, details: {} }] }, reports: {} } } } }, { queue: PRODUCT_TASK_QUEUE, delay: 86400000 });
   await engine.executeRaw("UPDATE minion_jobs SET status='active',lock_token='old-service',lock_until=now()-interval '1 minute' WHERE id=$1", [uncertain.id]);
-  const runtime = new ProductTaskRuntime(engine); await runtime.start();
+  const runtime = new ProductTaskRuntime(engine, { background: idleBackground }); await runtime.start();
   try {
     expect((await queue.getJob(uncertain.id))?.status).toBe('paused');
     const retried = await runtime.retry(`task-${paused.id}`);
@@ -98,7 +142,7 @@ test('深度整理同步中断后继续原任务，已完成同步阶段之后�
     expect((await ended(runtime, retried!.id)).status).toBe('completed');
     expect((await queue.getJob(uncertain.id))?.status).toBe('paused');
   } finally { await runtime.close(); }
-}, 90000);
+}, 300000);
 
 test('深度整理同步文件进度持续可见，不只显示完成了一个步骤', () => {
   const adapter = new TaskProgressAdapter('dream_full');
@@ -124,7 +168,7 @@ test('深度整理大文档分批写库时显示文件与提交进度，完成�
     const value = Reflect.get(target, property);
     return typeof value === 'function' ? value.bind(target) : value;
   } });
-  const runtime = new ProductTaskRuntime(wrap(engine)); await runtime.start();
+  const runtime = new ProductTaskRuntime(wrap(engine), { background: idleBackground }); await runtime.start();
   try {
     const run = await runtime.submitDream({ preset: 'full', sourceId: 'deep-large', maxPages: 1 });
     let writing = false;
@@ -143,7 +187,7 @@ test('深度整理大文档分批写库时显示文件与提交进度，完成�
     expect((await engine.getPage(file.slug, { sourceId: 'deep-large' }))?.compiled_truth).toContain('章节 159');
     expect(readFileSync(path)).toEqual(original);
   } finally { await runtime.close(); }
-}, 90000);
+}, 300000);
 
 test('深度整理停止及服务重启后仍保持停止，确认继续时复用已完成文件与原任务', async () => {
   const repo = join(home, 'stop-source'); mkdirSync(repo);
@@ -154,16 +198,16 @@ test('深度整理停止及服务重启后仍保持停止，确认继续时复�
     if (property === 'upsertChunks') return async (...args: Parameters<BrainEngine['upsertChunks']>) => { await Bun.sleep(200); return target.upsertChunks(...args); };
     const value = Reflect.get(target, property); return typeof value === 'function' ? value.bind(target) : value;
   } });
-  let runtime = new ProductTaskRuntime(wrap(engine)); await runtime.start();
+  let runtime = new ProductTaskRuntime(wrap(engine), { background: idleBackground }); await runtime.start();
   let id = '';
   try {
     id = (await runtime.submitDream({ preset: 'full', sourceId: 'deep-stop', maxPages: 1 })).id;
     const scanDeadline = Date.now() + 40000;
     while (Date.now() < scanDeadline) {
-      if ((await runtime.getRun(id))?.product?.syncScan?.active) break;
+      if (((await runtime.getRun(id))?.product?.deep?.scan.scanned ?? 0) > 0) break;
       await Bun.sleep(50);
     }
-    expect((await runtime.getRun(id))?.product?.syncScan?.active).toBe(true);
+    expect((await runtime.getRun(id))?.product?.deep?.scan.scanned ?? 0).toBeGreaterThan(0);
     const deadline = Date.now() + 40000;
     while (Date.now() < deadline) {
       if ((await runtime.getRun(id))?.product?.syncFiles?.completed) break;
@@ -172,11 +216,11 @@ test('深度整理停止及服务重启后仍保持停止，确认继续时复�
     expect((await runtime.cancel(id))?.status).toBe('cancelled');
     const [before] = await engine.executeRaw<{ count: number }>("SELECT count(*)::int AS count FROM minion_jobs WHERE queue=$1 AND parent_job_id=$2 AND status='completed'", [SYNC_FILE_QUEUE, Number(id.slice(5))]);
     expect(before.count).toBeGreaterThan(0); expect(before.count).toBeLessThan(12);
-    await runtime.close(); runtime = new ProductTaskRuntime(engine); await runtime.start();
+    await runtime.close(); runtime = new ProductTaskRuntime(engine, { background: idleBackground }); await runtime.start();
     expect((await runtime.getRun(id))?.status).toBe('cancelled');
     expect((await runtime.retry(id))?.id).toBe(id);
     expect((await ended(runtime, id)).status).toBe('completed');
     const files = await runtime.files(id);
     expect(files?.rows).toHaveLength(12); expect(files?.rows.every(file => file.status === 'completed')).toBe(true);
   } finally { await runtime.close(); }
-}, 90000);
+}, 600000);

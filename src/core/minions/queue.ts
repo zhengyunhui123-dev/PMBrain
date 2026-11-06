@@ -140,7 +140,7 @@ export class MinionQueue {
       // 1. Idempotency fast path — if a row already exists for this key, return it
       //    without doing any other work. The unique partial index guarantees
       //    no second row can be inserted with the same non-null key.
-      if (opts?.idempotency_key) {
+      if (opts?.idempotency_key && opts.maxQueueSize === undefined) {
         const existing = await tx.executeRaw<Record<string, unknown>>(
           `SELECT * FROM minion_jobs WHERE idempotency_key = $1`,
           [opts.idempotency_key]
@@ -156,8 +156,11 @@ export class MinionQueue {
           const existing=await tx.executeRaw<Record<string,unknown>>('SELECT * FROM minion_jobs WHERE idempotency_key=$1',[opts.idempotency_key]);
           if(existing.length)return rowToMinionJob(existing[0]);
         }
-        const rows=await tx.executeRaw<{count:string}>("SELECT count(*)::text AS count FROM minion_jobs WHERE queue=$1 AND status NOT IN ('completed','failed','dead','cancelled')",[queueName]);
-        if(Number(rows[0].count)>=opts.maxQueueSize)throw new Error(`资源保护：队列容量已达到 ${opts.maxQueueSize}，已拒绝新任务。请先完成或停止已有任务。`);
+        const capacityName=typeof opts.capacityName==='string'&&opts.capacityName?opts.capacityName:null;
+        const rows=capacityName
+          ? await tx.executeRaw<{count:string}>("SELECT count(*)::text AS count FROM minion_jobs WHERE queue=$1 AND name=$2 AND status NOT IN ('completed','failed','dead','cancelled')",[queueName,capacityName])
+          : await tx.executeRaw<{count:string}>("SELECT count(*)::text AS count FROM minion_jobs WHERE queue=$1 AND status NOT IN ('completed','failed','dead','cancelled')",[queueName]);
+        if(Number(rows[0]?.count??'0')>=opts.maxQueueSize)throw new Error(`资源保护：队列容量已达到 ${opts.maxQueueSize}，已拒绝新任务。请先完成或停止已有任务。`);
       }
 
       // 1b. Submission-time single-flight for named jobs. Unlike maxWaiting,
@@ -926,6 +929,7 @@ export class MinionQueue {
           updated_at = now()
          WHERE status = 'active'
            AND started_at IS NOT NULL
+           AND COALESCE(data->>'unboundedRuntime','') <> 'true'
            AND EXTRACT(EPOCH FROM (now() - COALESCE(
              timeout_at - (timeout_ms::double precision * interval '1 millisecond'), started_at))) * 1000 >
              CASE

@@ -1,15 +1,3 @@
-/**
- * PMBrain Quick Maintenance — thin orchestration over existing capabilities.
- *
- * Not a second Dream engine. Reuses runCycle + existing lint/sync/extract/
- * by-mention/embed/orphans cores. Full Dream stays on upstream phase tables.
- *
- * Goals:
- *   - failed sync files must not empty successful pagesAffected (sync layer)
- *   - deterministic by-mention relations for known entities
- *   - complete deterministic relation catch-up with resumable checkpoints
- */
-
 import type { BrainEngine } from './engine.ts';
 import {
   runCycle,
@@ -22,41 +10,29 @@ import {
 
 /** Quick phase set — same order as ALL_PHASES filter (legacy preset). */
 export const QUICK_MAINTENANCE_PHASES: readonly CyclePhase[] = [
-  'lint',
-  'backlinks',
   'sync',
   'fence_repair',
   'content_repair',
   'extract',
-  'extract_facts',
-  'resolve_symbol_edges',
-  'embed',
-  'orphans',
 ] as const;
 
 const QUICK_PHASE_SET = new Set<CyclePhase>(QUICK_MAINTENANCE_PHASES);
 
 /** Ordered Quick phases (ALWAYS derived from ALL_PHASES for Full-safe ordering). */
-export function resolveQuickMaintenancePhases(capture=false): CyclePhase[] {
-  return ALL_PHASES.filter((p) => QUICK_PHASE_SET.has(p) || (capture && p==='capture_entities'));
+export function resolveQuickMaintenancePhases(capture = false): CyclePhase[] {
+  return ALL_PHASES.filter((p) => QUICK_PHASE_SET.has(p) || (capture && p === 'capture_entities'));
 }
 
 export type QuickMaintenanceOpts = Omit<CycleOpts, 'phases' | 'includeByMention' | 'includeNer' | 'includeHistoricalMarkdownCatchUp' | 'forcePackPhases'>;
 
-/**
- * Run one Quick Maintenance cycle.
- *
- * Thin wrapper: selects the Quick phase subset and enables by-mention on
- * the extract step. Does not reimplement sync/extract/embed.
- */
 export async function runQuickMaintenance(
   engine: BrainEngine | null,
   opts: QuickMaintenanceOpts,
 ): Promise<CycleReport> {
   return runCycle(engine, {
     ...opts,
-    quickEntitiesOnly: true,
-    phases: resolveQuickMaintenancePhases(!!opts.captureEntitySlugs?.length||!!opts.prepareEntityCapture),
+    quickMaintenance: true,
+    phases: resolveQuickMaintenancePhases(!!opts.captureEntitySlugs?.length),
     includeByMention: true,
     includeNer: true,
     includeHistoricalMarkdownCatchUp: true,
@@ -64,10 +40,6 @@ export async function runQuickMaintenance(
     // generic cycle default unchanged, but include committed local documents
     // here just like Admin's direct import flow does.
     includeOffice: true,
-    // Undefined means drain every pending deterministic relation in this
-    // Source. Explicit caps remain available to tests/advanced callers.
-    markdownCatchUpMaxHistorical: opts.markdownCatchUpMaxHistorical,
-    byMentionTimeBudgetMs: opts.byMentionTimeBudgetMs,
   });
 }
 
@@ -114,7 +86,8 @@ export function combineQuickMaintenanceReports(
     }
   }
 
-  const phases = resolveQuickMaintenancePhases(reports.some(({report})=>report.phases.some(phase=>phase.phase==='capture_entities'))).map((phaseName) => {
+  const includeCapture = reports.some(({ report }) => report.phases.some(phase => phase.phase === 'capture_entities'));
+  const phases = resolveQuickMaintenancePhases(includeCapture).map((phaseName) => {
     const sourcePhases = reports.flatMap(({ sourceId, report }) => {
       const phase = report.phases.find(item => item.phase === phaseName);
       return phase ? [{ sourceId, phase }] : [];

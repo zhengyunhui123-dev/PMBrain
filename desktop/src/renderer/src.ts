@@ -1876,6 +1876,7 @@ function setRepairBusy(busy: boolean): void {
   for (const button of repairActionButtons()) {
     button.disabled = busy;
   }
+  $<HTMLInputElement>('#upgrade-backup-enabled').disabled = busy;
 }
 
 function renderPgliteUpgradeBackups(result: DesktopPgliteUpgradeBackups): void {
@@ -1887,9 +1888,10 @@ function renderPgliteUpgradeBackups(result: DesktopPgliteUpgradeBackups): void {
   $('#repair-backup-root').textContent = result.backupRoot
     ? result.backupRoot
     : '完成 PGLite 配置后，这里会显示备份保存位置。';
+  $<HTMLInputElement>('#upgrade-backup-enabled').checked = result.enabled === true;
   $('#repair-backup-count').textContent = result.backups.length > 0
     ? `${result.backups.length} 份，共占用 ${formatBytes(result.totalBytes)}`
-    : '暂无已验证的升级前备份';
+    : '还没有升级前备份';
   $<HTMLButtonElement>('#repair-prune-backups').disabled = result.backups.length <= result.keep;
   $<HTMLButtonElement>('#repair-open-backup-root').disabled = !result.backupRoot;
   $<HTMLButtonElement>('#repair-change-backup-root').disabled = !result.databasePath;
@@ -1898,8 +1900,8 @@ function renderPgliteUpgradeBackups(result: DesktopPgliteUpgradeBackups): void {
     const empty = document.createElement('div');
     empty.className = 'repair-empty';
     empty.textContent = result.databasePath
-      ? '当前数据库还没有由桌面端升级流程保留的备份。升级成功后会自动创建并只保留最近 2 份。'
-      : '完成基础配置后，这里会显示升级前保留的数据库备份。';
+      ? '当前还没有升级前备份。备份默认关闭。打开上面的开关后，下次升级会覆盖保存一份。'
+      : '完成基础配置后，这里会显示升级前保存的数据库备份。';
     list.append(empty);
     return;
   }
@@ -1918,7 +1920,7 @@ function renderPgliteUpgradeBackups(result: DesktopPgliteUpgradeBackups): void {
     headingCopy.append(eyebrow, title);
     const status = document.createElement('b');
     status.className = 'repair-backup-status';
-    status.textContent = '已验证';
+    status.textContent = backup.status === 'copied' ? '已保存' : '较早的备份';
     heading.append(headingCopy, status);
 
     const meta = document.createElement('div');
@@ -1941,7 +1943,7 @@ function renderPgliteUpgradeBackups(result: DesktopPgliteUpgradeBackups): void {
     const path = document.createElement('code');
     path.textContent = backup.backupDirectory;
     const note = document.createElement('p');
-    note.textContent = '这是升级前保留的已验证副本。恢复会替换当前数据库；删除只去掉这份备份，不会改当前知识库。自动升级成功后只保留最近 2 份。';
+    note.textContent = '这是升级前保存的一份副本。恢复会替换当前数据库；删除只去掉这份备份，不会改当前知识库。打开备份后，成功启动只留下最新一份。';
     const actions = document.createElement('div');
     actions.className = 'repair-backup-actions';
     const restore = document.createElement('button');
@@ -1977,6 +1979,7 @@ async function loadPgliteUpgradeBackups(): Promise<void> {
     $<HTMLButtonElement>('#repair-prune-backups').disabled = true;
     $<HTMLButtonElement>('#repair-open-backup-root').disabled = true;
     $<HTMLButtonElement>('#repair-change-backup-root').disabled = true;
+    $<HTMLInputElement>('#upgrade-backup-enabled').disabled = true;
     const list = $('#repair-backup-list');
     list.replaceChildren();
     const empty = document.createElement('div');
@@ -2041,7 +2044,7 @@ async function openPgliteUpgradeBackup(target: string): Promise<void> {
 }
 
 async function prunePgliteUpgradeBackups(): Promise<void> {
-  if (!confirm('确认只保留最近 2 份已验证备份？更早的升级备份会被删除，当前数据库不会被修改。')) return;
+  if (!confirm('确认只保留最新一份备份？更早的升级备份会被删除，当前数据库不会被修改。')) return;
   clearNotices();
   setRepairBusy(true);
   try {
@@ -2049,12 +2052,39 @@ async function prunePgliteUpgradeBackups(): Promise<void> {
     applyBackupMutation(
       result,
       result.deleted?.length
-        ? `已清理 ${result.deleted.length} 份旧备份，现保留最近 ${result.kept?.length ?? 2} 份。`
-        : '当前已是最近 2 份备份，无需再清理。',
+        ? `已清理 ${result.deleted.length} 份旧备份，现保留最新 ${result.kept?.length ?? 1} 份。`
+        : '当前已是最新一份备份，无需再清理。',
     );
   } catch (error) {
     setNotice('error', error instanceof Error ? error.message : String(error));
     await loadPgliteUpgradeBackups();
+  } finally {
+    setRepairBusy(false);
+  }
+}
+
+async function setUpgradeBackupEnabled(): Promise<void> {
+  const input = $<HTMLInputElement>('#upgrade-backup-enabled');
+  const enabled = input.checked;
+  if (enabled && !confirm(
+    '确认打开升级前备份？\n\n' +
+    '每次升级会把整个知识库再复制一份到备份文件夹，并覆盖上一次的这一份。' +
+    '磁盘空间不够时，这次复制会失败，但启动仍会继续升级。',
+  )) {
+    input.checked = false;
+    return;
+  }
+  clearNotices();
+  setRepairBusy(true);
+  try {
+    const result = await window.pmbrainDesktop.setPgliteUpgradeBackupEnabled(enabled);
+    renderPgliteUpgradeBackups(result.listing);
+    setNotice('success', enabled
+      ? '已打开升级前备份。下次升级会覆盖保存一份。'
+      : '已关闭升级前备份。启动时不再复制知识库。');
+  } catch (error) {
+    input.checked = !enabled;
+    setNotice('error', error instanceof Error ? error.message : String(error));
   } finally {
     setRepairBusy(false);
   }
@@ -3013,6 +3043,7 @@ $('#memory-open-integrations').addEventListener('click', () => {
 $('#network-open-integrations').addEventListener('click', () => { window.location.hash = 'mcp'; });
 $('#shared-open-admin').addEventListener('click', () => void window.pmbrainDesktop.openAdmin());
 $('#open-logs').addEventListener('click', () => void window.pmbrainDesktop.openLogs());
+$('#upgrade-backup-enabled').addEventListener('change', () => void setUpgradeBackupEnabled());
 $('#repair-prune-backups').addEventListener('click', () => void prunePgliteUpgradeBackups());
 $('#repair-open-backup-root').addEventListener('click', () => {
   const root = $('#repair-backup-root').textContent?.trim();
@@ -3135,7 +3166,7 @@ $('#docker-migration-confirm').addEventListener('click', async () => {
     $<HTMLElement>('#docker-migration-plan').hidden = true;
     populate(await window.pmbrainDesktop.getSetup());
     const skipped = result.skippedTables.length > 0 ? `；跳过 ${result.skippedTables.length} 张历史或用户确认的旧表` : '';
-    setNotice('success', `迁移完成：${result.tables} 张表、${result.rows} 条记录已核对${skipped}；原 PGLite 冷备：${result.backupDirectory}；报告：${result.reportPath}。`);
+    setNotice('success', `迁移完成：${result.tables} 张表、${result.rows} 条记录已核对${skipped}；原 PGLite 备份：${result.backupDirectory}；报告：${result.reportPath}。`);
   } catch (error) {
     setNotice('error', error instanceof Error ? error.message : String(error));
   } finally {

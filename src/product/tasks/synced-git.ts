@@ -3,10 +3,23 @@ import { commitSyncedSourceFiles, type SyncedGitFile, type SyncedGitResult, type
 import type { SyncResult } from '../../commands/sync.ts';
 import { executeRawJsonb } from '../../core/sql-query.ts';
 
-export async function recordSyncedGitFile(engine: Pick<BrainEngine, 'executeRaw'>, jobId: number, sourceId: string, file: SyncedGitFile) {
+export async function recordSyncedGitFile(engine: Pick<BrainEngine, 'executeRaw'>, jobId: number, sourceId: string, file: SyncedGitFile, skipUnchanged = false) {
   const key = JSON.stringify([sourceId, file.path]);
-  await executeRawJsonb(engine, `UPDATE minion_jobs SET data=jsonb_set(data,'{gitFiles}',
-    COALESCE(data->'gitFiles','{}'::jsonb) || $2::jsonb) WHERE id=$1`, [jobId], [{ [key]: { ...file, sourceId } }]);
+  if (!skipUnchanged) {
+    await executeRawJsonb(engine, `UPDATE minion_jobs SET data=jsonb_set(data,'{gitFiles}',
+      COALESCE(data->'gitFiles','{}'::jsonb) || $2::jsonb) WHERE id=$1`, [jobId], [{ [key]: { ...file, sourceId } }]);
+    return;
+  }
+  await recordSyncedGitFiles(engine,jobId,[{...file,sourceId}]);
+}
+
+export async function recordSyncedGitFiles(engine:Pick<BrainEngine,'executeRaw'>,jobId:number,files:Array<SyncedGitFile & {sourceId:string}>) {
+  if(!files.length)return;
+  const entries=Object.fromEntries(files.map(file=>[JSON.stringify([file.sourceId,file.path]),file]));
+  await executeRawJsonb(engine,`UPDATE minion_jobs SET data=jsonb_set(data,'{gitFiles}',
+    COALESCE(data->'gitFiles','{}'::jsonb) || $2::jsonb)
+    WHERE id=$1 AND EXISTS (SELECT 1 FROM jsonb_each($2::jsonb) AS entry(key,value)
+      WHERE (data->'gitFiles'->entry.key) IS DISTINCT FROM entry.value)`,[jobId],[entries]);
 }
 
 export async function commitQuickMaintenanceSource(engine: BrainEngine, jobId: number, sourceId: string, root: string, sync: SyncResult, options: SyncedGitOptions = {}) {

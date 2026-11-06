@@ -20,10 +20,14 @@ export const DEFAULT_SOURCE_BOOSTS: Record<string, number> = {
   'concepts/': 1.3,
   // Long-form essays / articles
   'writing/': 1.4,
-  // Entity pages
+  // Entity pages and Dream knowledge pages
   'people/': 1.2,
   'companies/': 1.2,
+  'projects/': 1.2,
+  'atoms/': 1.2,
   'deals/': 1.2,
+  'wiki/originals/': 1.35,
+  'wiki/personal/patterns/': 1.35,
   // Notes from real meetings
   'meetings/': 1.1,
   // Ingested third-party content

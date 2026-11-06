@@ -285,11 +285,9 @@ const DREAM_KNOWLEDGE_STEPS = [
 ] as const;
 
 const QUICK_MAINTENANCE_STEPS = [
-  { key: 'check', title: '检查知识', description: '检查页面与内容规范', phases: ['lint', 'backlinks'] },
-  { key: 'sync', title: '同步内容', description: '同步新增和变化内容，并整理事实栏和页面标记', phases: ['sync', 'fence_repair', 'content_repair'] },
-  { key: 'connect', title: '建立关联', description: '增量整理实体与来源关联', phases: ['extract', 'extract_facts', 'resolve_symbol_edges', 'capture_entities'] },
-  { key: 'index', title: '更新索引', description: '向量化待处理内容', phases: ['embed'] },
-  { key: 'verify', title: '完成检查', description: '汇总孤立知识与异常', phases: ['orphans'] },
+  { key: 'sync', title: '同步内容', description: '同步新增和变化的资料', phases: ['sync'] },
+  { key: 'repair', title: '整理格式', description: '检查变化页面的事实栏和页面标记', phases: ['fence_repair', 'content_repair'] },
+  { key: 'connect', title: '建立关联', description: '匹配已有实体并补充规则关联', phases: ['extract'] },
 ] as const;
 
 type DreamRunMode = 'quick' | 'meeting' | 'cycle' | 'advanced';
@@ -497,22 +495,20 @@ function phaseDetailNumber(report: DreamCycleReport | null, phaseName: string, k
 
 function quickMaintenancePending(report: DreamCycleReport | null): {
   exceptionalFiles: number;
-  pendingEmbeddings: number;
   historicalLinks: number;
   processingErrors: number;
+  scopeLimited: boolean;
 } {
   const phases = report?.phases ?? [];
-  const embed = phases.find(phase => phase.phase === 'embed')?.details ?? {};
-  const explicitPending = Number(embed.pending);
-  const totalChunks = Math.max(0, Number(embed.total_chunks ?? 0));
-  const completedChunks = Math.max(0, Number(embed.embedded ?? 0)) + Math.max(0, Number(embed.skipped ?? 0));
+  const extract = phases.find(phase => phase.phase === 'extract')?.details ?? {};
+  const scopeLimited = 'relationScopeRemaining' in extract || 'mentionScopeRemaining' in extract;
   return {
     exceptionalFiles: phases.reduce((sum, phase) => sum + Math.max(0, Number(phase.details?.failedFiles ?? 0)), 0),
-    pendingEmbeddings: Number.isFinite(explicitPending)
-      ? Math.max(0, explicitPending)
-      : Math.max(0, totalChunks - completedChunks),
-    historicalLinks: Math.max(phaseDetailNumber(report, 'extract', 'mentionHistoricalRemaining'), phaseDetailNumber(report, 'extract', 'relationHistoricalRemaining')),
+    historicalLinks: scopeLimited
+      ? Math.max(phaseDetailNumber(report, 'extract', 'mentionScopeRemaining'), phaseDetailNumber(report, 'extract', 'relationScopeRemaining'))
+      : Math.max(phaseDetailNumber(report, 'extract', 'mentionHistoricalRemaining'), phaseDetailNumber(report, 'extract', 'relationHistoricalRemaining')),
     processingErrors: phases.reduce((sum, phase) => sum + Math.max(0, Number(phase.details?.errors_count ?? 0)), 0),
+    scopeLimited,
   };
 }
 
@@ -520,7 +516,6 @@ function quickMaintenanceIsPartial(report: DreamCycleReport | null): boolean {
   const pending = quickMaintenancePending(report);
   return report?.status === 'partial'
     || pending.exceptionalFiles > 0
-    || pending.pendingEmbeddings > 0
     || pending.historicalLinks > 0
     || pending.processingErrors > 0
     || (report?.phases ?? []).some(phase => phase.status === 'warn');
@@ -647,7 +642,7 @@ export function describeDreamRun(run: ConsoleRun): {
     return {
       headline: isQuick ? '本次快速维护已中止' : '本次 Dream 已中止',
       diagnosis: isQuick
-        ? '中止会结束本次快速维护；已经完成的检查和索引结果会保留，未开始的阶段不会继续。'
+        ? '中止会结束本次快速维护；已经完成的同步和关联会保留，未开始的部分不会继续。'
         : '中止会结束 Admin 启动的 Dream 子进程；已经完成的阶段会保留，未开始或未完成的阶段不会继续写入。',
       actions: report?.phases?.map(phase => (isQuick ? QUICK_PHASE_USER_ACTIONS[phase.phase] : undefined) ?? PHASE_USER_ACTIONS[phase.phase] ?? phase.summary ?? phase.phase) ?? ['进程已被用户中止。'],
       outputs: pagesWritten > 0 ? [`中止前已写入 ${pagesWritten} 个知识页。`] : ['中止前没有检测到新的知识页写入。'],
@@ -698,7 +693,7 @@ export function describeDreamRun(run: ConsoleRun): {
       ? '预览只检查可能受影响的内容，不会同步、建立关联或写入向量。'
       : 'dry-run 会检查影响范围和部分判定逻辑，但不会提交综合写入，所以“没有新知识点”是预期结果。'
     : isQuick
-      ? '本次检查、同步、确定性关联、向量索引和异常检查已经结束。'
+      ? '本轮变化同步和已有实体关联已结束；本轮资料需要向量化时会在后台继续，新实体建档和图片识别不属于本次维护。'
       : '命令已结束，需要看下面的产出和子任务结果判断是否真的沉淀成功。';
   const outputs: string[] = [];
 
@@ -743,7 +738,7 @@ export function describeDreamRun(run: ConsoleRun): {
         ? 'Dream 已部分完成，成果与待处理项如下'
         : 'Dream 只完成了部分检查';
     diagnosis = isQuick
-      ? '已完成的维护结果会保留；异常文件、待向量化和历史待补关联会分开列出，待继续处理不等于失败。'
+      ? '已完成的维护结果会保留；异常文件和待补关联会分开列出，待继续处理不等于失败。'
       : '部分阶段已成功并保留实际成果，仍有未处理内容；下方会据实显示写入数量和失败原因。';
   }
 
@@ -939,7 +934,6 @@ export function buildDreamOutcome(run: ConsoleRun): DreamOutcomeSummary {
           { label: '新增知识', value: added, note: isDryRun ? '预览不写入' : '同步新增页面' },
           { label: '更新知识', value: updated, note: isDryRun ? '预览不写入' : '同步更新页面' },
           { label: '新增关联', value: links, note: isDryRun ? '预览不写入' : '确定性关系' },
-          { label: '完成向量', value: embedded, note: isDryRun ? '预览不写入' : '新完成内容块' },
         ]
       : [
           { label: '新增知识', value: added, note: isDryRun ? '预览不写入' : '新页面与综合知识' },
@@ -951,8 +945,7 @@ export function buildDreamOutcome(run: ConsoleRun): DreamOutcomeSummary {
     pendingMetrics: isQuick
       ? [
           { label: '异常文件', value: quickPending.exceptionalFiles, note: quickPending.exceptionalFiles > 0 ? '需要检查解析原因' : '本次无异常文件' },
-          { label: '待向量化', value: quickPending.pendingEmbeddings, note: '待继续处理，不是失败' },
-          { label: '历史待补关联', value: quickPending.historicalLinks, note: '下次从检查点继续' },
+          { label: quickPending.scopeLimited ? '本轮待补关联' : '历史待补关联', value: quickPending.historicalLinks, note: '下次从检查点继续' },
         ]
       : [],
     knowledgeItems,
@@ -972,6 +965,7 @@ export function DreamRunContent({run,expanded=false}:{run:ConsoleRun;expanded?:b
   const reasons:Record<string,string>={not_configured:'未配置该阶段需要的资料目录',not_in_active_pack:'当前知识类型未启用该阶段',insufficient_evidence:'资料数量不足，未满足执行条件'};
   return <details className="dream-outcome-content" open={expanded}>
     <summary>查看本次整理内容</summary>
+    {isQuick&&<p className="pm-hint">快速维护只关联已有实体；本轮资料向量化在后台进行，完成不代表已为新实体建档或完成图片识别。</p>}
     {typeof proposals.model_id==='string'&&<p className="pm-hint">观点提炼模型：{proposals.model_id} · 成功处理 {Number(proposals.pages_processed??0)} 页 · 剩余 {Number(proposals.remaining??0)} 页</p>}
     <div className="dream-outcome-content-grid">
       <section><h3>新增与更新的知识</h3>{outcome.knowledgeItems.length>0
@@ -1098,7 +1092,8 @@ function commandFlagValue(command: string[], flag: string): string | null {
 function plannedFirstDreamPhase(run: ConsoleRun): string {
   const singlePhase = commandFlagValue(run.command, '--phase');
   if (singlePhase) return singlePhase;
-  return commandFlagValue(run.command, '--preset') === 'meeting' ? 'synthesize' : 'lint';
+  const preset = commandFlagValue(run.command, '--preset');
+  return preset === 'meeting' ? 'synthesize' : preset === 'quick' ? 'sync' : 'lint';
 }
 
 function rootCyclePhaseName(value: string): string | null {
@@ -1185,7 +1180,7 @@ function phaseProgressFromRun(run: ConsoleRun | null): PhaseProgressFromRun {
       // the previous Source's checkmarks into the next Source's five steps.
       if (running) completed.clear();
       active = null;
-      markStart('lint');
+      markStart('sync');
       continue;
     }
     const sourceFinish = line.match(/^\[quick-maintenance]\s+Source\s+(\S+)\s+(?:ok|clean|partial|failed|skipped)\b/i);
@@ -1267,12 +1262,10 @@ export function buildQuickMaintenanceStages(run: ConsoleRun | null): QuickMainte
     const parsed = Number(value ?? 0);
     return Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
   };
-  const lint = details('lint');
-  const backlinks = details('backlinks');
   const sync = details('sync');
   const extract = details('extract');
-  const embed = details('embed');
-  const orphans = details('orphans');
+  const fence = details('fence_repair');
+  const content = details('content_repair');
   const pending = quickMaintenancePending(report);
   const totals = report?.totals ?? {};
   const syncReport = phase('sync');
@@ -1282,29 +1275,10 @@ export function buildQuickMaintenanceStages(run: ConsoleRun | null): QuickMainte
   const historicalScanned = 'mentionHistoricalPagesProcessed' in extract
     ? number(extract.mentionHistoricalPagesProcessed)
     : Math.max(0, number(extract.mentionPagesProcessed) - syncAffected);
-  const overallStatus = !run
-    ? '未开始'
-    : run.status === 'running' || run.status === 'queued'
-      ? '进行中'
-      : run.status === 'failed' || report?.status === 'failed'
-        ? '异常'
-        : quickMaintenanceIsPartial(report)
-          ? '部分完成'
-          : '已完成';
-
   const stages: QuickMaintenanceStage[] = [
     {
       ...QUICK_MAINTENANCE_STEPS[0],
-      state: quickStageState(progress, QUICK_MAINTENANCE_STEPS[0].phases, false),
-      results: [
-        { label: '扫描页面', value: number(lint.pages_scanned) },
-        { label: '发现问题', value: number(lint.issues) + number(backlinks.gaps) },
-        { label: '自动修复', value: number(lint.fixed) },
-      ],
-    },
-    {
-      ...QUICK_MAINTENANCE_STEPS[1],
-      state: quickStageState(progress, QUICK_MAINTENANCE_STEPS[1].phases, number(sync.failedFiles) > 0),
+      state: quickStageState(progress, QUICK_MAINTENANCE_STEPS[0].phases, number(sync.failedFiles) > 0),
       results: [
         { label: '新增内容', value: actualSyncPagesAdded(report) },
         { label: '更新内容', value: number(sync.modified) },
@@ -1312,32 +1286,20 @@ export function buildQuickMaintenanceStages(run: ConsoleRun | null): QuickMainte
       ],
     },
     {
+      ...QUICK_MAINTENANCE_STEPS[1],
+      state: quickStageState(progress, QUICK_MAINTENANCE_STEPS[1].phases, false),
+      results: [
+        { label: '检查事实栏', value: number(fence.scanned) },
+        { label: '检查页面标记', value: number(content.scanned) },
+      ],
+    },
+    {
       ...QUICK_MAINTENANCE_STEPS[2],
-      state: quickStageState(progress, QUICK_MAINTENANCE_STEPS[2].phases, number(details('capture_entities').pages_remaining)>0),
+      state: quickStageState(progress, QUICK_MAINTENANCE_STEPS[2].phases, pending.historicalLinks > 0),
       results: [
         { label: '新增关联', value: number(totals.links_created) },
-        { label: '扫描历史页面', value: historicalScanned },
-        { label: '历史待补关联', value: pending.historicalLinks },
-        ...(phase('capture_entities')?[
-          { label: '识别实体', value: number(details('capture_entities').entities_recognized) },
-          { label: '待整理资料', value: number(details('capture_entities').pages_remaining) },
-        ]:[]),
-      ],
-    },
-    {
-      ...QUICK_MAINTENANCE_STEPS[3],
-      state: quickStageState(progress, QUICK_MAINTENANCE_STEPS[3].phases, pending.pendingEmbeddings > 0),
-      results: [
-        { label: '本次完成向量', value: number(embed.embedded ?? totals.pages_embedded) },
-        { label: '待向量化', value: pending.pendingEmbeddings },
-      ],
-    },
-    {
-      ...QUICK_MAINTENANCE_STEPS[4],
-      state: quickStageState(progress, QUICK_MAINTENANCE_STEPS[4].phases, false),
-      results: [
-        { label: '孤立知识', value: number(orphans.total_orphans) },
-        { label: '整体状态', value: overallStatus },
+        { label: pending.scopeLimited ? '本轮关联页面' : '扫描历史页面', value: pending.scopeLimited ? number(extract.mentionPagesProcessed) : historicalScanned },
+        { label: pending.scopeLimited ? '本轮待补关联' : '历史待补关联', value: pending.historicalLinks },
       ],
     },
   ];
@@ -1353,7 +1315,7 @@ function QuickMaintenanceJourney({ run }: { run: ConsoleRun | null }) {
   const stages = useMemo(() => buildQuickMaintenanceStages(run), [run]);
   const source = useMemo(() => quickMaintenanceRunSource(run), [run]);
   const suggestedKey = stages.find(stage => stage.state === 'active')?.key
-    ?? (run && run.status !== 'running' && run.status !== 'queued' ? 'verify' : 'check');
+    ?? (run && run.status !== 'running' && run.status !== 'queued' ? 'connect' : 'sync');
   const [selectedKey, setSelectedKey] = useState(suggestedKey);
   useEffect(() => setSelectedKey(suggestedKey), [run?.id, run?.status, suggestedKey]);
   const selected = stages.find(stage => stage.key === selectedKey) ?? stages[0]!;
@@ -1364,7 +1326,8 @@ function QuickMaintenanceJourney({ run }: { run: ConsoleRun | null }) {
       <div className="dream-journey-head">
         <div>
           <span className="dream-eyebrow">快速维护进度</span>
-          <h2>{running ? '正在执行快速维护' : '快速维护会完成这五项检查'}</h2>
+          <h2>{running ? '正在执行快速维护' : '快速维护的处理范围'}</h2>
+          <p className="pm-hint">仅关联已有实体；本轮资料向量化在后台进行，不影响维护完成。</p>
           {running && source && (
             <p className="pm-hint">
               当前 Source：{source.id}
@@ -1492,11 +1455,12 @@ export function phaseSummaryZh(phase: DreamPhaseReport): string {
       return `检测到 ${candidates} 个待同步文件，${result}${failed > 0 ? `，${failed} 个文件解析失败` : ''}。`;
     }
     case 'extract': {
-      const remaining = Math.max(number('relationHistoricalRemaining'), number('mentionHistoricalRemaining'));
+      const scoped = 'relationScopeRemaining' in details || 'mentionScopeRemaining' in details;
+      const remaining = scoped ? Math.max(number('relationScopeRemaining'), number('mentionScopeRemaining')) : Math.max(number('relationHistoricalRemaining'), number('mentionHistoricalRemaining'));
       const breakdown = details.by_mention || details.typed_ner || details.historical_relation_backfill
-        ? `其中历史显式关联 ${number('relationLinksCreated')} 条、正文实体关联 ${number('mentionLinksCreated')} 条、关系类型关联 ${number('nerLinksCreated')} 条。`
+        ? `其中${scoped ? '本轮' : '历史'}显式关联 ${number('relationLinksCreated')} 条、正文实体关联 ${number('mentionLinksCreated')} 条、关系类型关联 ${number('nerLinksCreated')} 条。`
         : '';
-      return `已建立 ${number('linksCreated')} 条知识链接和 ${number('timelineCreated')} 条时间线记录。${breakdown}${remaining > 0 ? `历史仍有 ${remaining} 页待补扫。` : ''}`;
+      return `已建立 ${number('linksCreated')} 条知识链接和 ${number('timelineCreated')} 条时间线记录。${breakdown}${details.by_mention_disabled ? '自动提及匹配已关闭，本轮未执行实体提及和规则关联。' : ''}${remaining > 0 ? scoped ? `本轮仍有 ${remaining} 页待关联。` : `历史仍有 ${remaining} 页待补扫。` : ''}`;
     }
     case 'extract_facts':
       return `已检查 ${number('pagesScanned')} 个页面，核对并写入 ${number('factsInserted')} 条事实。`;
@@ -1994,7 +1958,7 @@ function DreamRunPanel({
   }> = {
     quick: {
       title: '先做一次轻量维护',
-      description: '同步全部已注册 Source 的变更资料，增量更新重要人物、组织、项目和概念，补充来源关联及向量索引。实体整理使用普通模型，未变化资料复用成果。',
+      description: '同步已注册 Source 的变化资料，匹配已有实体并补充规则关联。本轮资料向量化在后台进行；新实体建档留给深度整理。',
       action: '开始快速维护',
     },
     cycle: {
@@ -2055,7 +2019,7 @@ function DreamRunPanel({
       <div className="dream-run-mode">
         <button type="button" className={runMode === 'quick' ? 'active' : ''} onClick={() => applyRunMode('quick')}>
           <strong>快速维护</strong>
-          <span>检查 · 同步 · 关联 · 向量化</span>
+          <span>同步变化 · 关联已有实体</span>
         </button>
         <button
           type="button"

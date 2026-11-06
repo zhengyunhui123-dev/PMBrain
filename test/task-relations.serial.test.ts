@@ -10,7 +10,7 @@ import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { initializeSourceGit, commitSourceGit } from '../src/core/source-git.ts';
-import { recordSyncedGitFile, commitQuickMaintenanceSource } from '../src/product/tasks/synced-git.ts';
+import { recordSyncedGitFile, recordSyncedGitFiles, commitQuickMaintenanceSource } from '../src/product/tasks/synced-git.ts';
 import { sourceFileHash } from '../src/core/pmbrain-adapters/synced-git.ts';
 import type { SyncResult } from '../src/commands/sync.ts';
 
@@ -67,4 +67,42 @@ test('retrying a published Git checkpoint retains the original successful commit
     expect(retried?.commit).toBe(first?.commit);
     expect(retried?.files).toEqual(['new.md']);
   } finally { rmSync(root, { recursive: true, force: true }); }
+}, 30_000);
+
+test('repeated sync records do not rewrite unchanged Git entries but save changed and deleted files', async () => {
+  const suffix = randomUUID().replaceAll('-', '');
+  const counter = `sync_git_write_count_${suffix}`;
+  const observer = `count_sync_git_write_${suffix}`;
+  await db.executeRaw(`CREATE TABLE ${counter} (n integer NOT NULL)`);
+  await db.executeRaw(`INSERT INTO ${counter} VALUES (0)`);
+  await db.executeRaw(`CREATE FUNCTION ${observer}() RETURNS trigger LANGUAGE plpgsql AS $$
+    BEGIN UPDATE ${counter} SET n = n + 1; RETURN NEW; END $$`);
+  await db.executeRaw(`CREATE TRIGGER ${observer} AFTER UPDATE ON minion_jobs FOR EACH ROW EXECUTE FUNCTION ${observer}()`);
+  try {
+    const file = { path: 'repeat-scan.md', hash: 'first' };
+    await recordSyncedGitFile(db, jobId, sourceId, file, true);
+    for (let i = 0; i < 10; i++) await recordSyncedGitFile(db, jobId, sourceId, file, true);
+    await recordSyncedGitFile(db, jobId, sourceId, { ...file, hash: 'changed' }, true);
+    await recordSyncedGitFile(db, jobId, sourceId, { path: file.path, deleted: true }, true);
+    await recordSyncedGitFile(db, jobId, sourceId, { path: file.path, deleted: true }, true);
+    await Promise.all(Array.from({ length: 8 }, () => recordSyncedGitFile(db, jobId, sourceId, { path: 'parallel.md', hash: 'same' }, true)));
+    await recordSyncedGitFile(db, jobId, sourceId, { path: 'deep.md', hash: 'same' });
+    await recordSyncedGitFile(db, jobId, sourceId, { path: 'deep.md', hash: 'same' });
+    const batch=Array.from({length:32},(_,i)=>({sourceId,path:`batch-${i}.md`,hash:`hash-${i}`}));
+    await recordSyncedGitFiles(db,jobId,batch);
+    await recordSyncedGitFiles(db,jobId,batch);
+    await recordSyncedGitFiles(db,jobId,[{sourceId,path:'batch-0.md',hash:'changed'},{sourceId,path:'batch-1.md',deleted:true}]);
+    const [{ n }] = await db.executeRaw<{ n: number }>(`SELECT n FROM ${counter}`);
+    expect(Number(n)).toBe(8);
+    const key = JSON.stringify([sourceId, file.path]);
+    const [stored] = await db.executeRaw<{ file: Record<string, unknown> }>("SELECT data->'gitFiles'->$2 AS file FROM minion_jobs WHERE id=$1", [jobId, key]);
+    expect(stored.file).toEqual({ path: file.path, deleted: true, sourceId });
+    const [batchStored]=await db.executeRaw<{files:Record<string,unknown>}>("SELECT data->'gitFiles' AS files FROM minion_jobs WHERE id=$1",[jobId]);
+    expect(batchStored.files[JSON.stringify([sourceId,'batch-0.md'])]).toEqual({sourceId,path:'batch-0.md',hash:'changed'});
+    expect(batchStored.files[JSON.stringify([sourceId,'batch-1.md'])]).toEqual({sourceId,path:'batch-1.md',deleted:true});
+  } finally {
+    await db.executeRaw(`DROP TRIGGER ${observer} ON minion_jobs`);
+    await db.executeRaw(`DROP FUNCTION ${observer}()`);
+    await db.executeRaw(`DROP TABLE ${counter}`);
+  }
 }, 30_000);

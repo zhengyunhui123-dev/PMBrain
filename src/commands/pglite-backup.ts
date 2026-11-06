@@ -61,29 +61,27 @@ function serializeBackup(backup: PgliteUpgradeBackupSummary) {
 }
 
 function printHuman(result: PgliteUpgradeBackupResult): void {
-  const action = result.status === 'created' ? '已创建并验证' : result.status === 'reused' ? '已复用并重新验证' : '验证通过';
+  const action = result.status === 'created' ? '已覆盖保存一份' : result.status === 'reused' ? '已复用' : '检查通过';
   process.stdout.write(
-    `${action} PGLite 升级冷备。\n` +
+    `${action} PGLite 升级备份。\n` +
     `  备份目录：${result.backupDirectory}\n` +
-    `  Schema：${result.manifest.source_schema_version ?? 'unknown'}\n` +
     `  文件：${result.manifest.backup_inventory.files}\n` +
     `  字节：${result.manifest.backup_inventory.bytes}\n` +
-    `  SHA-256：${result.manifest.backup_inventory.sha256}\n` +
-    '恢复验证已在一次性副本上完成；活动数据库和冷备本体均未被打开迁移。\n',
+    '只复制一份并覆盖同一位置。没有再复制第二份，也没有打开数据库。\n',
   );
 }
 
 function printListHuman(databasePath: string, backupRoot: string, backups: PgliteUpgradeBackupSummary[]): void {
   const totalBytes = backups.reduce((sum, backup) => sum + backup.manifest.backup_inventory.bytes, 0);
   if (backups.length === 0) {
-    process.stdout.write(`未找到该数据库的已验证升级备份：${databasePath}\n备份目录：${backupRoot}\n`);
+    process.stdout.write(`未找到该数据库的升级备份：${databasePath}\n备份目录：${backupRoot}\n`);
     return;
   }
   process.stdout.write(
-    `已验证的 PGLite 升级备份（${backups.length} 份，${totalBytes} 字节）：\n` +
+    `PGLite 升级备份（${backups.length} 份，${totalBytes} 字节）：\n` +
     `  数据库：${databasePath}\n` +
     `  备份目录：${backupRoot}\n` +
-    `  自动升级保留最近 ${PGLITE_UPGRADE_BACKUP_RETENTION} 份\n`,
+    `  只保留 ${PGLITE_UPGRADE_BACKUP_RETENTION} 份，新的复制会覆盖这一份\n`,
   );
   for (const backup of backups) {
     process.stdout.write(
@@ -102,30 +100,28 @@ export async function runPgliteBackup(args: string[]): Promise<void> {
   pmbrain pglite-backup create --target-version <version> [--path <brain.pglite>] [--backup-root <dir>] [--json]
   pmbrain pglite-backup list [--path <brain.pglite>] [--backup-root <dir>] [--json]
   pmbrain pglite-backup verify --backup <backup-directory> [--json]
-  pmbrain pglite-backup prune [--path <brain.pglite>] [--keep 2] [--backup-root <dir>] [--json]
+  pmbrain pglite-backup prune [--path <brain.pglite>] [--keep 1] [--backup-root <dir>] [--json]
   pmbrain pglite-backup delete --backup <backup-directory> [--path <brain.pglite>] [--backup-root <dir>] [--json]
   pmbrain pglite-backup restore --backup <backup-directory> --yes [--path <brain.pglite>] [--backup-root <dir>] [--json]
   pmbrain pglite-backup set-root --dir <backup-directory> [--json]
 
-create acquires the single-owner migration lock, copies the closed database to
-the configured backup root (default <config-dir>/backups/pglite-upgrades),
-verifies byte integrity, then opens only a disposable restore copy to read
-schema version and protected table counts.
+create acquires the single-owner migration lock and copies the closed database
+once into <backup-root>/current. The previous copy in that slot is removed
+first. It does not hash the files or open a second copy.
 
-verify re-checks SHA-256 and repeats the disposable-copy recovery test. It does
-not overwrite or restore the active database automatically.
+verify checks file count and total size against the manifest. It does not copy
+or open the database.
 
-list reads verified backup manifests only. It does not open, restore, modify, or
-delete the active database or any backup.
+list reads backup manifests only. It does not open, restore, modify, or delete
+the active database or any backup.
 
-prune deletes oldest verified backups for the selected database after a
-successful upgrade, always keeping at least the newest 2 copies.
+prune deletes older backups for the selected database and keeps the newest one
+by default.
 
-delete removes one verified backup directory. It never touches the active
-database.
+delete removes one backup directory. It never touches the active database.
 
-restore replaces the closed active database with a verified backup copy. The
-backup itself is kept. Sidecar / other owners must be stopped first.
+restore replaces the closed active database with the saved copy. The backup
+itself is kept. Sidecar / other owners must be stopped first.
 
 set-root writes pglite_upgrade_backup_dir. Existing backups are not moved.
 `);

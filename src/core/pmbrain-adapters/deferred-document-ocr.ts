@@ -7,6 +7,7 @@ import {MinionQueue} from '../minions/queue.ts';
 import {gbrainPath} from '../config.ts';
 import {documentFileHash,snapshotDocument} from '../document/file-snapshot.ts';
 import {DocumentRuntime} from '../document/resource-policy.ts';
+import {imageOcrAdmission} from './image-ocr-policy.ts';
 
 export const DOCUMENT_OCR_TASK='pmbrain-document-ocr';
 export const DOCUMENT_OCR_QUEUE='pmbrain-sync-files';
@@ -29,6 +30,11 @@ export async function queueDocumentOcr(engine:BrainEngine,filePath:string,relati
       const owner=await tx.executeRaw("SELECT id FROM minion_jobs WHERE id=$1 AND data->'task'->>'type'='dream' AND status IN ('active','waiting','waiting-children','delayed') AND (data->'task'->'input'->>'allSources'='true' OR COALESCE(data->'task'->'input'->>'sourceId',$3)=$2)",[maintenanceOwnerId,sourceId,await tx.getConfig('sources.default')??'default']);
       if(!owner.length)throw Error('原整理任务已停止，未提交后台识图');
     }
+    const admission=await imageOcrAdmission(tx,options.image);
+    if(!admission.ok){
+      await tx.executeRaw("UPDATE pages SET frontmatter=frontmatter-'document_ocr_deferred'-'document_ocr_task_id' WHERE id=$1",[page.id]);
+      return {...result,ocrPending:0};
+    }
     const ownedSnapshot=options.ocrOriginalPath===null;
     const path=ownedSnapshot?gbrainPath('task-artifacts','document-ocr',key.slice(13)+extname(relativePath).toLowerCase()):options.ocrOriginalPath??filePath;
     if(ownedSnapshot){
@@ -40,7 +46,7 @@ export async function queueDocumentOcr(engine:BrainEngine,filePath:string,relati
       }
     }
     if((await lstat(path)).isSymbolicLink()||await documentFileHash(path,runtime)!==hash)throw Error('后台识图资料已改变，已有内容保留');
-    const job=await new MinionQueue(tx).add(DOCUMENT_OCR_TASK,{kind:'document_ocr',trigger:'scheduled',task:{type:'import',input:{path,sourceId,noEmbed:maintenanceOwnerId?true:options.deferredOcrVectors!==true,ocrOnly:{hash,slug:result.slug,relativePath,sourceIncarnation:page.incarnation,sourceRoot:page.local_path,ownedSnapshot,image:options.image,maintenanceOwnerId}}}},{queue:DOCUMENT_OCR_QUEUE,idempotency_key:key,max_attempts:1,maxQueueSize:10000,timeout_ms:6*60*60_000,priority:10});
+    const job=await new MinionQueue(tx).add(DOCUMENT_OCR_TASK,{kind:'document_ocr',trigger:'scheduled',task:{type:'import',input:{path,sourceId,noEmbed:maintenanceOwnerId?true:options.deferredOcrVectors!==true,ocrOnly:{hash,slug:result.slug,relativePath,sourceIncarnation:page.incarnation,sourceRoot:page.local_path,ownedSnapshot,image:options.image,maintenanceOwnerId}}}},{queue:DOCUMENT_OCR_QUEUE,idempotency_key:key,max_attempts:1,maxQueueSize:10000,capacityName:DOCUMENT_OCR_TASK,timeout_ms:6*60*60_000,priority:10});
     if(options.image&&ownedSnapshot)await tx.executeRaw('UPDATE files SET storage_path=$2 WHERE page_id=$1 AND content_hash=$3',[page.id,path,hash]);
     const updated=await tx.executeRaw("UPDATE pages SET frontmatter=frontmatter||jsonb_build_object('document_ocr_deferred',true,'document_ocr_task_id',$3::int) WHERE id=$1 AND frontmatter->>'raw_sha256'=$2 RETURNING id",[page.id,hash,job.id]);
     if(!updated.length)throw Error('资料版本在后台识图入队期间已改变，已有内容保留');

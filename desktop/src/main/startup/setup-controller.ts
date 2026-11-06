@@ -316,8 +316,15 @@ export class SetupController {
       const initializingNewPglite = saved.config.engine === 'pglite' && saved.config.desktop?.setup_completed === false && !saved.config.desktop?.last_migrated_version;
       migrationRequired = !initializingNewPglite && needsDesktopMigration(app.getVersion());
       if (migrationRequired && saved.config.engine === 'pglite') {
-        await this.runLogged('backup-before-migration', () =>
-          this.dependencies.pgliteBackup.ensureUpgradeBackup(saved.config.database_path));
+        try {
+          await this.runLogged('backup-before-migration', () =>
+            this.dependencies.pgliteBackup.ensureUpgradeBackup(saved.config.database_path));
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error);
+          this.dependencies.log?.(
+            `升级备份没有完成，继续升级和健康检查。当前知识库没有被这次备份修改。${detail}`,
+          );
+        }
       }
       if (saved.needsEmbeddingDimensionProbe || saved.embeddingModelChanged) {
         this.dependencies.sendStartupProgress({

@@ -53,16 +53,10 @@ describe('dream CLI flag wiring', () => {
       'embed',
     ]);
     expect(resolveDreamPresetPhases('quick')).toEqual([
-      'lint',
-      'backlinks',
       'sync',
       'fence_repair',
       'content_repair',
       'extract',
-      'extract_facts',
-      'resolve_symbol_edges',
-      'embed',
-      'orphans',
     ]);
   });
 

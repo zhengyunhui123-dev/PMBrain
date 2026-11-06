@@ -6,6 +6,8 @@ import type { SyncFileOptions } from '../../core/sync-file-runtime.ts';
 import { SYNC_FILE_FORMAT_VERSION } from '../../core/sync-file-runtime.ts';
 import { phaseHasPendingWork } from '../../../shared/dream-phase-state.ts';
 import type { MaintenanceCheckpoint, ProductTask } from './types.ts';
+import { isOfficeFilePath } from '../../core/sync.ts';
+import { isImageFilePath } from '../../core/import-file.ts';
 
 export function setMaintenanceCheckpoint(task: ProductTask, checkpoint: MaintenanceCheckpoint): void {
   if (task.type === 'dream') task.input.checkpoint = checkpoint;
@@ -32,7 +34,8 @@ export function retireAutomaticCapture(checkpoint: MaintenanceCheckpoint): void 
 
 export function resumeMaintenanceCheckpoint(checkpoint:MaintenanceCheckpoint,retryCompleted=false,preserveWarnings=false):void {
   for(const [source,report] of Object.entries(checkpoint.reports)) {
-    if(retryCompleted && !['ok','clean'].includes(String(report.status)))delete checkpoint.reports[source];
+    if((Array.isArray(report.phases)&&report.phases.some(phase=>phase.status==='fail'||phaseHasPendingWork(phase)))
+      || retryCompleted && !['ok','clean'].includes(String(report.status)))delete checkpoint.reports[source];
   }
   for(const [source,phases] of Object.entries(checkpoint.phases)) {
     if(checkpoint.reports[source])continue;
@@ -49,18 +52,33 @@ export function syncFileContentFingerprint(options:SyncFileOptions):string {
     options.documentOcr===true,options.activePack?.page_types.map(type=>[type.name,type.path_prefixes])])).digest('hex');
 }
 
+export function syncFileCompatibleFingerprints(options: SyncFileOptions, path: string): string[] {
+  const image = isImageFilePath(path);
+  const documentOcrVariants = options.documentOcr && (isOfficeFilePath(path) || image) ? [true] : [true, false];
+  const includeImagesVariants = image ? [options.includeImages === true] : [true, false];
+  return [...new Set(documentOcrVariants.flatMap(documentOcr => includeImagesVariants.map(includeImages => syncFileContentFingerprint({ ...options, documentOcr, includeImages }))))];
+}
+
 export function taskModelFingerprint(): string {
   const config = loadConfig();
   const fields = Object.fromEntries(Object.entries(config ?? {}).filter(([key]) => /model|embedding|ocr|rerank|expansion|provider|api_key/.test(key) || key === 'chat_fallback_chain'));
   return createHash('sha256').update(JSON.stringify([fields, (config?.desktop as Record<string, unknown> | undefined)?.model_services])).digest('hex');
 }
 
+function taskBrainKey(): string {
+  const config = loadConfig();
+  return createHash('sha256').update(JSON.stringify([config?.engine, config?.database_path, config?.database_url])).digest('hex').slice(0, 24);
+}
+
 export function taskArtifactPath(id: number, suffix = 'jsonl'): string {
   if (!Number.isSafeInteger(id) || id < 1) throw new Error('Invalid task checkpoint');
-  const config = loadConfig();
-  const brain = createHash('sha256').update(JSON.stringify([config?.engine, config?.database_path, config?.database_url])).digest('hex').slice(0, 24);
   if (!['jsonl','files.jsonl','stop.json'].includes(suffix)) throw new Error('Invalid task artifact');
-  return join(gbrainPath('task-artifacts'), `${brain}-job-${id}.${suffix}`);
+  return join(gbrainPath('task-artifacts'), `${taskBrainKey()}-job-${id}.${suffix}`);
+}
+
+export function quickScanLogPath(id: number): string {
+  if (!Number.isSafeInteger(id) || id < 1) throw new Error('Invalid task checkpoint');
+  return join(gbrainPath('task-artifacts'), `${taskBrainKey()}-job-${id}.quick-scan.jsonl`);
 }
 
 export async function appendTaskCheckpoint(id: number, file: Record<string, unknown>): Promise<void> {

@@ -8,6 +8,7 @@ export interface DatabaseRequestContext {
   stage?: string;
   file?: string;
   onTimeout: (error: Error) => void;
+  onComplete?: (value:{waitedMs:number;write:boolean}) => void;
 }
 
 const requests = new AsyncLocalStorage<DatabaseRequestContext>();

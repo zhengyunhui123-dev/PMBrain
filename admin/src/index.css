@@ -3898,6 +3898,10 @@ pre {
   cursor: pointer;
 }
 
+@media (min-width: 769px) {
+  .quick-maintenance-journey .dream-journey-track { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
 .quick-maintenance-journey .dream-journey-step:hover,
 .quick-maintenance-journey .dream-journey-step.is-selected {
   border-color: color-mix(in srgb, var(--accent) 34%, #d7dce7);
@@ -7742,10 +7746,8 @@ html[data-theme="dark"] .dream-page .dream-journey-step span { color: var(--text
   .dream-journey-step { grid-template-columns: 29px minmax(0, 1fr); justify-items: start; text-align: left; }
 }
 
-/* Keep Quick's compact five-step receipt horizontal in normal desktop windows.
-   The legacy Dream journey may still stack earlier because its labels are longer. */
 @media (min-width: 769px) and (max-width: 980px) {
-  .quick-maintenance-journey .dream-journey-track { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
+  .quick-maintenance-journey .dream-journey-track { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
   .quick-maintenance-journey .dream-journey-track::before { top: 14px; bottom: auto; left: 8%; right: 8%; width: auto; height: 1px; }
   .quick-maintenance-journey .dream-journey-step { grid-template-columns: 1fr; justify-items: center; text-align: center; }
   .quick-maintenance-journey .dream-step-copy { justify-items: center; }

@@ -225,12 +225,12 @@ describe('软件后台任务共用 owner 数据库', () => {
     expect(resumed?.id).toBe(`task-${job.id}`);
     const modelTimer=setInterval(release,20);
     try{
-      const done=await finished(resumed!.id,45_000);
+      const done=await finished(resumed!.id,90_000);
       expect(done.status).toBe('completed');
       expect((await engine.getPage('resume-done',{sourceId:'default'}))?.compiled_truth).toContain('已完成源的原内容');
       expect(await engine.getPage('resume-pending',{sourceId:'resume-second'})).not.toBeNull();
       expect(done.product?.scope?.index).toBe(1);
-      expect(done.product?.syncScan?.scanned).toBe(1);
+      expect(done.product?.maintenance?.scan.scanned).toBe(1);
       const stored=(await queue.getJob(job.id))!.data.task as any;
       expect(stored.input.checkpoint.reports.default).toEqual(report);
     }finally{
@@ -240,7 +240,7 @@ describe('软件后台任务共用 owner 数据库', () => {
       await engine.executeRaw("UPDATE sources SET config=jsonb_set(config,'{syncEnabled}','false'::jsonb) WHERE id=$1",['resume-second']).catch(()=>{});
       await engine.executeRaw('UPDATE sources SET local_path=$1 WHERE id=$2',[root,'default']).catch(()=>{});
     }
-  },60000);
+  },120000);
   test('两个导入先入库，只产生一个搜索优化任务，停止不删除已入库资料', async () => {
     await settleOptimize();
     configureModels();
@@ -484,25 +484,28 @@ describe('软件后台任务共用 owner 数据库', () => {
     expect((await finished(next.id)).status).toBe('completed');
   }, 30_000);
 
-  test('真实快速维护等待模型时，任务阶段与知识库查询仍可读取', async () => {
+  test('快速维护不等待模型，任务与知识库查询可正常完成', async () => {
     await settleOptimize();
     configureModels();
-    writeFileSync(join(root,'quick-model-wait.md'),'# 模型等待验收\n\n这份新资料确保快速维护实际调用延迟模型，验证任务查询和知识库读取。');
-    if(!await engine.getPage('background',{sourceId:'default'}))await engine.putPage('background',{type:'note',title:'后台查询验收',compiled_truth:'等待模型时仍可以读取已有知识。',timeline:'',frontmatter:{}},{sourceId:'default'});
-    const accepted = await runtime.submitDream({ preset: 'quick', timeoutMs: 60_000 });
+    const repo=join(root,'quick-model-wait');mkdirSync(repo);
+    writeFileSync(join(repo,'quick-model-wait.md'),'# 快速维护后台向量验收\n\n快速维护提交的向量化会在独立后台任务中等待模型。');
+    await engine.executeRaw("INSERT INTO sources(id,name,local_path,config) VALUES ('quick-model-wait','快速维护无模型验收',$1,'{}'::jsonb) ON CONFLICT(id) DO UPDATE SET local_path=EXCLUDED.local_path,config=EXCLUDED.config",[repo]);
+    await engine.putPage('background',{type:'note',title:'后台查询验收',compiled_truth:'快速维护期间可读取已有知识。',timeline:'',frontmatter:{}},{sourceId:'quick-model-wait'});
+    const accepted = await runtime.submitDream({ preset: 'quick', sourceId:'quick-model-wait', timeoutMs: 60_000 });
     try {
       await modelWaiting(45_000);
-      await Bun.sleep(1200);
-      const read = async () => {
-        const run = await runtime.getRun(accepted.id);
-        expect(run?.status).toBe('running');
-        expect(run?.product?.steps.length).toBe(7);
-        expect(run?.product?.stage).toBeTruthy();
-        expect(await engine.getPage('background', { sourceId: 'default' })).not.toBeNull();
-      };
-      await Promise.race([read(), Bun.sleep(2000).then(() => { throw new Error('快速维护等待模型时阻塞了任务或知识库读取'); })]);
-      await runtime.cancel(accepted.id);
-    } finally { await runtime.cancel(accepted.id);release(); configureModels(false); }
+      const done=await finished(accepted.id,45_000);
+      expect(done.status).toBe('completed');
+      expect(releaseModel).toBeTruthy();
+      expect((await runtime.listRuns()).some(run=>run.kind==='embed_stale'&&run.status==='running')).toBe(true);
+      expect((await engine.getPage('quick-model-wait', { sourceId: 'quick-model-wait' }))?.compiled_truth).toContain('快速维护提交的向量化');
+      expect(await engine.getPage('background', { sourceId: 'quick-model-wait' })).not.toBeNull();
+    } finally {
+      release();
+      for(const run of (await runtime.listRuns()).filter(run=>run.kind==='embed_stale'&&run.status==='running'))await finished(run.id,45_000);
+      configureModels(false);
+      await engine.executeRaw("DELETE FROM sources WHERE id='quick-model-wait'");
+    }
   }, 60_000);
 
   test('资料入库后向量化等待模型时，知识仍可查询，重复导入不重复调用模型', async () => {

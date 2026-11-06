@@ -11,6 +11,16 @@ export interface DatabaseObservation {
   finishedAt?: number;
 }
 
+export function databaseRequestIsWrite(method:string,sql?:string):boolean {
+  if(['putPage','upsertChunks','updateChunkEmbedding','setConfig','setConfigs','setPageAliases','addLinksBatch','addLink','addTimelineEntry'].includes(method))return true;
+  return (method==='executeRaw'||method==='@db.query')&&/\b(?:INSERT\s+INTO|UPDATE\s+\w+\s+SET|DELETE\s+FROM|CREATE\s+(?:TABLE|INDEX)|ALTER\s+TABLE)\b/i.test(sql??'');
+}
+export function addDatabaseStatistic(stats:import('./maintenance-progress').TaskDatabaseStatistics,stage:string,value:{waitedMs:number;write:boolean}) {
+  const entry=stats.stages[stage]??={requests:0,writes:0,waitedMs:0};
+  const waited=Math.max(0,value.waitedMs);
+  for(const row of [stats,entry]){row.requests++;row.waitedMs+=waited;if(value.write)row.writes++;}
+}
+
 export interface DatabaseOccupancyEntry {
   taskId?: number;
   method: string;

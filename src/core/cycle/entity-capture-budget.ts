@@ -1,3 +1,4 @@
+import matter from 'gray-matter';
 import { splitProviderModelId } from '../model-id.ts';
 import { serviceNeedsApiKey } from '../../../shared/model-services.ts';
 import {modelBilling,DEFAULT_USD_TO_CNY} from '../../../shared/model-billing.ts';
@@ -6,7 +7,7 @@ import type {ServiceModel} from '../../../shared/model-services.ts';
 export const DEFAULT_ENTITY_CAPTURE_COST_CAP_CNY = 5;
 export const ENTITY_CAPTURE_CANDIDATE_LIMIT = 60;
 
-export type CaptureStopReason = 'completed' | 'window' | 'tokens' | 'document_tokens' | 'document_turns' | 'cost' | 'failure' | 'ingest_validation' | 'relation_failure' | 'aborted' | 'user_stop' | 'service_shutdown' | 'model_unavailable'|'truncated'|'parse'|'timeout'|'network'|'rate_limit'|'provider_5xx';
+export type CaptureStopReason = 'completed' | 'window' | 'tokens' | 'document_tokens' | 'document_turns' | 'cost' | 'failure' | 'ingest_validation' | 'relation_failure' | 'aborted' | 'user_stop' | 'service_shutdown' | 'model_unavailable'|'truncated'|'parse'|'timeout'|'network'|'rate_limit'|'provider_5xx'|'no_tool';
 
 import { CJK_PLAIN_MENTION_BLOCKLIST } from '../pmbrain-adapters/mention-policy.ts';
 export { CJK_PLAIN_MENTION_BLOCKLIST };
@@ -164,6 +165,7 @@ const STOP_REASON_TEXT: Record<CaptureStopReason, string> = {
   window:'本批已保存，等待继续剩余资料',
   truncated:'模型输出被截断，失败页面可继续',
   parse:'模型输出解析失败，失败页面可继续',
+  no_tool:'模型没有返回可保存的实体结果，失败页面可继续',
   timeout:'模型请求超时',
   network:'模型网络请求失败',
   rate_limit:'模型服务限流',
@@ -253,6 +255,58 @@ function mentionableSurface(surface: string): boolean {
   return surface.length >= 4;
 }
 
+const LEGAL_SUFFIXES = ['股份有限责任公司', '股份有限公司', '有限责任公司', '有限公司', '股份公司', '集团公司', '集团', '股份', '公司'];
+const ENGLISH_LEGAL_SUFFIX = /(?:\s+|[,，])(?:incorporated|corporation|company|limited|inc|ltd|corp|co)\.?$/i;
+const GENERIC_TAILS = new Set(['大学', '银行', '科技', '信息', '网络', '国际', '中国', '发展', '建设', '投资', '控股', '集团', '公司', '技术']);
+
+function identityKey(value: string): string {
+  return value.normalize('NFKC').trim().toLowerCase();
+}
+
+function stripLegalSuffix(name: string): string {
+  let current = name.normalize('NFKC').trim();
+  let changed = true;
+  while (changed && current) {
+    changed = false;
+    for (const suffix of LEGAL_SUFFIXES) {
+      if (current.endsWith(suffix) && current.length > suffix.length) {
+        current = current.slice(0, -suffix.length).trim();
+        changed = true;
+        break;
+      }
+    }
+    if (changed) continue;
+    const next = current.replace(ENGLISH_LEGAL_SUFFIX, '').trim();
+    if (next && next !== current) {
+      current = next;
+      changed = true;
+    }
+  }
+  return current;
+}
+
+export function legalEntityCore(title: string): string {
+  return stripLegalSuffix(title);
+}
+
+function trailingCore(core: string): string | null {
+  const match = /^\p{Script=Han}{2}(.+)$/u.exec(core);
+  const tail = match?.[1]?.trim() ?? '';
+  if (!tail || tail === core || !mentionableSurface(tail) || BLOCKED_SURFACES.has(tail) || GENERIC_TAILS.has(tail)) return null;
+  return tail;
+}
+
+function usableCore(core: string, surface: string): string | null {
+  const trimmed = core.normalize('NFKC').trim();
+  if (!trimmed || identityKey(trimmed) === identityKey(surface)) return null;
+  if (!mentionableSurface(trimmed) || BLOCKED_SURFACES.has(trimmed)) return null;
+  return trimmed;
+}
+
+function orgType(type: string): boolean {
+  return type === 'company' || type === 'organization';
+}
+
 export function rankCaptureCandidates(
   text: string,
   entities: CaptureEntityBrief[],
@@ -267,8 +321,13 @@ export function rankCaptureCandidates(
     for (const raw of surfaces) {
       const surface = raw.normalize('NFKC').trim();
       if (!mentionableSurface(surface)) continue;
-      if (!haystack.includes(surface.toLowerCase())) continue;
-      score += BLOCKED_SURFACES.has(surface) ? 20 : 100 + surface.length;
+      if (haystack.includes(surface.toLowerCase())) score += BLOCKED_SURFACES.has(surface) ? 20 : 100 + surface.length;
+      const stripped = stripLegalSuffix(surface);
+      const core = usableCore(stripped, surface);
+      if (core && haystack.includes(core.toLowerCase())) score += Math.min(99, 60 + core.length);
+      const tail = trailingCore(stripped);
+      const trailing = tail && identityKey(tail) !== identityKey(surface) && (!core || identityKey(tail) !== identityKey(core)) ? tail : null;
+      if (trailing && haystack.includes(trailing.toLowerCase())) score += Math.min(79, 40 + trailing.length);
     }
     if (score <= 0) return [];
     const sameSource = preferred !== '' && entity.sourceId === preferred ? 1 : 0;
@@ -276,6 +335,126 @@ export function rankCaptureCandidates(
   });
   ranked.sort((a, b) => b.score - a.score || b.sameSource - a.sameSource || a.entity.slug.localeCompare(b.entity.slug));
   return ranked.slice(0, cap).map(item => item.entity);
+}
+
+export function uniqueCaptureAliases(
+  text: string,
+  entities: CaptureEntityBrief[],
+): Array<{ entity: CaptureEntityBrief; alias: string }> {
+  const haystack = text.normalize('NFKC').toLowerCase();
+  const occupied = new Set<string>();
+  for (const entity of entities) {
+    occupied.add(identityKey(entity.title));
+    for (const alias of entity.aliases) occupied.add(identityKey(alias));
+  }
+  const hits = new Map<string, { alias: string; entities: CaptureEntityBrief[] }>();
+  for (const entity of entities) {
+    if (!orgType(entity.type)) continue;
+    const seen = new Set<string>();
+    for (const raw of [entity.title, ...entity.aliases]) {
+      const surface = raw.normalize('NFKC').trim();
+      const core = usableCore(stripLegalSuffix(surface), surface);
+      if (!core) continue;
+      const key = identityKey(core);
+      if (seen.has(key) || occupied.has(key) || !haystack.includes(core.toLowerCase())) continue;
+      seen.add(key);
+      const hit = hits.get(key) ?? { alias: core, entities: [] };
+      hit.entities.push(entity);
+      hits.set(key, hit);
+    }
+  }
+  return [...hits.values()].flatMap(hit => {
+    const unique = [...new Map(hit.entities.map(entity => [`${entity.sourceId}:${entity.slug}`, entity])).values()];
+    return unique.length === 1 ? [{ entity: unique[0]!, alias: hit.alias }] : [];
+  }).sort((a, b) => a.entity.slug.localeCompare(b.entity.slug) || a.alias.localeCompare(b.alias));
+}
+
+export function legalCoreVariants(title: string, type: string, entities: CaptureEntityBrief[]): CaptureEntityBrief[] {
+  if (!orgType(type)) return [];
+  const core = usableCore(stripLegalSuffix(title), '');
+  if (!core) return [];
+  const key = identityKey(core);
+  return entities.filter(entity => orgType(entity.type) && identityKey(legalEntityCore(entity.title)) === key);
+}
+
+export function uniqueNearEntity(title: string, type: string, entities: CaptureEntityBrief[]): CaptureEntityBrief | null {
+  const matches = [...new Map(legalCoreVariants(title, type, entities).map(entity => [`${entity.sourceId}:${entity.slug}`, entity])).values()];
+  return matches.length === 1 ? matches[0]! : null;
+}
+
+export function rewriteCapturedIdentity(content: string, existingTitle: string, proposedTitle: string): string {
+  const parsed = matter(content);
+  const data = { ...parsed.data } as Record<string, unknown>;
+  data.title = existingTitle;
+  const aliases = Array.isArray(data.aliases) ? data.aliases.filter((item): item is string => typeof item === 'string') : [];
+  const proposed = proposedTitle.normalize('NFKC').trim();
+  const existing = existingTitle.normalize('NFKC').trim();
+  if (proposed && identityKey(proposed) !== identityKey(existing) && !aliases.some(alias => identityKey(alias) === identityKey(proposed))) aliases.push(proposed);
+  if (aliases.length) data.aliases = aliases;
+  return matter.stringify(parsed.content, data);
+}
+
+export function captureDegradedReason(reason: CaptureStopReason): boolean {
+  return reason === 'truncated' || reason === 'parse' || reason === 'timeout' || reason === 'no_tool'
+    || reason === 'document_turns' || reason === 'document_tokens' || reason === 'network'
+    || reason === 'rate_limit' || reason === 'provider_5xx';
+}
+
+export function captureFailureDisposition(input: {
+  status: string;
+  errorText: string | null;
+  stopReason?: string | null;
+  ingestVerified?: boolean | null;
+  jobId?: number;
+  priorFailures?: number;
+}): {
+  fatal: boolean;
+  pageStopped: boolean;
+  reason: CaptureStopReason;
+  budgetStop: 'cost' | null;
+  failureStop: boolean;
+  message: string;
+} {
+  let failureStop = true;
+  let pageStopped = true;
+  let fatal = true;
+  let budgetStop: 'cost' | null = null;
+  let reason: CaptureStopReason = 'failure';
+  if (input.errorText?.includes('ingest_budget_cost')) {
+    budgetStop = 'cost';
+    failureStop = (input.priorFailures ?? 0) > 0;
+  }
+  const message = input.errorText ?? `实体识别子任务 ${input.jobId ?? ''} 未通过 ingest 读回验收（${input.stopReason ?? input.status}）`;
+  if (/\bingest[ _]/i.test(message) || input.status === 'completed') reason = 'ingest_validation';
+  if (input.stopReason === 'max_turns' || /ingest_turn_limit|ingest incomplete: max_turns|ingest final receipt attempted more tools/.test(message)) {
+    reason = 'document_turns';
+    fatal = false;
+  } else if (/ingest_budget_tokens/.test(message)) {
+    reason = 'document_tokens';
+    fatal = false;
+  } else if (/ingest_output_truncated/.test(message)) {
+    reason = 'truncated';
+    fatal = false;
+  } else if (/ingest receipt (?:missing|requires)|ingest invalid JSON|ingest_provider_parse/.test(message)) {
+    reason = 'parse';
+    fatal = false;
+  } else if (/ingest_provider_(timeout|network|rate_limit|provider_5xx|user_stop|service_shutdown|aborted)/.test(message)) {
+    reason = message.match(/ingest_provider_(timeout|network|rate_limit|provider_5xx|user_stop|service_shutdown|aborted)/)![1] as CaptureStopReason;
+    if (reason === 'timeout') {
+      fatal = false;
+      pageStopped = false;
+    }
+  } else if (/ingest_provider_(auth|billing|model_not_found)/.test(message)) {
+    reason = 'model_unavailable';
+  } else if (!budgetStop && /\bingest /.test(message)) {
+    fatal = false;
+  }
+  if (input.status === 'completed' && input.ingestVerified !== true && (!input.stopReason || input.stopReason === 'end_turn') && !/\bingest[ _]/i.test(input.errorText ?? '')) {
+    reason = 'no_tool';
+    fatal = false;
+    pageStopped = false;
+  }
+  return { fatal, pageStopped, reason, budgetStop, failureStop, message };
 }
 
 export function deltaCaptureNeedles(

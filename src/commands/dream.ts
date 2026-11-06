@@ -104,16 +104,10 @@ const DREAM_PRESET_PHASES: Record<DreamPreset, ReadonlySet<CyclePhase>> = {
     'embed',
   ]),
   quick: new Set([
-    'lint',
-    'backlinks',
     'sync',
     'fence_repair',
     'content_repair',
     'extract',
-    'extract_facts',
-    'resolve_symbol_edges',
-    'embed',
-    'orphans',
   ]),
 };
 

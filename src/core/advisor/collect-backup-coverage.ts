@@ -26,6 +26,7 @@ export const collectBackupCoverage: AdvisorCollector = {
   id: 'backup-coverage',
   collect: async (ctx): Promise<AdvisorFinding[]> => {
     if (ctx.config.engine !== 'pglite' || !ctx.config.database_path) return [];
+    if (ctx.config.pglite_upgrade_backup_enabled !== true) return [];
     if (!existsSync(ctx.config.database_path)) return [];
 
     try {
@@ -38,9 +39,9 @@ export const collectBackupCoverage: AdvisorCollector = {
         return [{
           id: 'backup_pglite_missing',
           severity: 'warn',
-          title: 'This populated PGLite brain has no verified recovery backup.',
+          title: 'This populated PGLite brain has no saved upgrade backup.',
           detail:
-            'Create a verified cold backup before the next upgrade or disk failure. ' +
+            'Upgrade backup is turned on, but no copy is saved yet. ' +
             'The check is read-only and does not expose database or backup paths.',
           fix: {
             command_argv: ['pmbrain', 'pglite-backup', 'create', '--target-version', ctx.version],
@@ -55,10 +56,10 @@ export const collectBackupCoverage: AdvisorCollector = {
         return [{
           id: 'backup_pglite_stale',
           severity: 'warn',
-          title: `The latest verified PGLite recovery backup is ${latestAge} days old.`,
+          title: `The saved PGLite upgrade backup is ${latestAge} days old.`,
           detail:
             `Backup coverage is checked on a ${BACKUP_STALE_AFTER_DAYS}-day cadence. ` +
-            'Create a new verified backup so recent knowledge can be recovered.',
+            'The next upgrade can replace the single saved copy.',
           fix: {
             command_argv: ['pmbrain', 'pglite-backup', 'create', '--target-version', ctx.version],
           },

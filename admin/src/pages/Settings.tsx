@@ -112,7 +112,7 @@ function DreamSettings() {
   const [timeoutMinutes,setTimeoutMinutes]=useState('');
   const [message,setMessage]=useState('');
   const [error,setError]=useState('');
-  type ToggleKey='knowledgeEnabled'|'knowledgeUseOrdinaryModel'|'entityCaptureEnabled'|'enrichThinEnabled'|'fenceRepairEnabled'|'edgeContradictionsEnabled'|'dualWrite'|'autoGitCommit';
+  type ToggleKey='knowledgeEnabled'|'knowledgeUseOrdinaryModel'|'entityCaptureEnabled'|'enrichThinEnabled'|'fenceRepairEnabled'|'edgeContradictionsEnabled'|'dualWrite'|'autoGitCommit'|'imageOcrEnabled';
 
   useEffect(()=>{
     void api.dreamSettings().then(value=>{
@@ -186,12 +186,16 @@ function DreamSettings() {
     <div className="dream-settings-toggles">
       {toggleRow('knowledgeEnabled','dream-knowledge-enabled','深度提炼知识与概念','默认开启。在 AI 深度整理中提炼有原文依据的知识点、综合概念并处理原始对话。未变化资料复用成果，观点生成保持关闭。')}
       {toggleRow('knowledgeUseOrdinaryModel','dream-knowledge-ordinary','知识提炼使用普通模型','沿用已配置的普通模型。关闭后使用知识库模型配置中的 Dream 阶段模型。')}
-      {toggleRow('entityCaptureEnabled','dream-entity-capture','整理时识别实体与关联','快速维护和 AI 深度整理时，处理新增或变更资料中的人物、组织、项目及来源关联。普通导入结束后不会单独启动整理；关闭后仍保存原文和已有成果。')}
+      {toggleRow('entityCaptureEnabled','dream-entity-capture','整理时识别实体与关联','AI 深度整理时识别人物、组织、项目并建立来源关联。快速维护只匹配已有实体，不使用此开关建档。普通导入结束后不会单独启动整理。')}
       {toggleRow('enrichThinEnabled','dream-enrich-thin','补充薄弱页面','给人物、公司和项目补上已有资料里能核对的内容。第一次 AI 深度整理会记下开启；在这里关闭后，深度整理和命令行都不再补充。')}
       {toggleRow('fenceRepairEnabled','dream-fence-repair','整理事实栏和页面标记','合并同一段里重复的事实表，补上没写完的表格边界，并去掉指错的页面标记。默认开启，快速维护和深度整理都会做，不改原始文件。')}
       {toggleRow('edgeContradictionsEnabled','dream-edge-contradictions','检查关系矛盾','发现同一主体互相冲突的关系后只记下待确认项，不自动改页面或已有关系。')}
       {toggleRow('dualWrite','dream-dual-write','写入本地 Markdown','对话综合和模式发现同时写入数据库和本地文件。知识点与概念保存在知识库中，可搜索并查看来源关联。')}
       {toggleRow('autoGitCommit','sync-auto-git-commit','快速维护时自动 Git 提交','将成功同步的文件变更保存为本地版本记录，不推送远端；普通文件夹无需 Git。')}
+      <label className="dream-dual-write-setting" htmlFor="dream-image-ocr">
+        <span className="dream-toggle-copy"><b>图片识别</b><small>默认关闭。开启后，深度整理才会把图片送去识别，并受张数和费用上限约束。文本资料的同步不依赖这个开关。</small></span>
+        <span className="dream-toggle-control"><small>{savingKey==='imageOcrEnabled'?'正在保存…':settings.imageOcrEnabled?'已开启':'已关闭'}</small><input id="dream-image-ocr" className="settings-switch" type="checkbox" role="switch" aria-label="图片识别" checked={settings.imageOcrEnabled===true} disabled={loading||saving} onChange={event=>toggle('imageOcrEnabled',event.target.checked)}/></span>
+      </label>
     </div>
     <div className="dream-output-setting">
       <h3>固定问题</h3>
@@ -222,8 +226,14 @@ function DreamSettings() {
         <h3>任务运行时间</h3>
         <label htmlFor="dream-timeout-minutes">单次执行上限（分钟）</label>
         <input id="dream-timeout-minutes" type="number" min="1" value={timeoutMinutes} disabled={loading||saving} onChange={event=>setTimeoutMinutes(event.target.value)} placeholder={settings.effectiveTimeoutMs?String(settings.effectiveTimeoutMs/60000):''}/>
-        <p className="pm-hint">当前生效上限：{persisted.effectiveTimeoutMs?persisted.effectiveTimeoutMs/60000:'—'} 分钟。留空保存可恢复默认，新任务按此执行；继续旧任务保留原上限。这不是自动整理的执行间隔。</p>
+        <p className="pm-hint">当前生效上限：{persisted.effectiveTimeoutMs?persisted.effectiveTimeoutMs/60000:'—'} 分钟。留空保存可恢复默认。这个上限用于快速维护和其他整理任务，不限制 AI 深度整理。继续旧任务保留原上限。这不是自动整理的执行间隔。</p>
         <button className="pm-primary dream-local-save" onClick={saveTimeout} disabled={loading||saving||!timeoutDirty}>保存执行上限</button>
+        <label htmlFor="dream-image-ocr-max">图片识别张数上限</label>
+        <input id="dream-image-ocr-max" type="number" min="1" step="1" value={settings.imageOcrMaxImages??20} disabled={loading||saving} onChange={event=>setSettings(current=>({...current,imageOcrMaxImages:Number(event.target.value)}))}/>
+        <label htmlFor="dream-image-ocr-cost">图片识别费用上限（元）</label>
+        <input id="dream-image-ocr-cost" type="number" min="0.01" step="0.1" value={settings.imageOcrCostCapCny??2} disabled={loading||saving} onChange={event=>setSettings(current=>({...current,imageOcrCostCapCny:Number(event.target.value)}))}/>
+        <p className="pm-hint">只在单独开启图片识别后生效。达到张数或费用上限后，不再把新的图片放进识别队列。</p>
+        <button className="pm-primary dream-local-save" onClick={()=>void savePatch({imageOcrMaxImages:settings.imageOcrMaxImages??20,imageOcrCostCapCny:settings.imageOcrCostCapCny??2},'图片识别上限已保存')} disabled={loading||saving||((settings.imageOcrMaxImages??20)===(persisted.imageOcrMaxImages??20)&&(settings.imageOcrCostCapCny??2)===(persisted.imageOcrCostCapCny??2))}>保存图片上限</button>
       </div>
       <div className="dream-output-setting dream-output-directory">
         <h3>本地文件保存位置</h3>
@@ -408,7 +418,7 @@ function EntityCaptureBudgetSettings() {
         <span className="settings-panel-icon"><Sparkles /></span>
         <div>
           <h2>实体与关联整理费用</h2>
-          <p>用于导入、快速维护和深度整理中的增量实体摄入。达到上限保留已完成结果，任务显示剩余资料；调高费用上限后可继续原任务。本地 Ollama 不计入金额。</p>
+          <p>此上限用于实体整理任务。快速维护不使用生成模型建档；本轮资料的后台向量化使用已配置的向量模型。</p>
         </div>
       </div>
       <div className="dream-schedule-row">

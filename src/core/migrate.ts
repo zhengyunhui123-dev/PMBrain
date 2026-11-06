@@ -1,3 +1,4 @@
+import { ensureFactsKindAllowsIdea } from './pmbrain-adapters/facts-kind-constraint.ts';
 import { DREAM_MAINTENANCE_SCHEMA_SQL } from './cycle/dream-maintenance-schema.ts';
 import {BOUNDED_PAGE_SEARCH_SQL} from './pmbrain-adapters/bounded-search-schema.ts';
 import { FACT_WITHDRAWAL_BACKFILL_SQL, FACT_WITHDRAWAL_SCHEMA_SQL } from './facts/withdrawal-schema.ts';
@@ -281,6 +282,8 @@ export const MIGRATIONS: Migration[] = [
       -- O(children) child-count check in add()
       CREATE INDEX IF NOT EXISTS idx_minion_jobs_parent_status ON minion_jobs (parent_job_id, status)
         WHERE parent_job_id IS NOT NULL;
+      CREATE INDEX IF NOT EXISTS idx_minion_jobs_capacity ON minion_jobs (queue, name)
+        WHERE status NOT IN ('completed','failed','dead','cancelled');
 
       -- Idempotency: enforce "only one job per key" at the DB layer
       CREATE UNIQUE INDEX IF NOT EXISTS uniq_minion_jobs_idempotency ON minion_jobs (idempotency_key)
@@ -5538,6 +5541,11 @@ export const MIGRATIONS: Migration[] = [
     sql:FACT_WITHDRAWAL_SCHEMA_SQL+FACT_WITHDRAWAL_BACKFILL_SQL},
   {version:137,name:'dream_maintenance_gaps',idempotent:true,sql:DREAM_MAINTENANCE_SCHEMA_SQL},
   {version:138,name:'bounded_page_search',idempotent:true,sql:BOUNDED_PAGE_SEARCH_SQL},
+  {version:139,name:'facts_kind_idea_enforce',idempotent:true,sql:'',handler:async(engine)=>{await ensureFactsKindAllowsIdea(engine);}},
+  {version:140,name:'minion_jobs_pending_capacity_index',idempotent:true,sql:`
+    CREATE INDEX IF NOT EXISTS idx_minion_jobs_capacity ON minion_jobs (queue, name)
+      WHERE status NOT IN ('completed','failed','dead','cancelled');
+  `},
 ];
 
 export const LATEST_VERSION = MIGRATIONS.length > 0

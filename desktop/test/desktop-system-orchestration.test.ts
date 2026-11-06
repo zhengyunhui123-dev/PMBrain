@@ -82,15 +82,17 @@ describe('desktop system orchestration contracts', () => {
     expect(main).toContain('PGLite 数据库路径：${databasePath}');
   });
 
-  test('PGLite 迁移前完成冷备和恢复验证，失败时显示备份而不自动覆盖', () => {
+  test('PGLite 升级默认不冷备，打开后失败也不阻断启动', () => {
     expect(backupController).toContain('async ensureUpgradeBackup');
+    expect(backupController).toContain('if (!this.dependencies.backupEnabled())');
     expect(backupController).toContain("'pglite-backup',");
     expect(backupController).toContain("'create',");
     expect(backupController).toContain("'--target-version', this.dependencies.appVersion()");
     expect(databaseController).toContain('pgliteBackup.ensureUpgradeBackup(setup.current.databasePath)');
+    expect(databaseController).toContain('升级备份没有完成，继续升级和健康检查。当前知识库没有被这次备份修改。');
     expect(setupController).toMatch(/migrationRequired = !initializingNewPglite && needsDesktopMigration[\s\S]*?engine === 'pglite'[\s\S]*?pgliteBackup\.ensureUpgradeBackup[\s\S]*?needsEmbeddingDimensionProbe/);
-    expect(main).toContain('升级前冷备已验证并保留');
-    expect(main).toContain('PMBrain 不会自动覆盖当前数据库');
+    expect(main).toContain('升级前备份已保存');
+    expect(main).toContain('当前数据库没有被这次备份覆盖');
     expect(backupController).toContain("process.platform === 'win32' ? databasePath.toLowerCase() : databasePath");
     expect(backupController).toMatch(/backupByVersion\.has\(key\)[\s\S]*?pendingBackupPath = cached/);
     expect(backupController).toMatch(/pendingBackupPath = null;[\s\S]*?runCliChecked\(this\.dependencies\.runtime\(\), \[/);
@@ -102,6 +104,7 @@ describe('desktop system orchestration contracts', () => {
     expect(main).toContain("'desktop:delete-pglite-upgrade-backup'");
     expect(main).toContain("'desktop:restore-pglite-upgrade-backup'");
     expect(main).toContain("'desktop:set-pglite-upgrade-backup-root'");
+    expect(main).toContain("'desktop:set-pglite-upgrade-backup-enabled'");
     expect(main).toContain("'desktop:open-pglite-upgrade-backup'");
     expect(preload).toContain("'desktop:list-pglite-upgrade-backups'");
     expect(preload).toContain("'desktop:restore-pglite-upgrade-backup'");
@@ -119,7 +122,7 @@ describe('desktop system orchestration contracts', () => {
     expect(backupController).toContain("recovered?.status !== 'restored'");
     expect(backupController).toContain("'set-root'");
     expect(backupController).toContain("'--yes'");
-    expect(backupController).toContain("'--keep', '2'");
+    expect(backupController).toContain("'--keep', '1'");
     expect(backupController).not.toContain("from '../../../src/core/pglite-upgrade-backup");
     expect(sidecarController).toContain('withPausedForPgliteBackupRestore');
     expect(sidecarController).toMatch(/markDesktopMigration\(app\.getVersion\(\)\);[\s\S]*?prunePgliteUpgradeBackups\(\)/);

@@ -90,6 +90,7 @@ export interface DesktopIpcHandlers {
   deletePgliteUpgradeBackup: (backupDirectory: string) => Promise<DesktopPgliteUpgradeBackupMutation>;
   restorePgliteUpgradeBackup: (backupDirectory: string) => Promise<DesktopPgliteUpgradeBackupMutation>;
   setPgliteUpgradeBackupRoot: (directory: string) => Promise<DesktopPgliteUpgradeBackupMutation>;
+  setPgliteUpgradeBackupEnabled: (enabled: boolean) => Promise<DesktopPgliteUpgradeBackupMutation>;
   openPgliteUpgradeBackup: (target: string) => Promise<void>;
   diagnosePgliteToast: () => Promise<DesktopToastDiagnoseResult>;
   replacePgliteToastRepair: (stagingPath: string) => Promise<DesktopToastRepairResult>;
@@ -177,6 +178,7 @@ export function registerDesktopIpcHandlers(handlers: DesktopIpcHandlers): void {
   registerTrustedHandler('desktop:delete-pglite-upgrade-backup', handlers, (_event, backupDirectory: string) => handlers.deletePgliteUpgradeBackup(backupDirectory));
   registerTrustedHandler('desktop:restore-pglite-upgrade-backup', handlers, (_event, backupDirectory: string) => handlers.restorePgliteUpgradeBackup(backupDirectory));
   registerTrustedHandler('desktop:set-pglite-upgrade-backup-root', handlers, (_event, directory: string) => handlers.setPgliteUpgradeBackupRoot(directory));
+  registerTrustedHandler('desktop:set-pglite-upgrade-backup-enabled', handlers, (_event, enabled: boolean) => handlers.setPgliteUpgradeBackupEnabled(enabled));
   registerTrustedHandler('desktop:open-pglite-upgrade-backup', handlers, (_event, target: string) => handlers.openPgliteUpgradeBackup(target));
   registerTrustedHandler('desktop:diagnose-pglite-toast', handlers, () => handlers.diagnosePgliteToast());
   registerTrustedHandler('desktop:replace-pglite-toast-repair', handlers, (_event, stagingPath: string) => handlers.replacePgliteToastRepair(stagingPath));

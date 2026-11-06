@@ -109,16 +109,10 @@ describe('Quick Maintenance phase contracts (TEST 6–7)', () => {
     const quick = resolveQuickMaintenancePhases();
     expect(quick).toEqual(resolveDreamPresetPhases('quick'));
     expect(quick).toEqual([
-      'lint',
-      'backlinks',
       'sync',
       'fence_repair',
       'content_repair',
       'extract',
-      'extract_facts',
-      'resolve_symbol_edges',
-      'embed',
-      'orphans',
     ]);
     // Ordering source remains ALL_PHASES
     let lastIdx = -1;
@@ -151,13 +145,6 @@ describe('Quick Maintenance phase contracts (TEST 6–7)', () => {
     expect(source).toContain('../core/quick-maintenance.ts');
   });
 
-  test('Quick leaves deterministic relation catch-up unbounded instead of applying a page or time cap', async () => {
-    const quickSource = await Bun.file(new URL('../src/core/quick-maintenance.ts', import.meta.url)).text();
-    const cycleSource = await Bun.file(new URL('../src/core/cycle.ts', import.meta.url)).text();
-    expect(quickSource).not.toContain('QUICK_BY_MENTION_HISTORICAL_DEFAULT');
-    expect(quickSource).not.toContain('QUICK_BY_MENTION_TIME_BUDGET_MS');
-    expect(cycleSource).not.toContain('opts.byMentionMaxHistorical ?? 500');
-  });
 });
 
 describe('sync failure isolation (TEST 1–2)', () => {
@@ -516,16 +503,10 @@ describe('runQuickMaintenance orchestration smoke', () => {
       });
 
       expect(report.phases.map(p => p.phase)).toEqual([
-        'lint',
-        'backlinks',
         'sync',
         'fence_repair',
         'content_repair',
         'extract',
-        'extract_facts',
-        'resolve_symbol_edges',
-        'embed',
-        'orphans',
       ]);
       const extract = report.phases.find(p => p.phase === 'extract');
       expect(extract).toBeTruthy();
@@ -537,13 +518,6 @@ describe('runQuickMaintenance orchestration smoke', () => {
     });
   }, 120_000);
 
-  test('quick maintenance leaves deterministic relation catch-up unbounded by default', async () => {
-    const quickSource = await Bun.file(new URL('../src/core/quick-maintenance.ts', import.meta.url)).text();
-    expect(quickSource).toContain('markdownCatchUpMaxHistorical: opts.markdownCatchUpMaxHistorical');
-    expect(quickSource).toContain('byMentionTimeBudgetMs: opts.byMentionTimeBudgetMs');
-    expect(quickSource).not.toContain('QUICK_MARKDOWN_CATCH_UP_MAX_HISTORICAL');
-    expect(quickSource).not.toContain('QUICK_BY_MENTION_TIME_BUDGET_MS');
-  });
 
   test('quick maintenance syncs committed Office and PDF files for the selected Source', async () => {
     await withTestHome(home, async () => {
@@ -600,6 +574,26 @@ describe('runQuickMaintenance orchestration smoke', () => {
     });
   }, 120_000);
 
+  test('moving a backup into an ordinary folder imports it without moving the old backup page', async () => {
+    await withTestHome(home, async () => {
+      repo = makeGitRepo();
+      mkdirSync(join(repo, 'backups'), { recursive: true });
+      writeFileSync(join(repo, 'backups', 'old.md'), goodNote('旧备份', '保留原有备份页。'));
+      commitAll(repo, 'add backup');
+      const sourceId = 'backup-move';
+      await engine.executeRaw("INSERT INTO sources (id,name,local_path) VALUES ($1,'backup move',$2)", [sourceId, repo]);
+      const { performSync } = await import('../src/commands/sync.ts');
+      await performSync(engine, { repoPath: repo, sourceId, noPull: true, noEmbed: true, skipLock: true });
+      expect(await engine.getPage('backups/old', { sourceId })).not.toBeNull();
+      execSync('git mv backups/old.md notes/restored.md', { cwd: repo, stdio: 'pipe' });
+      commitAll(repo, 'move from backup');
+      const report = await runQuickMaintenance(engine, { brainDir: repo, sourceId, dryRun: false, pull: false });
+      expect(report.phases.find(phase => phase.phase === 'sync')?.status).toBe('ok');
+      expect((await engine.getPage('backups/old', { sourceId }))?.compiled_truth).toContain('保留原有备份页');
+      expect((await engine.getPage('notes/restored', { sourceId }))?.compiled_truth).toContain('保留原有备份页');
+    });
+  }, 120_000);
+
   test('quick run keeps database maintenance working when the selected source local_path is stale', async () => {
     await withTestHome(home, async () => {
       const missingPath = join(home, 'moved-away-source');
@@ -631,24 +625,15 @@ describe('runQuickMaintenance orchestration smoke', () => {
 
         expect(report.brain_dir).toBeNull();
         expect(report.status).not.toBe('failed');
-        for (const phaseName of ['lint', 'backlinks', 'sync'] as const) {
+        for (const phaseName of ['sync'] as const) {
           const phase = report.phases.find(item => item.phase === phaseName);
           expect(phase?.status).toBe('skipped');
           expect(phase?.details?.reason).toBe('no_brain_dir');
         }
 
         const extract = report.phases.find(item => item.phase === 'extract');
-        expect(extract?.details?.filesystem_skipped).toBe(true);
         expect(extract?.details?.by_mention).toBe(true);
-
-        const facts = report.phases.find(item => item.phase === 'extract_facts');
-        expect(facts?.status).not.toBe('fail');
-
-        const symbols = report.phases.find(item => item.phase === 'resolve_symbol_edges');
-        expect(symbols?.details?.sources_walked).toBe(1);
-
-        const orphans = report.phases.find(item => item.phase === 'orphans');
-        expect(orphans?.details?.total_pages).toBe(1);
+        expect(report.phases.some(item => ['capture_entities', 'embed', 'orphans'].includes(item.phase))).toBe(false);
       } finally {
         exitSpy.mockRestore();
         logSpy.mockRestore();

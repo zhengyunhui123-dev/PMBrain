@@ -19,9 +19,10 @@ describe('core user journeys cover packaged Desktop openability', () => {
     expect(start).toBeGreaterThanOrEqual(0);
     expect(script).toContain('--packaged');
     expect(script).toContain('win-unpacked');
-    expect(journey).toContain(".materials-drawer .product-task-progress");
+    expect(journey).toContain(".materials-drawer .maintenance-round-progress");
+    expect(journey).toContain(".mpr-summary .product-task-state");
     expect(journey).toContain('outcome.get("status") != "导入成功"');
-    expect(journey).toContain('task-is-active');
+    expect(journey).toContain('成功 1 份 · 跳过 0 份 · 失败 0 份');
     expect(journey).toContain('materials-progress');
     expect(journey).toContain('len(outcomes) != 2');
     expect(script).toContain('desktop-runtime.log');
@@ -56,7 +57,7 @@ describe('core user journeys cover packaged Desktop openability', () => {
     expect(journeys).toContain('runs-on: windows-latest');
     expect(journeys).toContain('bun-version: 1.3.14');
     const testWorkflow = read('test.yml');
-    expect(testWorkflow.match(/bun-version: 1\.4\.2/g)).toHaveLength(1);
+    expect(testWorkflow.match(/bun-version: 1\.4\.2/g)).toHaveLength(2);
     expect(testWorkflow).toContain('serial-tests');
     for (const name of ['e2e.yml', 'heavy-tests.yml', 'core-user-journeys.yml', 'release.yml']) {
       const body = read(name);

@@ -6,6 +6,7 @@ import { buildGatewayConfig } from '../../core/ai/gateway-config.ts';
 import { loadConfig } from '../../core/config.ts';
 import { withPgliteSavepoints } from './savepoints.ts';
 import { leaseRenewal } from './lease-renewal.ts';
+import { PgliteCheckpointGuard, requestMayWrite } from './checkpoint-guard.ts';
 
 function respond(payload: { id: number; event?: 'started'; value?: unknown; error?: { name: string; message: string; properties: Record<string, unknown> } }): void {
   try { if (parentPort) parentPort.postMessage(payload); else process.send!(payload); }
@@ -13,8 +14,9 @@ function respond(payload: { id: number; event?: 'started'; value?: unknown; erro
 }
 
 const engine = new PGLiteEngine();
+const checkpointGuard = new PgliteCheckpointGuard();
 let sequence = 0;
-const scopes = new Map<number, { engine: BrainEngine | ReservedConnection; finish: (commit: boolean) => void; done: Promise<unknown> }>();
+const scopes = new Map<number, { engine: BrainEngine | ReservedConnection; kind: 'transaction' | 'reserved'; inTransaction: boolean; finish: (commit: boolean) => void; done: Promise<unknown> }>();
 let openRootScope: number | undefined;
 const renewalsWhileOpen = new Map<string, any[]>();
 let replayAfterReply: (() => Promise<void>) | undefined;
@@ -59,6 +61,7 @@ async function perform(message: { method: string; args: any[]; scope?: number })
   if (!current) throw new Error('数据库事务已关闭');
   if (method === '@transaction.open' || method === '@withReservedConnection.open') {
     const id = ++sequence;
+    const inTransaction = method === '@transaction.open' || (scope !== undefined && scopes.get(scope)?.inTransaction === true);
     let resolveReady!: (id: number) => void;
     let rejectReady!: (error: unknown) => void;
     const ready = new Promise<number>((resolve, reject) => { resolveReady = resolve; rejectReady = reject; });
@@ -67,7 +70,7 @@ async function perform(message: { method: string; args: any[]; scope?: number })
     const callback = async (connection: BrainEngine | ReservedConnection) => {
       await Promise.resolve();
       const scoped = method === '@transaction.open' ? withPgliteSavepoints(connection as BrainEngine) : connection;
-      scopes.set(id, { engine: scoped, finish, done });
+      scopes.set(id, { engine: scoped, kind: method === '@transaction.open' ? 'transaction' : 'reserved', inTransaction, finish, done });
       resolveReady(id);
       if (!await gate) throw new Error('数据库事务已回滚');
     };
@@ -119,6 +122,11 @@ async function reply(message: Request): Promise<void> {
     const delivered = isLockRenewal(message) && message.scope !== undefined && !scopes.has(message.scope)
       ? { ...message, scope: undefined }
       : message;
+    const currentScope = delivered.scope === undefined ? undefined : scopes.get(delivered.scope);
+    if ((delivered.scope === undefined || (currentScope?.kind === 'reserved' && !currentScope.inTransaction)) && requestMayWrite(delivered.method, delivered.args)) {
+      const target = currentScope?.engine ?? engine;
+      await checkpointGuard.beforeWrite(sql => target.executeRaw(sql));
+    }
     const value = await perform(delivered);
     respond({ id: message.id, value });
     if (message.scope === undefined && message.method.endsWith('.open')) {

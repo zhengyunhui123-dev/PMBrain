@@ -17,7 +17,6 @@ import {
   classifyPgliteDataArtifact,
   PGLITE_DATA_PROTECTION_POLICY,
 } from '../src/core/pglite-data-policy.ts';
-import { crc32c } from '../src/core/pglite-resetwal.ts';
 import {
   createVerifiedPgliteUpgradeBackup,
   deletePgliteUpgradeBackup,
@@ -30,14 +29,6 @@ import {
   restorePgliteUpgradeBackup,
   verifyPgliteUpgradeBackup,
 } from '../src/core/pglite-upgrade-backup.ts';
-
-function markControlInProduction(dir: string): void {
-  const path = join(dir, 'global', 'pg_control');
-  const control = Buffer.from(readFileSync(path));
-  control.writeInt32LE(6, 16);
-  control.writeUInt32LE(crc32c([control.subarray(0, 288)]), 288);
-  writeFileSync(path, control);
-}
 
 describe.serial('PGLite upgrade cold backup and recovery verification', () => {
   let root: string;
@@ -70,45 +61,46 @@ describe.serial('PGLite upgrade cold backup and recovery verification', () => {
     }
   }
 
-  test('creates a byte-verified cold copy and proves a disposable restore copy can open', async () => {
-    await seedProtectedPage();
+  test('copies one current slot, overwrites that same copy, and leaves the source untouched', async () => {
+    mkdirSync(databasePath, { recursive: true });
+    writeFileSync(join(databasePath, 'protected-data'), 'knowledge');
     writeFileSync(join(databasePath, '.pmbrain-resolve.sock'), 'runtime-only');
+    writeFileSync(join(databasePath, 'postmaster.pid'), 'pid');
+    writeFileSync(join(databasePath, '.gbrain-lock'), 'lock');
+    writeFileSync(join(databasePath, 'postmaster.opts'), 'opts');
 
-    const result = await createVerifiedPgliteUpgradeBackup({
+    const first = await createVerifiedPgliteUpgradeBackup({
       databasePath,
       backupRoot,
-      targetVersion: '1.1.91',
+      targetVersion: '1.5.73',
     });
 
-    expect(result.status).toBe('created');
-    expect(existsSync(result.backupDatabasePath)).toBe(true);
-    expect(existsSync(join(result.backupDatabasePath, '.gbrain-lock'))).toBe(false);
-    expect(existsSync(join(result.backupDatabasePath, '.pmbrain-resolve.sock'))).toBe(false);
-    expect(existsSync(join(result.backupDatabasePath, 'postmaster.pid'))).toBe(false);
-    expect(existsSync(join(result.backupDatabasePath, 'postmaster.opts'))).toBe(false);
-    expect(existsSync(join(result.backupDirectory, 'restore-verification.pglite'))).toBe(false);
-    expect(result.manifest.recovery_validation.status).toBe('verified');
-    expect(result.manifest.recovery_validation.protected_table_counts.pages).toBe(1);
-    expect(result.manifest.source_inventory.sha256).toBe(result.manifest.backup_inventory.sha256);
+    expect(first.status).toBe('created');
+    expect(first.backupDirectory).toBe(join(backupRoot, 'current'));
+    expect(readFileSync(join(first.backupDatabasePath, 'protected-data'), 'utf8')).toBe('knowledge');
+    expect(existsSync(join(first.backupDatabasePath, '.gbrain-lock'))).toBe(false);
+    expect(existsSync(join(first.backupDatabasePath, '.pmbrain-resolve.sock'))).toBe(false);
+    expect(existsSync(join(first.backupDatabasePath, 'postmaster.pid'))).toBe(false);
+    expect(existsSync(join(first.backupDatabasePath, 'postmaster.opts'))).toBe(false);
+    expect(readdirSync(backupRoot).some(name => name.startsWith('.verify-'))).toBe(false);
+    expect(first.manifest.status).toBe('copied');
+    expect(first.manifest.backup_inventory.sha256).toBe('unhashed');
+    expect(first.manifest.recovery_validation.status).toBe('copied');
+    expect(first.manifest.recovery_validation.protected_table_counts).toEqual({});
+    expect(readFileSync(join(databasePath, 'protected-data'), 'utf8')).toBe('knowledge');
 
-    const verified = await verifyPgliteUpgradeBackup(result.backupDirectory);
-    expect(verified.status).toBe('verified');
-    expect(verified.manifest.backup_inventory.sha256).toBe(result.manifest.backup_inventory.sha256);
-
-    const listed = listPgliteUpgradeBackups(backupRoot, databasePath);
-    expect(listed).toHaveLength(1);
-    expect(listed[0]?.manifest.target_version).toBe('1.1.91');
-    expect(listed[0]?.manifest.source_schema_version).toBe(result.manifest.source_schema_version);
-    expect(listed[0]?.backupDirectory).toBe(result.backupDirectory);
-
-    const engine = new PGLiteEngine();
-    await engine.connect({ engine: 'pglite', database_path: databasePath });
-    try {
-      expect(await engine.getPage('notes/upgrade-protected')).not.toBeNull();
-    } finally {
-      await engine.disconnect();
-    }
-  }, 240_000);
+    writeFileSync(join(databasePath, 'protected-data'), 'updated');
+    const second = await createVerifiedPgliteUpgradeBackup({
+      databasePath,
+      backupRoot,
+      targetVersion: '1.5.74',
+    });
+    expect(second.status).toBe('created');
+    expect(second.backupDirectory).toBe(first.backupDirectory);
+    expect(readFileSync(join(second.backupDatabasePath, 'protected-data'), 'utf8')).toBe('updated');
+    expect(readdirSync(backupRoot).filter(name => !name.startsWith('.'))).toEqual(['current']);
+    expect((await verifyPgliteUpgradeBackup(second.backupDirectory)).status).toBe('verified');
+  });
 
   test('excludes PGLite runtime files from the protected database inventory', async () => {
     mkdirSync(databasePath, { recursive: true });
@@ -133,7 +125,7 @@ describe.serial('PGLite upgrade cold backup and recovery verification', () => {
       backupRoot,
       targetVersion: '1.1.92',
     });
-    expect(created.manifest.recovery_validation.protected_table_counts.pages).toBe(1);
+    expect(created.manifest.status).toBe('copied');
     expect((await verifyPgliteUpgradeBackup(created.backupDirectory)).status).toBe('verified');
 
     writeFileSync(`${databasePath}.lock-reap.json`, JSON.stringify({ ts: Date.now(), by: 1 }));
@@ -159,61 +151,24 @@ describe.serial('PGLite upgrade cold backup and recovery verification', () => {
     }
   }, 240_000);
 
-  test('verifies an IN_PRODUCTION control backup by repairing the disposable copy before WASM open', async () => {
-    await seedProtectedPage();
-    markControlInProduction(databasePath);
-
+  test('refuses a backup whose copied size no longer matches the manifest', async () => {
+    mkdirSync(databasePath, { recursive: true });
+    writeFileSync(join(databasePath, 'protected-data'), 'knowledge');
     const created = await createVerifiedPgliteUpgradeBackup({
       databasePath,
       backupRoot,
-      targetVersion: '1.1.93',
+      targetVersion: '1.5.73',
     });
-    expect(created.manifest.recovery_validation.protected_table_counts.pages).toBe(1);
-    expect((await verifyPgliteUpgradeBackup(created.backupDirectory)).status).toBe('verified');
-
-    const engine = new PGLiteEngine();
-    await engine.connect({ engine: 'pglite', database_path: databasePath });
-    try {
-      expect(await engine.getPage('notes/upgrade-protected')).not.toBeNull();
-    } finally {
-      await engine.disconnect();
-    }
-  }, 240_000);
-
-  test('reuses the first verified pre-upgrade backup for the same target version', async () => {
-    await seedProtectedPage();
-    const first = await createVerifiedPgliteUpgradeBackup({
-      databasePath,
-      backupRoot,
-      targetVersion: '1.1.91',
-    });
-    const second = await createVerifiedPgliteUpgradeBackup({
-      databasePath,
-      backupRoot,
-      targetVersion: '1.1.91',
-    });
-
-    expect(first.status).toBe('created');
-    expect(second.status).toBe('reused');
-    expect(second.backupDirectory).toBe(first.backupDirectory);
-  }, 240_000);
-
-  test('refuses a backup whose cold-copy inventory was changed', async () => {
-    await seedProtectedPage();
-    const created = await createVerifiedPgliteUpgradeBackup({
-      databasePath,
-      backupRoot,
-      targetVersion: '1.1.91',
-    });
-    writeFileSync(join(created.backupDatabasePath, 'tampered-after-verification'), 'changed');
+    writeFileSync(join(created.backupDatabasePath, 'tampered-after-copy'), 'changed');
 
     await expect(verifyPgliteUpgradeBackup(created.backupDirectory)).rejects.toThrow(
-      /integrity|完整性|sha256/i,
+      /size\/file-count|integrity/i,
     );
-  }, 240_000);
+  });
 
   test('never copies while a live owner holds the database directory', async () => {
-    await seedProtectedPage();
+    mkdirSync(databasePath, { recursive: true });
+    writeFileSync(join(databasePath, 'protected-data'), 'knowledge');
     const lock = await acquireLock(databasePath, { ownerType: 'desktop-sidecar', timeoutMs: 100 });
     try {
       await expect(createVerifiedPgliteUpgradeBackup({
@@ -307,8 +262,8 @@ describe.serial('PGLite upgrade cold backup and recovery verification', () => {
     })).toThrow(/must not contain one another/i);
   });
 
-  test('prunes oldest verified backups and keeps the newest two', () => {
-    expect(PGLITE_UPGRADE_BACKUP_RETENTION).toBe(2);
+  test('prunes older backups and keeps only the newest one', () => {
+    expect(PGLITE_UPGRADE_BACKUP_RETENTION).toBe(1);
     const writeManifest = (directory: string, createdAt: string, targetVersion: string): void => {
       mkdirSync(directory, { recursive: true });
       writeFileSync(join(directory, 'manifest.json'), JSON.stringify({
@@ -364,18 +319,18 @@ describe.serial('PGLite upgrade cold backup and recovery verification', () => {
     expect(() => prunePgliteUpgradeBackups({
       backupRoot,
       databasePath,
-      keep: 1,
-    })).toThrow(/at least 2/i);
+      keep: 0,
+    })).toThrow(/at least 1/i);
 
     const pruned = prunePgliteUpgradeBackups({ backupRoot, databasePath });
-    expect(pruned.deleted).toEqual([oldest]);
-    expect(pruned.kept).toEqual([newest, middle]);
+    expect(pruned.deleted).toEqual([middle, oldest]);
+    expect(pruned.kept).toEqual([newest]);
     expect(existsSync(oldest)).toBe(false);
-    expect(existsSync(middle)).toBe(true);
+    expect(existsSync(middle)).toBe(false);
     expect(existsSync(newest)).toBe(true);
     expect(existsSync(join(backupRoot, 'other-db'))).toBe(true);
     expect(listPgliteUpgradeBackups(backupRoot, databasePath).map(item => item.backupDirectory))
-      .toEqual([newest, middle]);
+      .toEqual([newest]);
   });
 
   test('deletes a verified backup inside the root and refuses a path outside it', () => {

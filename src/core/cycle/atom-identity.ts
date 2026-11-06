@@ -1,6 +1,10 @@
 import { createHash } from 'node:crypto';
 import type { BrainEngine } from '../engine.ts';
 
+export function atomTitleKey(title: string): string {
+  return title.normalize('NFKC').toLowerCase().replace(/[\s\u00a0]+/g, ' ').trim();
+}
+
 export async function resolveAtomSlug(
   engine: BrainEngine, sourceId: string, title: string,
   kind: 'page' | 'transcript', locator: string, fallbackDate: string,

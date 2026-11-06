@@ -13,7 +13,9 @@ import {
   getDesktopPreferences,
   getSetupInfo,
   ensureFreshDesktopSetup,
+  isPgliteUpgradeBackupEnabled,
   saveDesktopPreferences,
+  setPgliteUpgradeBackupEnabled,
 } from './config-manager.js';
 import { DatabaseUpgradeController } from './database/database-upgrade.js';
 import { DatabaseTransferController } from './database/database-transfer.js';
@@ -114,6 +116,8 @@ const pgliteBackupController = new PgliteBackupController({
   runCliChecked,
   sendStartupProgress,
   log: message => logger?.write('desktop', message),
+  backupEnabled: () => isPgliteUpgradeBackupEnabled(),
+  setBackupEnabled: enabled => setPgliteUpgradeBackupEnabled(enabled),
 });
 
 const toastRepairController = new ToastRepairController({
@@ -452,6 +456,7 @@ if (!app.requestSingleInstanceLock()) {
         () => pgliteBackupController.restoreUpgradeBackup(backupDirectory),
       ),
       setPgliteUpgradeBackupRoot: directory => pgliteBackupController.setBackupRoot(directory),
+      setPgliteUpgradeBackupEnabled: enabled => pgliteBackupController.setBackupEnabled(enabled),
       openPgliteUpgradeBackup: async target => {
         const path = await pgliteBackupController.resolveOpenableBackupPath(target);
         const error = await shell.openPath(path);

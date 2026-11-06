@@ -1,7 +1,7 @@
-import { afterAll, beforeAll, expect, test } from 'bun:test';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, unlinkSync, statSync } from 'node:fs';
+import { afterAll, beforeAll, expect, spyOn, test } from 'bun:test';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, unlinkSync, statSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 import { createHash } from 'node:crypto';
 import { WorkerPgliteEngine } from '../src/product/database/worker-engine.ts';
 import { PostgresEngine } from '../src/core/postgres-engine.ts';
@@ -14,7 +14,7 @@ import { runStructuredImport } from '../src/commands/import.ts';
 import { assertSafeE2eDatabaseUrl } from './helpers/db-guard.ts';
 import { FileProjection } from '../src/product/tasks/file-projection.ts';
 import { taskArtifactPath } from '../src/product/tasks/checkpoint.ts';
-import { SyncFileQueue, SYNC_FILE_QUEUE, SYNC_FILE_TASK } from '../src/product/tasks/sync-file-queue.ts';
+import { SyncFileQueue, SYNC_FILE_QUEUE, SYNC_FILE_TASK, validateSyncFileSnapshot } from '../src/product/tasks/sync-file-queue.ts';
 import { gbrainPath } from '../src/core/config.ts';
 import { syncFileContentFingerprint, taskModelFingerprint } from '../src/product/tasks/checkpoint.ts';
 import { TaskProgressAdapter } from '../src/product/tasks/progress-adapter.ts';
@@ -52,6 +52,122 @@ test('队列硬上限原子拒绝并发新任务，延迟与暂停任务占用�
   expect((await queue.add('after-completion',{},opts)).queue).toBe(opts.queue);
 },60000);
 
+test('释放文件队列只激活待处理记录，不重写执行中或已完成的子任务',async()=>{
+  const queue=new MinionQueue(engine),files=new SyncFileQueue(engine);
+  const parent=await queue.add('release-parent',{}, {queue:'release-parent'});
+  const claimed=await queue.claim('release-test',30000,'release-parent',['release-parent']);
+  const children:number[]=[];
+  try{
+    for(const status of ['active','completed','delayed']){
+      const child=await queue.add(SYNC_FILE_TASK,{sessionId:parent.id},{queue:SYNC_FILE_QUEUE,delay:86400000});
+      children.push(child.id);
+      await engine.executeRaw("UPDATE minion_jobs SET status=$2,parent_job_id=$3,delay_until=CASE WHEN $2='delayed' THEN now()+interval '1 day' ELSE NULL END,updated_at='2026-01-01T00:00:00Z' WHERE id=$1",[child.id,status,status==='delayed'?null:parent.id]);
+    }
+    await files.release(parent.id,claimed!.lock_token!);
+    const rows=await engine.executeRaw<{id:number;status:string;parent_job_id:number;untouched:boolean}>("SELECT id,status,parent_job_id,updated_at='2026-01-01T00:00:00Z'::timestamptz AS untouched FROM minion_jobs WHERE id=ANY($1::bigint[]) ORDER BY id",[children]);
+    expect(rows.map(row=>row.status)).toEqual(['active','completed','waiting']);
+    expect(rows.map(row=>row.parent_job_id)).toEqual([parent.id,parent.id,parent.id]);
+    expect(rows.map(row=>row.untouched)).toEqual([true,true,false]);
+    expect((await queue.getJob(parent.id))?.status).toBe('waiting-children');
+  }finally{
+    await engine.executeRaw("UPDATE minion_jobs SET status='cancelled',lock_token=NULL,lock_until=NULL WHERE id=ANY($1::bigint[])",[[parent.id,...children]]);
+  }
+},60000);
+
+test('旧快速维护暂停任务占满队列时保留任务并让新任务推进，旧任务仍可续跑',async()=>{
+  const dir=join(home,'parked-quick');mkdirSync(dir);
+  for(const name of ['old-one.md','old-two.md','new.md','new-two.md'])writeFileSync(join(dir,name),`# ${name}\n\n容量测试资料 ${name}`);
+  const parents:number[]=[];
+  const parent=async(token:string)=>{
+    const id=Number((await engine.executeRaw<{id:number}>(`INSERT INTO minion_jobs(queue,name,status,lock_token,data)
+      VALUES('pmbrain-product','pmbrain-product-task','active',$1,$2::jsonb) RETURNING id`,[token,{kind:'dream_quick',task:{type:'dream',input:{preset:'quick'}}}]))[0].id);
+    parents.push(id);return id;
+  };
+  const input=async(name:string)=>{
+    const path=join(dir,name),info=statSync(path);
+    return {path,originalPath:path,relativePath:name,sourceRoot:dir,originalSize:info.size,originalMtime:info.mtimeMs,
+      hash:await streamFileHash(path),fingerprint:'capacity-fixture',modelFingerprint:'fixture',quickMaintenance:true,options:{sourceId:'default',noEmbed:true}};
+  };
+  try{
+  const files=new SyncFileQueue(engine,undefined,()=>true,new TaskResourceGuard(),2);
+  const old=await parent('old-capacity-token');
+  const oldInputs=[await input('old-one.md'),await input('old-two.md')];
+  const children=[];
+  for(const file of oldInputs)children.push(await files.enqueue(old,'old-capacity-token',file));
+  await engine.executeRaw("UPDATE minion_jobs SET status='paused',lock_token=NULL WHERE id=$1",[old]);
+  await files.pause(old);
+  const current=await parent('new-capacity-token');
+  const next=await files.enqueue(current,'new-capacity-token',await input('new.md'));
+  expect(next.childId).toBeNumber();
+  const other=await parent('other-capacity-token');
+  const nextOther=await files.enqueue(other,'other-capacity-token',await input('new-two.md'));
+  expect(nextOther.childId).toBeNumber();
+  const parked=await engine.executeRaw<{id:number;data:Record<string,unknown>;status:string}>("SELECT id,data,status FROM minion_jobs WHERE parent_job_id=$1 ORDER BY id",[old]);
+  const parkedChild=parked.find(row=>row.data.capacityParked===true);
+  expect(parkedChild?.status).toBe('cancelled');
+  expect(parked).toHaveLength(2);
+  expect(parked.every(row=>row.data.capacityParked===true)).toBe(true);
+  const [{count}]=await engine.executeRaw<{count:string}>("SELECT count(*)::text AS count FROM minion_jobs WHERE queue=$1 AND status NOT IN ('completed','failed','dead','cancelled')",[SYNC_FILE_QUEUE]);
+  expect(Number(count)).toBe(2);
+  await engine.executeRaw("UPDATE minion_jobs SET status='completed',result='{\"status\":\"imported\"}'::jsonb WHERE id=$1",[next.childId]);
+  await engine.executeRaw("UPDATE minion_jobs SET status='completed',result='{\"status\":\"imported\"}'::jsonb WHERE id=$1",[nextOther.childId]);
+  await files.resume(old);
+  await engine.executeRaw("UPDATE minion_jobs SET status='active',lock_token='resumed-capacity-token' WHERE id=$1",[old]);
+  const oldIndex=children.findIndex(row=>row.childId===parkedChild!.id);
+  const resumed=await files.enqueue(old,'resumed-capacity-token',oldInputs[oldIndex]);
+  expect(resumed.childId).toBe(parkedChild!.id);
+  await files.activateDuringQuickScan(old,'resumed-capacity-token',resumed.childId!);
+  expect((await engine.executeRaw<{status:string}>('SELECT status FROM minion_jobs WHERE id=$1',[resumed.childId]))[0].status).toBe('waiting');
+  const secondIndex=oldIndex===0?1:0;
+  const second=await files.enqueue(old,'resumed-capacity-token',oldInputs[secondIndex]);
+  await files.activateDuringQuickScan(old,'resumed-capacity-token',second.childId!);
+  const [{count:restored}]=await engine.executeRaw<{count:string}>("SELECT count(*)::text AS count FROM minion_jobs WHERE queue=$1 AND status NOT IN ('completed','failed','dead','cancelled')",[SYNC_FILE_QUEUE]);
+  expect(Number(restored)).toBe(2);
+  expect(readFileSync(join(dir,'old-one.md'),'utf8')).toContain('容量测试资料');
+  }finally{
+    const snapshots=await engine.executeRaw<{path:string}>("SELECT data->'task'->'input'->>'path' AS path FROM minion_jobs WHERE parent_job_id=ANY($1::int[])",[parents]);
+    for(const row of snapshots){if(!resolve(row.path).startsWith(resolve(home)+sep))throw new Error('隔离快照路径越界');if(existsSync(row.path))unlinkSync(row.path);}
+    await engine.executeRaw('DELETE FROM minion_jobs WHERE parent_job_id=ANY($1::int[])',[parents]);
+    await engine.executeRaw('DELETE FROM minion_jobs WHERE id=ANY($1::int[])',[parents]);
+  }
+},60000);
+
+test('旧任务暂存文件的原路径消失时保留快照并显示未完成',async()=>{
+  const dir=join(home,'parked-missing');mkdirSync(dir);
+  const sourceId='parked-missing';
+  await engine.executeRaw("INSERT INTO sources(id,name,local_path,config) VALUES($1,$1,$2,'{}'::jsonb)",[sourceId,dir]);
+  const snapshot=join(home,'parked-missing-snapshot.md');writeFileSync(snapshot,'# 已保留的缓存\n\n原路径不再存在。');
+  const input={path:snapshot,originalPath:join(dir,'missing.md'),relativePath:'missing.md',sourceRoot:dir,originalSize:statSync(snapshot).size,
+    originalMtime:statSync(snapshot).mtimeMs,hash:await streamFileHash(snapshot),fingerprint:'fixture',modelFingerprint:'fixture',quickMaintenance:true,options:{sourceId,noEmbed:true}};
+  const [parent]=await engine.executeRaw<{id:number}>(`INSERT INTO minion_jobs(queue,name,status,data)
+    VALUES('pmbrain-product','pmbrain-product-task','cancelled',$1::jsonb) RETURNING id`,[{kind:'dream_quick',fileSession:true,task:{type:'dream',input:{preset:'quick',sourceId}}}]);
+  await engine.executeRaw(`INSERT INTO minion_jobs(queue,name,status,parent_job_id,data)
+    VALUES($1,$2,'cancelled',$3,$4::jsonb)`,[SYNC_FILE_QUEUE,SYNC_FILE_TASK,parent.id,{sessionId:parent.id,capacityParked:true,task:{type:'sync-file',input}}]);
+  const runtime=new ProductTaskRuntime(engine);
+  await runtime.start();
+  try{
+    await runtime.retry(`task-${parent.id}`);
+    const deadline=Date.now()+90_000;let run=await runtime.getRun(`task-${parent.id}`);
+    while(run&&['running','queued'].includes(run.status)&&Date.now()<deadline){await Bun.sleep(50);run=await runtime.getRun(`task-${parent.id}`);}
+    expect((run?.result as {status?:string}|undefined)?.status,JSON.stringify(run)).toBe('partial');
+    expect(run?.product?.stage).toContain('部分完成');
+    expect(readFileSync(snapshot,'utf8')).toContain('原路径不再存在');
+  }finally{await runtime.close();}
+},120000);
+
+test('队列被运行中的文件占用时等待释放，停止请求可打断等待',async()=>{
+  const [job]=await engine.executeRaw<{id:number}>("INSERT INTO minion_jobs(queue,name,status,data) VALUES($1,$2,'waiting','{}'::jsonb) RETURNING id",[SYNC_FILE_QUEUE,SYNC_FILE_TASK]);
+  const runtime=new ProductTaskRuntime(engine);
+  const controller=new AbortController();
+  const pending=(runtime as any).waitForQuickCapacity(controller.signal) as Promise<boolean>;
+  const pulse=setInterval(()=>(runtime as any).fileWorker.emit('job-finished',{id:job.id,name:'pmbrain-document-ocr'}),30);
+  try{
+    expect(await pending).toBe(true);
+    const interrupted=new AbortController();interrupted.abort(new Error('测试停止'));
+    await expect((runtime as any).waitForQuickCapacity(interrupted.signal)).rejects.toThrow('测试停止');
+  }finally{clearInterval(pulse);await engine.executeRaw('DELETE FROM minion_jobs WHERE id=$1',[job.id]);}
+},30000);
+
 test('流式哈希和快照字节一致，空间不足或复制途中取消时不留下半份快照，原资料不变',async()=>{
   const input=join(home,'stream-source.bin');const output=join(home,'stream-snapshot.bin');
   const bytes=Buffer.alloc(3*1024*1024,42);writeFileSync(input,bytes);
@@ -69,6 +185,25 @@ test('流式哈希和快照字节一致，空间不足或复制途中取消时�
   expect(existsSync(cancelled)).toBe(false);
   expect(()=>assertImportFileSize('huge.md',6*1024**2)).toThrow('文件过大');
   expect(()=>assertImportFileSize('supported.docx',6*1024**2)).not.toThrow();
+});
+
+test('快速维护对同一路径只做一次内容校验，相同大小和时间的变化仍可发现',async()=>{
+  const path=join(home,'same-metadata.md');
+  writeFileSync(path,'同长原文 AAA');
+  const initial=statSync(path);
+  const hash=await streamFileHash(path);
+  const input={path,originalPath:path,relativePath:'same-metadata.md',sourceRoot:home,originalSize:initial.size,originalMtime:initial.mtimeMs,
+    hash,fingerprint:'fixture',modelFingerprint:'fixture',quickMaintenance:true,options:{sourceId:'default',noEmbed:true}};
+  let reads=0;
+  const hashOnce=async(file:string)=>{reads++;return streamFileHash(file);};
+  await validateSyncFileSnapshot(input,hashOnce);
+  expect(reads).toBe(1);
+  writeFileSync(path,'同长修改 BBB');
+  utimesSync(path,initial.atime,initial.mtime);
+  input.originalMtime=statSync(path).mtimeMs;
+  reads=0;
+  await expect(validateSyncFileSnapshot(input,hashOnce)).rejects.toThrow('已改变');
+  expect(reads).toBe(1);
 });
 
 test('磁盘不足时不开始文件或写入事务，释放空间后同一任务正常写入',async()=>{
@@ -136,6 +271,13 @@ test('整批资料超过快照窗口时自动分批完成，同一任务不报�
   for(const name of ['first.md','second.md','third.md'])writeFileSync(join(dir,name),content+'\n'+name);
   const originals=['first.md','second.md','third.md'].map(name=>readFileSync(join(dir,name)));
   await engine.executeRaw("INSERT INTO sources(id,name,local_path,config) VALUES ('bounded-scan','容量验收',$1,'{}'::jsonb)",[dir]);
+  const visited:string[]=[];
+  const enqueue=SyncFileQueue.prototype.enqueue;
+  const scans=spyOn(SyncFileQueue.prototype,'enqueue').mockImplementation(function(this:SyncFileQueue,...args){
+    if(args[2].options.sourceId==='bounded-scan')visited.push(args[2].relativePath);
+    return enqueue.apply(this,args);
+  });
+  const counts=spyOn(SyncFileQueue.prototype,'counts');
   const runtime=new ProductTaskRuntime(engine,{snapshotQuotaBytes:Buffer.byteLength(content+'\nsecond.md')*2});
   await runtime.start();
   async function ended(id:string){
@@ -153,16 +295,69 @@ test('整批资料超过快照窗口时自动分批完成，同一任务不报�
     expect(savedPages.map(page=>page.slug)).toEqual(['first','second','third']);
     expect(resumedFiles?.rows,JSON.stringify({run:await runtime.getRun(run.id),files:resumedFiles})).toHaveLength(3);
     expect(resumedFiles?.rows.every(row=>row.status==='completed')).toBe(true);
+    expect([...new Set(visited)].sort()).toEqual(['first.md','second.md','third.md']);
+    expect(resumed.product?.maintenance?.scan.scanned).toBe(3);
+    expect(counts.mock.calls.filter(call=>Number(call[0])===Number(run.id.slice(5))).length).toBeLessThanOrEqual(2+Math.ceil(savedPages.length/2));
     const snapshots=await engine.executeRaw<{path:string}>("SELECT data->'task'->'input'->>'path' AS path FROM minion_jobs WHERE queue=$1 AND parent_job_id=$2",[SYNC_FILE_QUEUE,Number(run.id.slice(5))]);
     expect(snapshots.every(row=>!existsSync(row.path))).toBe(true);
     originals.forEach((bytes,index)=>expect(readFileSync(join(dir,['first.md','second.md','third.md'][index]))).toEqual(bytes));
   }finally{
+    scans.mockRestore();counts.mockRestore();
     await runtime.close();
     await engine.executeRaw("UPDATE minion_jobs SET status='cancelled' WHERE id=(SELECT parent_job_id FROM minion_jobs WHERE queue=$1 AND data->'task'->'input'->'options'->>'sourceId'='bounded-scan' LIMIT 1)",[SYNC_FILE_QUEUE]);
     const snapshots=await engine.executeRaw<{path:string}>("SELECT data->'task'->'input'->>'path' AS path FROM minion_jobs WHERE queue=$1 AND data->'task'->'input'->'options'->>'sourceId'='bounded-scan'",[SYNC_FILE_QUEUE]);
     for(const row of snapshots){if(!row.path.startsWith(home))throw new Error('隔离快照路径越界');if(existsSync(row.path))unlinkSync(row.path);}
   }
 },120000);
+
+test('图片识别占满自己的名额时，文本同步仍能进入同一队列',async()=>{
+  const queue=new MinionQueue(engine);
+  const queueName='image-text-split';
+  const ocr={queue:queueName,maxQueueSize:2,capacityName:'pmbrain-document-ocr'};
+  const sync={queue:queueName,maxQueueSize:2,capacityName:'pmbrain-sync-file'};
+  const rejected=async(name:string,opts:{queue:string;maxQueueSize:number;capacityName:string})=>{
+    try{await queue.add(name,{},opts);return '';}
+    catch(error){return error instanceof Error?error.message:String(error);}
+  };
+  await queue.add('pmbrain-document-ocr',{},ocr);
+  await queue.add('pmbrain-document-ocr',{},ocr);
+  expect(await rejected('pmbrain-document-ocr',ocr)).toContain('队列容量');
+  const text=await queue.add('pmbrain-sync-file',{},sync);
+  expect(text.id).toBeNumber();
+  await queue.add('pmbrain-sync-file',{},sync);
+  expect(await rejected('pmbrain-sync-file',sync)).toContain('队列容量');
+},30000);
+
+test('深度整理的同步文件不继承 6 小时上限，普通整理的同步文件仍保留',async()=>{
+  const dir=join(home,'unbounded-files');mkdirSync(dir);
+  const files=new SyncFileQueue(engine,undefined,()=>true,new TaskResourceGuard());
+  const parents:number[]=[];
+  const enqueue=(token:string,name:string,data:Record<string,unknown>)=>async()=>{
+    writeFileSync(join(dir,name),`# ${name}\n\n文本资料`);
+    const path=join(dir,name),info=statSync(path);
+    const [parent]=await engine.executeRaw<{id:number}>(`INSERT INTO minion_jobs(queue,name,status,lock_token,lock_until,data)
+      VALUES('pmbrain-product','pmbrain-product-task','active',$1,now()+interval '1 hour',$2::jsonb) RETURNING id`,[token,data]);
+    parents.push(parent.id);
+    const input={path,originalPath:path,relativePath:name,sourceRoot:dir,originalSize:info.size,originalMtime:info.mtimeMs,
+      hash:await streamFileHash(path),fingerprint:'capacity-fixture',modelFingerprint:'fixture',scanValidated:true,options:{sourceId:'default',noEmbed:true}};
+    return files.enqueue(parent.id,token,input);
+  };
+  try{
+    const unbounded=await enqueue('unbounded-file-token','unbounded.md',{unboundedRuntime:true,kind:'dream_full',task:{type:'dream',input:{preset:'full'}}})();
+    const kept=await engine.executeRaw<{timeout_ms:number|null;flag:boolean}>("SELECT timeout_ms, data->>'unboundedRuntime'='true' AS flag FROM minion_jobs WHERE id=$1",[unbounded.childId]);
+    expect(kept[0].timeout_ms).toBeNull();
+    expect(kept[0].flag).toBe(true);
+    const bounded=await enqueue('bounded-file-token','bounded.md',{kind:'dream_quick',task:{type:'dream',input:{preset:'quick'}}})();
+    const limited=await engine.executeRaw<{timeout_ms:number|null;flag:boolean}>("SELECT timeout_ms, COALESCE(data->>'unboundedRuntime','')='true' AS flag FROM minion_jobs WHERE id=$1",[bounded.childId]);
+    expect(limited[0].timeout_ms).toBe(21600000);
+    expect(limited[0].flag).toBe(false);
+  }finally{
+    const snapshots=await engine.executeRaw<{path:string}>("SELECT data->'task'->'input'->>'path' AS path FROM minion_jobs WHERE parent_job_id=ANY($1::int[])",[parents]);
+    for(const row of snapshots){if(!resolve(row.path).startsWith(resolve(home)+sep))throw new Error('隔离快照路径越界');if(existsSync(row.path))unlinkSync(row.path);}
+    await engine.executeRaw('DELETE FROM minion_jobs WHERE parent_job_id=ANY($1::int[])',[parents]);
+    await engine.executeRaw('DELETE FROM minion_jobs WHERE id=ANY($1::int[])',[parents]);
+  }
+},60000);
 
 test('停止任务释放可重建的快照，新任务不被旧副本阻塞，旧任务仍按原子任务续跑',async()=>{
   const queue=new MinionQueue(engine);
@@ -299,7 +494,7 @@ test('分批同步中主动停止后保持停止，重启后继续原任务完�
     const run=await runtime.submitDream({preset:'quick',sourceId:'live-stop'});runId=run.id;
     const id=Number(run.id.slice(5)),deadline=Date.now()+90_000;
     let waiting=false;
-    while(Date.now()<deadline){if((await queue.getJob(id))?.status==='waiting-children'){waiting=true;break;}await Bun.sleep(20);}
+    while(Date.now()<deadline){const current=await runtime.getRun(run.id);if(current?.status==='running'&&current.product?.maintenance?.scan.complete){waiting=true;break;}await Bun.sleep(20);}
     expect(waiting,JSON.stringify(await runtime.getRun(run.id))).toBe(true);
     expect((await runtime.cancel(run.id))?.status).toBe('cancelled');
     const old=await engine.executeRaw<{id:number}>("SELECT id FROM minion_jobs WHERE queue=$1 AND parent_job_id=$2",[SYNC_FILE_QUEUE,id]);
@@ -369,6 +564,48 @@ test('明细日志合并重复活动并压缩，流式重载保留最新状态�
   free=100*1024**2;await low.recover();await low.flush();
   const restored=new FileProjection();await restored.load(900023);
   expect(restored.details(900023)?.rows[0].error).toBe('原错误保留');
+});
+
+test('高频过程状态合并写盘，实时显示和失败记录仍保留最新结果',async()=>{
+  const session=900024;
+  const projection=new FileProjection();
+  projection.seed(session,[{id:1,sourceId:'default',path:'source.md',status:'running',error:null}]);
+  await projection.flush();
+  const clock=spyOn(Date,'now').mockReturnValue(1_000_000);
+  try{
+    for(let index=0;index<12;index++){
+      projection.activity(session,1,{id:1,sourceId:'default',path:'source.md',bytes:100,stage:'写入知识库',operation:`sql-${index}`,updatedAt:new Date().toISOString()},true);
+      await Bun.sleep(20);
+    }
+    const path=taskArtifactPath(session,'files.jsonl');
+    expect(readFileSync(path,'utf8').trim().split('\n').length).toBeLessThanOrEqual(4);
+    expect(projection.active(session)[0].operation).toBe('sql-11');
+    await projection.flush();
+    const reloaded=new FileProjection();await reloaded.load(session);
+    expect(reloaded.active(session)[0].operation).toBe('sql-11');
+    projection.activity(session,1,{id:1,sourceId:'default',path:'source.md',bytes:100,stage:'写入知识库',operation:'最后活动',updatedAt:new Date().toISOString()},true);
+    projection.record({id:1,status:'completed',data:{sessionId:session,task:{input:{relativePath:'source.md',options:{sourceId:'default'}}}},result:{status:'failed',error:'测试错误'},error_text:null} as any);
+    projection.activity(session,1,{id:1,sourceId:'default',path:'source.md',bytes:100,stage:'写入知识库',operation:'过期活动',updatedAt:new Date().toISOString()},true);
+    await projection.flush();
+    const finished=new FileProjection();await finished.load(session);
+    expect(finished.details(session)?.rows[0]).toMatchObject({status:'failed',error:'测试错误'});
+    expect(finished.active(session)).toHaveLength(0);
+    expect(finished.counts(session)).toEqual({total:1,completed:0,failed:1,remaining:0});
+    finished.seed(session,[{id:2,sourceId:'default',path:'source.md',status:'completed',error:null}]);
+    expect(finished.counts(session)).toEqual({total:1,completed:1,failed:0,remaining:0});
+    finished.seed(session,[{id:3,sourceId:'default',path:'stale.md',status:'pending',error:null}]);
+    finished.reconcile(session,new Set([2]));
+    expect(finished.counts(session)).toEqual({total:1,completed:1,failed:0,remaining:0});
+    await finished.flush();
+    const full=new FileProjection();
+    full.seed(900025,[{id:1,sourceId:'default',path:'deep.md',status:'running',error:null}]);
+    await full.flush();
+    for(let index=0;index<3;index++){
+      full.activity(900025,1,{id:1,sourceId:'default',path:'deep.md',bytes:100,stage:'写入知识库',operation:`sql-${index}`,updatedAt:new Date().toISOString()});
+      await Bun.sleep(40);
+    }
+    expect(readFileSync(taskArtifactPath(900025,'files.jsonl'),'utf8').trim().split('\n').length).toBeGreaterThanOrEqual(4);
+  }finally{clock.mockRestore();}
 });
 
 test('一份资料超过大小上限时，这一份记为失败，后面的资料继续导入', async () => {

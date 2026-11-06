@@ -25,9 +25,14 @@ function group(phase: string): string {
 
 export function taskErrorReason(error: string | null | undefined): string | null {
   if (!error) return null;
+  if (error.startsWith('提炼事实失败')) return error.slice(0, 500);
   if (/ENOENT|no such file/i.test(error)) return '找不到资料文件，请检查路径后重试。';
   if (/too large/i.test(error)) return '资料超过支持的大小，请拆分后重试。';
-  if (/^(?:(?:wall-clock )?timeout exceeded|aborted:\s*timeout)$/i.test(error)) return '本次任务执行超时，已保留完成结果，可继续未完成任务。';
+  if (/因休眠中断/.test(error)) return '因休眠中断，点继续';
+  const hourLimit = error.match(/达到\s*(\d+)\s*小时上限/);
+  if (hourLimit) return `达到 ${hourLimit[1]} 小时上限，已保留完成结果，可以继续未完成部分。`;
+  if (/^(?:(?:wall-clock )?timeout exceeded|aborted:\s*timeout)$/i.test(error)) return '达到任务时限上限，已保留完成结果，可以继续未完成部分。';
+  if (/^(?:Error:\s*)?(?:aborted:\s*)?任务已停止$/.test(error)) return '已由你停止。已完成的结果保留，可以继续未完成部分。';
   if (/数据库请求超时|database request timeout/i.test(error)) return '数据库执行超时，已保留完成结果，请查看技术日志后继续任务。';
   if (/fetch failed|ECONN|timeout|timed out|401|403|429|API.?key|credentials|balance/i.test(error)) return '模型调用失败，请检查模型连接、密钥或额度。';
   if (/SQL|syntax error|constraint|database/i.test(error)) return '数据库操作未成功，请在技术日志中查看原因。';
@@ -256,10 +261,13 @@ export function finishTaskProgress(view: TaskProductProgress, status: string, re
     const sync = data.phases.find((phase: any) => phase.phase === 'sync');
     add('更新资料', sync?.details?.modified);
     const relations = data.phases.find((phase: any) => phase.phase === 'extract')?.details;
-    add('历史显式关联', relations?.relationLinksCreated);
+    const scopedRelations = next.name === '快速维护' && (relations?.relationScopeRemaining !== undefined || relations?.mentionScopeRemaining !== undefined);
+    add(scopedRelations ? '本轮显式关联' : '历史显式关联', relations?.relationLinksCreated);
     add('正文实体关联', relations?.mentionLinksCreated);
     add('关系类型关联', relations?.nerLinksCreated);
-    add('历史待补关联', Math.max(relations?.relationHistoricalRemaining ?? 0, relations?.mentionHistoricalRemaining ?? 0) || (relations?.historical_relation_backfill ? 0 : undefined));
+    add(scopedRelations ? '本轮待补关联' : '历史待补关联', scopedRelations
+      ? Math.max(relations?.relationScopeRemaining ?? 0, relations?.mentionScopeRemaining ?? 0)
+      : Math.max(relations?.relationHistoricalRemaining ?? 0, relations?.mentionHistoricalRemaining ?? 0) || (relations?.historical_relation_backfill ? 0 : undefined));
     const lint = data.phases.find((phase: any) => phase.phase === 'lint');
     add('待检查项', lint?.details?.issues);
     const capture = data.phases.find((phase: any) => phase.phase === 'capture_entities')?.details;
@@ -327,7 +335,9 @@ export function finishTaskProgress(view: TaskProductProgress, status: string, re
       ));
       next.errorReason = failure?.details?.stop_reason === 'model_unavailable'
         ? '实体识别模型不可用'
-        : taskErrorReason(failure?.error?.message) ?? `${failed.label}未完成，请查看技术日志。`;
+        : failure?.phase === 'extract_facts' && failure?.error?.message
+          ? `提炼事实失败：${failure.error.message}`
+          : taskErrorReason(failure?.error?.message) ?? `${failed.label}未完成，请查看技术日志。`;
     }
     if (Array.isArray(data.phases) && data.phases.some((phase: any) => phase.details?.dryRun === true)) {
       next.stage = '预览完成，未写入知识库';
@@ -346,7 +356,7 @@ export function finishTaskProgress(view: TaskProductProgress, status: string, re
     next.errorReason = status === 'failed' ? taskErrorReason(error) : null;
     if (status === 'failed') {
       const failed = data.phases?.find((phase: any) => phase.error?.message);
-      if (failed?.error?.message) next.errorReason = failed.error.message;
+      if (failed?.error?.message) next.errorReason = failed.phase === 'extract_facts' ? `提炼事实失败：${failed.error.message}` : failed.error.message;
       next.stage = '任务未完成';
     } else if (next.name === '知识向量化' || next.name === '向量化') {
       next.stage = '已暂停，已完成的部分保留';
@@ -356,6 +366,7 @@ export function finishTaskProgress(view: TaskProductProgress, status: string, re
   next.completedSteps = next.steps.filter(step => step.status === 'completed').length;
   const imported = next.name === '导入资料' ? importOutcome(data) : null;
   if (imported && ['completed', 'failed'].includes(status)) {
+    next.importCounts={processed:imported.processed,imported:Math.max(0,imported.processed-imported.unchanged-imported.failed-imported.partial),unchanged:imported.unchanged,failed:imported.failed,partial:imported.partial};
     next.metrics = next.metrics.map(metric => metric.label === '跳过资料' ? { ...metric, value: imported.unchanged }
       : metric.label === '新增资料' ? { ...metric, value: imported.imported }
       : metric.label === '失败文件' ? { ...metric, value: imported.failed } : metric);

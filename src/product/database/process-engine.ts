@@ -7,9 +7,9 @@ import { databasePriority } from './priority.ts';
 import { databaseRequestContext } from './request-context.ts';
 import { withDeadline } from '../deadline.ts';
 import { createHash } from 'node:crypto';
-import { databaseOccupancy, sqlPreview, type DatabaseObservation } from '../../../shared/database-occupancy.ts';
+import { databaseOccupancy, databaseRequestIsWrite, sqlPreview, type DatabaseObservation } from '../../../shared/database-occupancy.ts';
 
-type RequestObservation = DatabaseObservation & { generation: number; sqlFingerprint?: string; chunkWrite?: { slug: string; sourceId: string; chunks: number } };
+type RequestObservation = DatabaseObservation & { generation: number; onComplete?: (value:{waitedMs:number;write:boolean})=>void; write?:boolean; sqlFingerprint?: string; chunkWrite?: { slug: string; sourceId: string; chunks: number } };
 
 type Reply = { id: number; event?: 'started'; value?: unknown; error?: { name: string; message: string; properties: Record<string, unknown> } };
 type Owner = { send: (value: unknown) => void; kill: () => void; exited: Promise<unknown> };
@@ -72,6 +72,7 @@ export class WorkerPgliteEngine {
       const dispose = () => { clearTimeout(timer); context?.signal.removeEventListener('abort', cancel); };
       const preview = method === 'executeRaw' || method === '@db.query' ? sqlPreview(String(args[0] ?? '')) : undefined;
       const observation: RequestObservation = { id, taskId: context?.taskId, method, scope, generation: this.generation, enqueuedAt: Date.now(),
+        onComplete:context?.onComplete,write:databaseRequestIsWrite(method,preview),
         ...(context?.stage ? { stage: context.stage } : {}), ...(context?.file ? { file: context.file } : {}), ...(preview ? { sqlPreview: preview } : {}),
         chunkWrite: method === 'upsertChunks' ? { slug: String(args[0]), sourceId: String((args[2] as { sourceId?: string } | undefined)?.sourceId ?? 'default'), chunks: Array.isArray(args[1]) ? args[1].length : 0 } : undefined,
         sqlFingerprint: preview ? createHash('sha256').update(String(args[0])).digest('hex') : undefined };
@@ -119,7 +120,9 @@ export class WorkerPgliteEngine {
   }
 
   private remember(observation: RequestObservation): void {
-    this.recent.push(observation);
+    const {onComplete,...completed}=observation;
+    onComplete?.({waitedMs:Math.max(0,(observation.startedAt??observation.finishedAt??Date.now())-observation.enqueuedAt),write:observation.write===true});
+    this.recent.push(completed);
     if (this.recent.length > 40) this.recent.splice(0, this.recent.length - 40);
   }
 

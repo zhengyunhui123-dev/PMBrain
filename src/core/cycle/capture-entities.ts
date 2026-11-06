@@ -32,10 +32,13 @@ import {
   type CaptureStopReason,
   captureBudgetStop,
   captureChunkCostCny,
+  captureDegradedReason,
+  captureFailureDisposition,
   captureReportLine,
   deltaCaptureNeedles,
   isOllamaModel,
   rankCaptureCandidates,
+  uniqueCaptureAliases,
   readEntityCaptureCostCap,
   readTokenCap,
   selectReadyCaptureModel,
@@ -321,6 +324,54 @@ export async function loadCaptureEntityIndex(
       aliases: normalizeAliasList(frontmatter?.aliases),
     };
   });
+}
+
+async function persistCaptureAliases(engine: BrainEngine, planned: Array<{ entity: CaptureEntityBrief; alias: string }>, dryRun: boolean): Promise<void> {
+  for (const item of planned) {
+    if (!item.entity.aliases.some(alias => alias.normalize('NFKC').trim().toLowerCase() === item.alias.normalize('NFKC').trim().toLowerCase())) {
+      item.entity.aliases = [...item.entity.aliases, item.alias];
+    }
+    if (dryRun) continue;
+    try {
+      const [page] = await engine.executeRaw<{ frontmatter: { aliases?: unknown } | null }>(
+        `SELECT frontmatter FROM pages WHERE slug=$1 AND source_id=$2 AND deleted_at IS NULL`,
+        [item.entity.slug, item.entity.sourceId],
+      );
+      if (!page) continue;
+      const current = Array.isArray(page.frontmatter?.aliases) ? page.frontmatter.aliases.filter((alias): alias is string => typeof alias === 'string') : [];
+      const stored = current.some(alias => alias.normalize('NFKC').trim().toLowerCase() === item.alias.normalize('NFKC').trim().toLowerCase()) ? current : [...current, item.alias];
+      await engine.executeRaw(
+        `UPDATE pages SET frontmatter = jsonb_set(COALESCE(frontmatter, '{}'::jsonb), '{aliases}', $3::jsonb, true) WHERE slug=$1 AND source_id=$2 AND deleted_at IS NULL`,
+        [item.entity.slug, item.entity.sourceId, JSON.stringify(stored)],
+      );
+      await engine.setPageAliases(item.entity.slug, item.entity.sourceId, normalizeAliasList(stored));
+    } catch { /* the current chunk can still reuse the in-memory alias */ }
+  }
+}
+
+async function storedEntityNeighbors(engine: BrainEngine, pageId: number, sourceId: string, types: string[]): Promise<Array<{ slug: string; source_id: string }>> {
+  try {
+    return await engine.executeRaw<{ slug: string; source_id: string }>(
+      `WITH probe AS (
+         SELECT embedding FROM content_chunks WHERE page_id = $1 AND embedding IS NOT NULL LIMIT 1
+       )
+       SELECT p.slug, p.source_id
+         FROM content_chunks ent
+         JOIN pages p ON p.id = ent.page_id
+         JOIN probe ON true
+        WHERE p.deleted_at IS NULL
+          AND ent.page_id <> $1
+          AND ent.embedding IS NOT NULL
+          AND p.type = ANY($2::text[])
+          AND p.source_id = ANY($3::text[])
+          AND (ent.embedding <=> probe.embedding) <= 0.45
+        ORDER BY ent.embedding <=> probe.embedding
+        LIMIT 8`,
+      [pageId, types, [sourceId, 'default']],
+    );
+  } catch {
+    return [];
+  }
 }
 
 export function configuredCnyPrices(model: string, providerId: string | null,usdToCny?:number): { input: number | null; output: number | null } {
@@ -893,6 +944,12 @@ export async function runPhaseCaptureEntities(
         let completedForPage = 0;
         let pageStopped = false;
         const entityIndex = await loadCaptureEntityIndex(engine, opts.sourceId);
+        const neighborKeys = new Set((item.page.pageId == null ? [] : await storedEntityNeighbors(
+          engine,
+          item.page.pageId,
+          item.page.sourceId,
+          opts.quickEntitiesOnly ? ['person', 'company', 'organization', 'project'] : [...CAPTURE_ENTITY_TYPES],
+        )).map(row => `${row.source_id}:${row.slug}`));
         await runCaptureWindow(item.chunks,async(planned,chunkSlot)=>{
           const chunk:EntityCaptureChunk={...activePage,chunkIndex:planned.index,chunkCount:item.totalChunks,chunkBody:activePage.body.slice(planned.start,planned.start+planned.length)};
           await withChunkLock(chunk,async()=>{
@@ -910,9 +967,17 @@ export async function runPhaseCaptureEntities(
             budgetStop = chunkStop;
             return;
           }
-          const related = rankCaptureCandidates(chunk.chunkBody, entityIndex.filter(entity =>
+          const candidatePool = entityIndex.filter(entity =>
             (entity.sourceId === chunk.sourceId || entity.sourceId === 'default')&&(!opts.quickEntitiesOnly||['person','company','organization','project'].includes(entity.type)),
-          ), { limit: ENTITY_CAPTURE_CANDIDATE_LIMIT, sourceId: chunk.sourceId });
+          );
+          await persistCaptureAliases(engine, uniqueCaptureAliases(chunk.chunkBody, candidatePool), !!opts.dryRun);
+          const related = rankCaptureCandidates(chunk.chunkBody, candidatePool, { limit: ENTITY_CAPTURE_CANDIDATE_LIMIT, sourceId: chunk.sourceId });
+          for (const entity of candidatePool) {
+            if (related.length >= ENTITY_CAPTURE_CANDIDATE_LIMIT) break;
+            if (!neighborKeys.has(`${entity.sourceId}:${entity.slug}`)) continue;
+            if (related.some(item => item.sourceId === entity.sourceId && item.slug === entity.slug)) continue;
+            related.push(entity);
+          }
           const baseKey = captureChunkKey(item.scopeKey,chunk.chunkBody);
           const idempotencyKey = planned.force?`${baseKey}:retry:${nonce}`:await retryableKey(engine, baseKey, nonce);
           const acknowledged=(await acknowledgedIngestEntities(engine,chunk,entityIndex)).filter(entity=>!opts.quickEntitiesOnly||['person','company','organization','project'].includes(entity.type));
@@ -1037,24 +1102,21 @@ export async function runPhaseCaptureEntities(
           if (job.status !== 'completed' || result?.ingest_verified!==true || (result?.stop_reason && result.stop_reason!=='end_turn')) {
             failedChunks += 1;
             failedPageSlugs.add(chunk.slug);
-            failureStop = true;
-            pageStopped=true;
-            let fatal=true;
-            if(job.error_text?.includes('ingest_budget_cost')){budgetStop='cost';failureStop=pageFailures.length>0;}
-            modelError = job.error_text ?? `实体识别子任务 ${job.id} 未通过 ingest 读回验收（${result?.stop_reason??job.status}）`;
-            if (/\bingest[ _]/i.test(modelError) || job.status === 'completed') failureReason = 'ingest_validation';
-            if(result?.stop_reason==='max_turns'||/ingest_turn_limit|ingest incomplete: max_turns|ingest final receipt attempted more tools/.test(modelError)){failureReason='document_turns';fatal=false;}
-            else if(/ingest_budget_tokens/.test(modelError)){failureReason='document_tokens';fatal=false;}
-            else if(/ingest_output_truncated/.test(modelError)){failureReason='truncated';fatal=false;}
-            else if(/ingest receipt (?:missing|requires)|ingest invalid JSON|ingest_provider_parse/.test(modelError)){failureReason='parse';fatal=false;}
-            else if(/ingest_provider_(timeout|network|rate_limit|provider_5xx|user_stop|service_shutdown|aborted)/.test(modelError)){
-              failureReason=modelError.match(/ingest_provider_(timeout|network|rate_limit|provider_5xx|user_stop|service_shutdown|aborted)/)![1] as CaptureStopReason;
-              if(failureReason==='timeout'){fatal=false;pageStopped=false;}
-            }
-            else if(/ingest_provider_(auth|billing|model_not_found)/.test(modelError))failureReason='model_unavailable';
-            else if(!budgetStop&&/\bingest /.test(modelError))fatal=false;
+            const disposition = captureFailureDisposition({
+              status: job.status,
+              errorText: job.error_text ?? null,
+              stopReason: result?.stop_reason ?? null,
+              ingestVerified: result?.ingest_verified ?? null,
+              jobId: job.id,
+              priorFailures: pageFailures.length,
+            });
+            if (disposition.budgetStop) budgetStop = disposition.budgetStop;
+            failureStop = disposition.failureStop;
+            pageStopped = disposition.pageStopped;
+            modelError = disposition.message;
+            failureReason = disposition.reason;
             pageFailures.push({slug:chunk.slug,sourceId:chunk.sourceId,reason:modelError,stage:failureReason==='ingest_validation'?'entity_verification':'entity_ingest',kind:budgetStop??failureReason,input_tokens:usage.input,output_tokens:usage.output,input_limit:data.usage_limits!.input,output_limit:data.usage_limits!.output,model_output_limit:modelOutputLimit??null,turn_timeout_ms:turnTimeoutMs,job_timeout_ms:child.timeout_ms??configuredJobTimeout});
-            if(fatal&&!budgetStop){fatalFailure=true;if(!opts.signal?.aborted&&!fatalState.result){fatalState.result={reason:failureReason,message:modelError};phaseAbort.abort(new Error(modelError));}}
+            if(disposition.fatal&&!budgetStop){fatalFailure=true;if(!opts.signal?.aborted&&!fatalState.result){fatalState.result={reason:failureReason,message:modelError};phaseAbort.abort(new Error(modelError));}}
             reportProgress(undefined, chunk.slug);
             return;
           }
@@ -1143,12 +1205,22 @@ export async function runPhaseCaptureEntities(
       ? { isolated: 0, unlinkedMentions: 0,linked:0,isolatedRefs:new Set<string>(),missingPairs:new Set<string>() }
       : await countCaptureLinkGaps(engine, recognized,[...sourceRefs.values()]);
     const linkedEntities = gaps.linked;
+    let unresolvedLinks: Array<{ slug: string; targets: string[] }> = [];
+    let unlinkedPages: string[] = [];
+    if (!opts.dryRun && writtenSlugs.length) {
+      try {
+        const audit = await (await import('./dream-link-audit.ts')).auditDreamLinks(engine, opts.sourceId ?? 'default', writtenSlugs);
+        unresolvedLinks = audit.unresolved;
+        unlinkedPages = audit.unlinked;
+      } catch { /* a link check must not discard entities already written */ }
+    }
     const costCny = ollama ? 0 : (!usageMissing&&sawPricedUsage ? Number(knownCost.toFixed(6)) : null);
     const stopReason = (relationError?'relation_failure':budgetStop??(failureStop?failureReason:windowDeferred&&pagesRemaining>0?'window':'completed')) as CaptureStopReason;
+    const degradedOpen = failureStop && captureDegradedReason(failureReason) && !fatalFailure;
     const cleanStatus: PhaseResult['status'] = failureStop
-      ? (writtenSlugs.length > 0 || pagesProcessed > 0 ? 'warn' : 'fail')
+      ? (writtenSlugs.length > 0 || pagesProcessed > 0 || degradedOpen ? 'warn' : 'fail')
       : pagesRemaining>0 ? 'warn' : 'ok';
-    const status: PhaseResult['status'] = cleanStatus === 'ok' && (gaps.isolated > 0 || gaps.unlinkedMentions > 0 || unresolvedReferences.length>0)
+    const status: PhaseResult['status'] = cleanStatus === 'ok' && (gaps.isolated > 0 || gaps.unlinkedMentions > 0 || unresolvedReferences.length>0 || unresolvedLinks.length>0)
       ? 'warn'
       : cleanStatus;
     if(!relationError&&!opts.signal?.aborted)for(const manifest of manifestPages.values())if(manifest.eligible&&manifest.complete){
@@ -1224,10 +1296,12 @@ export async function runPhaseCaptureEntities(
       relation_slugs: [...relationSlugs].sort(),
       relations_refreshed: relationsRefreshed,
       written_slugs: writtenSlugs,
+      unresolved_links: unresolvedLinks,
+      new_orphans: unlinkedPages,
       source_slugs: [...sourceSlugs].sort(),
       skill: 'ingest',
       skills_dir: skillsDir,
-    }, failureStop
+    }, fatalFailure || status === 'fail'
       ? { class: stopReason === 'ingest_validation' ? 'IngestValidation' : stopReason === 'relation_failure' ? 'RelationReconciliation' : 'LLMError', code: stopReason, message: summary }
       : undefined);
   } finally {

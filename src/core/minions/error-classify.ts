@@ -109,7 +109,7 @@ export function classifyJobError(lastError: string | null | undefined): ErrorClu
   }
 
   // Local / control-plane signals.
-  if (msg.includes('timeout') || msg.includes('timed out') || msg.includes('aborted: timeout')) {
+  if (msg.includes('timeout') || msg.includes('timed out') || msg.includes('aborted: timeout') || msg.includes('小时上限')) {
     return 'timeout';
   }
   if (msg.includes('aborted: cancel') || msg.includes('signal aborted') || msg.includes('context canceled')) {

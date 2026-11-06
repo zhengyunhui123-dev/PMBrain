@@ -5,15 +5,22 @@ import { usesSyncFileQueue } from '../../../shared/task-progress.ts';
 
 export function maintenanceFailure(result: unknown): string | null {
   if (!result || typeof result !== 'object') return null;
-  const report = result as { status?: string; reason?: string; phases?: Array<{ status?: string; error?: { message?: string }; details?: Record<string,unknown> & { stop_reason?: string } }> };
+  const report = result as { status?: string; reason?: string; phases?: Array<{ phase?: string; status?: string; error?: { message?: string }; details?: Record<string,unknown> & { stop_reason?: string; page_failures?: Array<{ reason?: string }> } }> };
   if (report.status === 'skipped') return report.reason === 'cycle_already_running' ? '未执行：其他整理任务占用数据库，请排队后继续。' : `未执行：${report.reason ?? '整理被跳过'}`;
   const errorKeys=['ner_error','by_mention_error','relation_backfill_error'];
-  const failed = report.phases?.find(phase => phase.status === 'fail' || errorKeys.some(key=>!!phase.details?.[key]) || (phase.error?.message && !['tokens', 'cost'].includes(phase.details?.stop_reason ?? '')) || ['failure', 'ingest_validation', 'relation_failure', 'model_unavailable'].includes(phase.details?.stop_reason ?? ''));
+  const failed = report.phases?.find(phase => phase.status === 'fail' || errorKeys.some(key=>!!phase.details?.[key]) || (phase.error?.message && !['tokens', 'cost'].includes(phase.details?.stop_reason ?? '')) || ['failure', 'ingest_validation', 'relation_failure', 'model_unavailable', 'parse'].includes(phase.details?.stop_reason ?? '') || (phase.details?.page_failures?.length ?? 0) > 0);
   if(failed){
     const detailError=errorKeys.map(key=>failed.details?.[key]).find((value):value is string=>typeof value==='string');
-    return failed.error?.message??detailError??'整理验收失败，请查看任务详情。';
+    const pageFailure=failed.details?.page_failures?.find(item=>typeof item.reason==='string')?.reason;
+    const reason=failed.error?.message??detailError??pageFailure;
+    const label=failed.phase==='extract_facts'?'提炼事实失败':'实体摄入失败';
+    return reason ? `${label}：${reason}` : '整理验收失败，请查看任务详情。';
   }
   return report.status==='failed'?'整理执行失败，请查看任务详情。':null;
+}
+
+export function selectCaptureClaim(slugs: string[], allowedSlugs: string[] | undefined, owners: Record<string, number> | undefined, jobId: number): string[] {
+  return slugs.filter(slug => !allowedSlugs || allowedSlugs.includes(slug) || owners?.[slug] === jobId);
 }
 
 export async function claimMaintenanceCapture(engine: BrainEngine, id: number, token: string, sourceId: string, allowedSlugs?:string[]): Promise<string[] | undefined> {
@@ -27,7 +34,7 @@ export async function claimMaintenanceCapture(engine: BrainEngine, id: number, t
     const key = ENTITY_CAPTURE_PENDING_PREFIX + sourceId;
     const [pending] = await tx.executeRaw<{ value: string }>('SELECT value FROM config WHERE key=$1 FOR UPDATE', [key]);
     const request = pending ? JSON.parse(pending.value) as { slugs?: string[];owners?:Record<string,number> } : undefined;
-    const claimed=(request?.slugs??[]).filter(slug=>!allowedSlugs || allowedSlugs.includes(slug) || task.type==='import'&&request?.owners?.[slug]===id);
+    const claimed=selectCaptureClaim(request?.slugs??[], allowedSlugs, request?.owners, id);
     const slugs = [...new Set([...(checkpoint.captureRequests?.[sourceId] ?? []), ...claimed])];
     if (!slugs.length) return undefined;
     checkpoint.captureRequests = { ...checkpoint.captureRequests, [sourceId]: slugs };

@@ -1,7 +1,9 @@
 import { createHash } from 'node:crypto';
+import matter from 'gray-matter';
 import type { BrainEngine } from '../engine.ts';
 import type { ToolDef } from '../minions/types.ts';
 import { UnrecoverableError } from '../minions/types.ts';
+import { rewriteCapturedIdentity, uniqueNearEntity, type CaptureEntityBrief } from '../cycle/entity-capture-budget.ts';
 import type { EntityIngestContext } from './entity-ingest-workflow.ts';
 import type { CaptureReceipt } from './entity-capture-receipts.ts';
 import { withCaptureWrite } from './entity-capture-window.ts';
@@ -53,6 +55,22 @@ export function captureBatchTool(put: ToolDef, context: EntityIngestContext, che
       if(previous&&(previous.version!==1||previous.payload_hash!==hash))throw new UnrecoverableError('ingest batch replay input changed');
       const state:State=previous??{version:1,payload_hash:hash,completed:{}};
       const {captureReceiptProof,reuseCaptureReceipt}=await import('./entity-capture-receipts.ts');
+      let nearEntities: CaptureEntityBrief[] = [];
+      try {
+        const rows = await ctx.engine.executeRaw<{ slug: string; source_id: string; type: string; title: string | null; aliases: unknown }>(
+          `SELECT p.slug, p.source_id, p.type, p.title,
+             COALESCE((SELECT jsonb_agg(a.alias_text) FROM page_aliases a WHERE a.slug=p.slug AND a.source_id=p.source_id), p.frontmatter->'aliases') AS aliases
+             FROM pages p WHERE p.deleted_at IS NULL AND p.type = ANY($2::text[]) AND p.source_id = ANY($1::text[])`,
+          [[context.sourceId, 'default'], ['company', 'organization']],
+        );
+        nearEntities = rows.map(row => ({
+          slug: row.slug,
+          sourceId: row.source_id,
+          type: row.type,
+          title: row.title?.trim() || row.slug,
+          aliases: Array.isArray(row.aliases) ? row.aliases.filter((alias): alias is string => typeof alias === 'string') : [],
+        }));
+      } catch { nearEntities = []; }
       for(const [index,entity] of input.entities.entries()){
         ctx.signal?.throwIfAborted();
         const stored=state.completed[String(index)];
@@ -75,7 +93,20 @@ export function captureBatchTool(put: ToolDef, context: EntityIngestContext, che
           if(updated.length!==1)throw new UnrecoverableError('ingest batch commit receipt lost its execution identity');
           state.completed[String(index)]=step;
         };
-        const output=await put.execute(entity,{...ctx,persistCommit:record});
+        let write=entity;
+        try {
+          const colon=entity.slug.indexOf(':');
+          const sourceId=colon<0?context.sourceId:entity.slug.slice(0,colon);
+          const slug=colon<0?entity.slug:entity.slug.slice(colon+1);
+          if(!(await ctx.engine.getPage(slug,{sourceId}))){
+            const parsed=matter(entity.content);
+            const title=String(parsed.data?.title??'');
+            const type=String(parsed.data?.type??'');
+            const near=uniqueNearEntity(title,type,nearEntities);
+            if(near)write={slug:`${near.sourceId}:${near.slug}`,content:rewriteCapturedIdentity(entity.content,near.title,title)};
+          }
+        } catch { write=entity; }
+        const output=await put.execute(write,{...ctx,persistCommit:record});
         if(!state.completed[String(index)])await ctx.engine.transaction(tx=>record(tx,output));
       }
       for(const [index,entry] of (input.timeline_entries??[]).entries()){

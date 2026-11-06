@@ -11,6 +11,7 @@ import { withSqlCancellation } from './sql-cancellation.ts';
 import { TaskResourceGuard, assertImportFileSize } from './resource-guard.ts';
 import { leaseRenewal } from '../database/lease-renewal.ts';
 import { recordSyncedGitFile } from './synced-git.ts';
+import { isSourceGitRepository } from '../../core/source-git.ts';
 import { withDeadline } from '../deadline.ts';
 
 type RpcMessage = Extract<TaskWorkerMessage, { type: 'rpc' }>;
@@ -41,6 +42,7 @@ export class TaskEngineHost {
   private checkedPages = new Map<number, Set<string>>();
   private abort = new AbortController();
   private relationPhase = 'sync';
+  private syncFileIsGitRepository = false;
   setRelationPhase(phase: string) { this.relationPhase = phase.replace(/^cycle\./, ''); }
 
   constructor(
@@ -53,7 +55,8 @@ export class TaskEngineHost {
     private resources=new TaskResourceGuard(),
     private auditJobId = jobId,
     private operationGate?: (engine:BrainEngine)=>Promise<void>,
-  ) {this.cleanupOwner=owner;this.owner=withSqlCancellation(owner,this.abort.signal);}
+    private skipUnchangedGitRecords = false,
+  ) {this.cleanupOwner=owner;this.owner=withSqlCancellation(owner,this.abort.signal);this.syncFileIsGitRepository=Boolean(syncFile?.sourceRoot&&isSourceGitRepository(syncFile.sourceRoot));}
 
   ownsLockedTransaction(): boolean {
     return !this.closed && [...this.scopes.values()].some(scope => scope.transactional);
@@ -194,7 +197,7 @@ export class TaskEngineHost {
         const manifest=await readDocumentChunkManifest(scope.engine,page.id);
         receipt.chunks=manifest.chunks;receipt.chunkHash=manifest.chunk_hash;
         if(this.syncFile)await (scope.engine as BrainEngine).setConfig(syncFileManifestKey(this.syncFile),JSON.stringify(syncFileManifest(this.syncFile,receipt.slug,receipt.pageHash,receipt.chunks,false,receipt.chunkHash)));
-        if(this.syncFile)await recordSyncedGitFile(scope.engine,this.auditJobId,receipt.sourceId,{path:this.syncFile.relativePath,hash:this.syncFile.hash});
+        if(this.syncFile&&this.syncFileIsGitRepository&&!this.skipUnchangedGitRecords)await recordSyncedGitFile(scope.engine,this.auditJobId,receipt.sourceId,{path:this.syncFile.relativePath,hash:this.syncFile.hash});
         const rows = await scope.engine.executeRaw(`UPDATE minion_jobs SET result = $3::jsonb, updated_at = now()
           WHERE id = $1 AND status = 'active' AND lock_token = $2 RETURNING id`, [this.jobId, this.token, JSON.stringify(receipt)]);
         if (!rows.length) throw new Error('文件任务已停止或租约失效');
@@ -290,9 +293,15 @@ export class TaskEngineHost {
         throw error;
       }
       if (method === 'softDeletePages') {
-        const deleted = new Set(result as string[]);
-        for (const page of deletedPages) if (deleted.has(page.slug)) await recordSyncedGitFile(target, this.auditJobId,
-          (args[1] as { sourceId: string }).sourceId, { path: page.source_path, deleted: true });
+        if(deletedPages.length){
+          const sourceId=(args[1] as { sourceId: string }).sourceId;
+          const [source]=await target.executeRaw<{local_path:string|null}>('SELECT local_path FROM sources WHERE id=$1',[sourceId]);
+          if(source?.local_path&&isSourceGitRepository(source.local_path)){
+            const deleted = new Set(result as string[]);
+            for (const page of deletedPages) if (deleted.has(page.slug)) await recordSyncedGitFile(target, this.auditJobId,
+              sourceId, { path: page.source_path, deleted: true },this.skipUnchangedGitRecords);
+          }
+        }
       }
       if (method === 'executeRaw' && /INSERT\s+INTO\s+gbrain_cycle_locks/i.test(String(args[0]))) {
         for (const row of result as Array<{ id: string }>) this.cycleLocks.add(row.id);

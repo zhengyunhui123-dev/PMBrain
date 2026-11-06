@@ -118,7 +118,7 @@ export function sanitizeStartupFailureMessage(message: string): string {
   }
   if (successfulBackup) {
     return (
-      '升级后首次启动未完成。升级前冷备已保留，配置与知识库安全。' +
+      '升级后首次启动未完成。若已保存升级前备份，配置与知识库仍在。' +
       'PMBrain 会自动重试本地服务；若仍失败，请点击「重新启动服务」。'
     );
   }

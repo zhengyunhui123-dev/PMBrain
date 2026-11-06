@@ -3,6 +3,7 @@ import {readPhaseBudget} from '../core/cycle/phase-budget';
 import { parseStandingQuestionLines } from '../core/cycle/standing-questions.ts';
 import { readTaskRelations } from '../product/tasks/relations.ts';
 import { DEFAULT_PRODUCT_TASK_TIMEOUT_MS, DREAM_TASK_TIMEOUT_KEY, parseTaskTimeout } from '../product/tasks/timeout.ts';
+import { IMAGE_OCR_COST_CAP_KEY, IMAGE_OCR_ENABLED_KEY, IMAGE_OCR_MAX_IMAGES_KEY, imageOcrSwitchOn, parseImageOcrCostCap, parseImageOcrMaxImages } from '../core/pmbrain-adapters/image-ocr-policy.ts';
 import { getAdminKnowledgeGraphEdge } from './admin-knowledge-graph.ts';
 
 import express from 'express';
@@ -1076,6 +1077,9 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
       verdictTimeoutMs:Number(await engine.getConfig('dream.synthesize.verdict_timeout_ms')??120_000),
       timeoutMs,
       effectiveTimeoutMs: timeoutMs ?? DEFAULT_PRODUCT_TASK_TIMEOUT_MS,
+      imageOcrEnabled: imageOcrSwitchOn(await engine.getConfig(IMAGE_OCR_ENABLED_KEY)),
+      imageOcrMaxImages: parseImageOcrMaxImages(await engine.getConfig(IMAGE_OCR_MAX_IMAGES_KEY)),
+      imageOcrCostCapCny: parseImageOcrCostCap(await engine.getConfig(IMAGE_OCR_COST_CAP_KEY)),
       defaultBrainDir: defaultBrainDir || null,
       resolvedOutputDir,
       directoryExists: resolvedOutputDir ? existsSync(resolvedOutputDir) : false,
@@ -1176,6 +1180,12 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
     if(standingQuestionLines===null){res.status(400).json({error:'invalid_standing_questions'});return;}
     const timeoutMs = req.body?.timeoutMs;
     if (timeoutMs !== undefined && timeoutMs !== null && (typeof timeoutMs !== 'number' || parseTaskTimeout(timeoutMs) === null)) { res.status(400).json({error:'invalid_dream_task_timeout'}); return; }
+    const imageOcrEnabled = req.body?.imageOcrEnabled;
+    const imageOcrMaxImages = req.body?.imageOcrMaxImages;
+    const imageOcrCostCapCny = req.body?.imageOcrCostCapCny;
+    if (imageOcrEnabled !== undefined && typeof imageOcrEnabled !== 'boolean') { res.status(400).json({ error: 'image_ocr_enabled_must_be_boolean' }); return; }
+    if (imageOcrMaxImages !== undefined && parseImageOcrMaxImages(imageOcrMaxImages) !== imageOcrMaxImages) { res.status(400).json({ error: 'invalid_image_ocr_max_images' }); return; }
+    if (imageOcrCostCapCny !== undefined && parseImageOcrCostCap(imageOcrCostCapCny) !== imageOcrCostCapCny) { res.status(400).json({ error: 'invalid_image_ocr_cost_cap' }); return; }
     if (autoGitCommit !== undefined && typeof autoGitCommit !== 'boolean') { res.status(400).json({error:'auto_git_commit_must_be_boolean'}); return; }
     if (!rawOutputDir || rawOutputDir.length > 1024 || rawOutputDir.includes('\0')) {
       res.status(400).json({ error: 'invalid_dream_output_dir' });
@@ -1224,6 +1234,9 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
           ...(usdToCny!==undefined?[tx.setConfig('pricing.usd_to_cny',String(usdToCny))]:[]),
           ...(verdictTimeoutMs!==undefined?[tx.setConfig('dream.synthesize.verdict_timeout_ms',String(verdictTimeoutMs))]:[]),
           ...(timeoutMs !== undefined ? [tx.setConfig(DREAM_TASK_TIMEOUT_KEY,timeoutMs === null ? '' : String(timeoutMs))] : []),
+          ...(typeof imageOcrEnabled === 'boolean' ? [tx.setConfig(IMAGE_OCR_ENABLED_KEY, imageOcrEnabled ? 'true' : 'false')] : []),
+          ...(imageOcrMaxImages !== undefined ? [tx.setConfig(IMAGE_OCR_MAX_IMAGES_KEY, String(imageOcrMaxImages))] : []),
+          ...(imageOcrCostCapCny !== undefined ? [tx.setConfig(IMAGE_OCR_COST_CAP_KEY, String(imageOcrCostCapCny))] : []),
         ]);
       });
       sendAdminContract(res, DreamSettingsResponseSchema, await dreamSettingsView({ outputDir, dualWrite, includeUncommitted, autoGitCommit }));
@@ -1680,6 +1693,17 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
       return;
     }
     res.json(run);
+  });
+
+  app.post('/admin/api/console/sleep', requireAdmin, express.json({ limit: '4kb' }), async (req: Request, res: Response) => {
+    const action = req.body?.action;
+    if (action !== 'suspend' && action !== 'resume') { res.status(400).json({ error: 'invalid_sleep_action' }); return; }
+    try {
+      const count = action === 'suspend' ? await productTasks.pauseForSleep() : await productTasks.resumeAfterSleep();
+      res.status(202).json({ status: action === 'suspend' ? 'paused' : 'resumed', count });
+    } catch (e) {
+      res.status(500).json({ error: e instanceof Error ? e.message : 'sleep_transition_failed' });
+    }
   });
 
   app.post('/admin/api/console/resource-stop',requireAdmin,express.json({limit:'4kb'}),async(req:Request,res:Response)=>{

@@ -16,6 +16,7 @@
 // link goes in as a different row with a different link_type.
 
 import type { BrainEngine } from './engine.ts';
+import {isGinCorruptionError,GinIndexUnusableError} from './pglite-gin-repair.ts';
 import type { LinkBatchInput } from './engine.ts';
 import {ingestMentionOrigin} from './pmbrain-adapters/ingest-provenance.ts';
 import { buildGazetteer, findMentionedEntities, type Gazetteer } from './by-mention.ts';
@@ -26,7 +27,10 @@ import { inferLinkType } from './link-extraction.ts';
 import type { PageType } from './types.ts';
 
 export interface ExtractNerOpts {
+  onPageError?: (slug: string, sourceId: string, error: unknown) => void;
   signal?: AbortSignal;
+  excludePathPattern?: string;
+  includeProjectTargets?: boolean;
   yieldDuringPhase?: () => Promise<void>;
   /** When true: enumerate but don't write. */
   dryRun?: boolean;
@@ -158,10 +162,16 @@ export async function extractNerLinks(
   // Pre-fetch target entity types so inferLinkType has the type signal
   // without an N+1 getPage round-trip. Pulls the slug→type map from
   // listAllPageRefs + a single listPages projection.
-  const targetTypeMap = await buildTargetTypeMap(engine);
+  const targetTypeMap = await buildTargetTypeMap(engine, opts.includeProjectTargets === true);
 
   const slugFilter = opts.slugs ? new Set(opts.slugs) : null;
-  const allRefs = (opts.sourceIdFilter
+  const allRefs = (opts.slugs && opts.excludePathPattern
+    ? await engine.executeRaw<{ slug: string; source_id: string }>(
+      `SELECT slug, source_id FROM pages WHERE deleted_at IS NULL AND slug = ANY($1::text[])
+       AND ($2::text IS NULL OR source_id = $2)
+       AND ($3::text IS NULL OR (slug !~* $3 AND replace(COALESCE(source_path, ''), chr(92), '/') !~* $3))`,
+      [opts.slugs, opts.sourceIdFilter ?? null, opts.excludePathPattern ?? null])
+    : opts.sourceIdFilter
     ? (await engine.listAllPageRefs()).filter((r) => r.source_id === opts.sourceIdFilter)
     : await engine.listAllPageRefs()
   ).filter((ref) => !slugFilter || slugFilter.has(ref.slug));
@@ -187,6 +197,8 @@ export async function extractNerLinks(
     opts.signal?.throwIfAborted();
     if (processed % 25 === 0) await opts.yieldDuringPhase?.();
     opts.signal?.throwIfAborted();
+    const before=processed;
+    try {
     const page = await engine.getPage(slug, { sourceId: source_id });
     if (!page) continue;
     if (opts.typeFilter && page.type !== opts.typeFilter) continue;
@@ -209,6 +221,7 @@ export async function extractNerLinks(
     if (mentions.length === 0) continue;
 
     for (const m of mentions) {
+      if (opts.excludePathPattern && new RegExp(opts.excludePathPattern, 'i').test(m.slug)) continue;
       const targetType = targetTypeMap.get(`${m.source_id}::${m.slug}`);
       const context = getContextWindow(body, m.offset, m.name.length);
       const verb = inferNerLinkType(pack.manifest, targetType, context, page.type);
@@ -227,6 +240,11 @@ export async function extractNerLinks(
       });
       if (batch.length >= BATCH_SIZE) await flush();
     }
+    if(opts.onPageError)await flush();
+    }catch(error){
+      opts.signal?.throwIfAborted();if(!opts.onPageError||isGinCorruptionError(error)||error instanceof GinIndexUnusableError)throw error;
+      batch.length=0;processed=before;opts.onPageError(slug,source_id,error);
+    }
   }
 
   await flush();
@@ -238,12 +256,12 @@ export async function extractNerLinks(
  * One round-trip via listPages. Targets cached at extraction-start so
  * inferNerLinkType doesn't pay an N+1 cost per mention.
  */
-async function buildTargetTypeMap(engine: BrainEngine): Promise<Map<string, string>> {
+async function buildTargetTypeMap(engine: BrainEngine, includeProjectTargets: boolean): Promise<Map<string, string>> {
   const map = new Map<string, string>();
   const result = await engine.executeRaw<{ slug: string; source_id: string; type: string }>(
     `SELECT slug, source_id, type FROM pages
-       WHERE type IN ('person', 'company', 'organization', 'entity')
-         AND deleted_at IS NULL`,
+       WHERE (type IN ('person', 'company', 'organization', 'entity') OR ($1::boolean AND type = 'project'))
+         AND deleted_at IS NULL`, [includeProjectTargets],
   );
   for (const row of result) {
     map.set(`${row.source_id}::${row.slug}`, row.type);

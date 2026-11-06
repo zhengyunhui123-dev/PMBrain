@@ -11,6 +11,7 @@ import {configPath} from '../src/core/config';
 import {initializeSourceGit,commitSourceGit} from '../src/core/source-git';
 import {resetPgliteState} from './helpers/reset-pglite';
 import {assertSafeE2eDatabaseUrl} from './helpers/db-guard';
+import {idleBackground} from './helpers/background-resources';
 
 const envKeys=['PMBRAIN_HOME','GBRAIN_HOME','DATABASE_URL','PMBRAIN_DATABASE_URL','GBRAIN_DATABASE_URL','PMBRAIN_EMBEDDING_MODEL','GBRAIN_EMBEDDING_MODEL','PMBRAIN_EMBEDDING_DIMENSIONS','GBRAIN_EMBEDDING_DIMENSIONS'];
 const previous=Object.fromEntries(envKeys.map(key=>[key,process.env[key]]));
@@ -50,7 +51,7 @@ beforeEach(async()=>{
   await engine.setConfig('pricing.overrides',JSON.stringify({'mimo:mimo-v2.6-flash':{input:1,output:1}}));
   await engine.executeRaw("UPDATE sources SET local_path=$1,config=config-'remote_url' WHERE id='default'",[sourceRoot]);
   for(const [key,value]of Object.entries({'dream.knowledge.enabled':'true','dream.knowledge.since':'2026-10-20T09:28:19.328Z','dream.knowledge.use_ordinary_model':'true','dream.synthesize.conversation_pages':'true','dream.synthesize.enabled':'true','dream.synthesize.dual_write':'false','dream.entity_capture.enabled':'false','sync.auto_git_commit':'false','sync.include_working_tree':'true','sync.repo_path':sourceRoot,'models.default':'mimo:mimo-v2.6-flash'}))await engine.setConfig(key,value);
-  runtime=new ProductTaskRuntime(engine);await runtime.start();
+  runtime=new ProductTaskRuntime(engine,{background:idleBackground});await runtime.start();
 },60_000);
 afterEach(async()=>{await runtime?.close();},60_000);
 afterAll(async()=>{

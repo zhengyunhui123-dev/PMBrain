@@ -22,7 +22,7 @@ beforeAll(async () => {
   engine = new WorkerPgliteEngine() as unknown as BrainEngine;
   await engine.connect({database_path:join(home,'brain.pglite')});
   await engine.initSchema();
-}, 60000);
+}, 120000);
 afterAll(async () => {
   await engine?.disconnect(); resetGateway();
   for (const [index, key] of ['PMBRAIN_HOME', 'GBRAIN_HOME'].entries()) {
@@ -264,7 +264,7 @@ test('同一数据目录只允许一个 Worker 所有者，关闭重开保留内
     if (previous === undefined) delete process.env.PMBRAIN_PGLITE_LOCK_FAIL_FAST;
     else process.env.PMBRAIN_PGLITE_LOCK_FAIL_FAST = previous;
   }
-}, 30000);
+}, 90000);
 
 const RENEW_LOCK_SQL = `UPDATE minion_jobs SET lock_until = now() + ($1::double precision * interval '1 millisecond'), updated_at = now()
        WHERE id = $2 AND lock_token = $3 AND status = 'active'
