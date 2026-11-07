@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdir, stat, unlink, rmdir, lstat, realpath } from 'node:fs/promises';
+import { mkdir, stat, unlink, rmdir, lstat, realpath, readdir } from 'node:fs/promises';
 import { basename, join, dirname, resolve, sep } from 'node:path';
 import {setTimeout as waitForCleanup} from 'node:timers/promises';
 import type { BrainEngine } from '../../core/engine.ts';
@@ -342,29 +342,36 @@ export class SyncFileQueue {
   }
 
   async cleanupCompletedSnapshots() {
+    const snapshots = await this.existingSnapshots();
+    if (!snapshots.size) return;
     let after = 0;
     while (true) {
       const rows = await this.engine.executeRaw<{id:number;session_id:string;path:string}>(`SELECT id,data->>'sessionId' AS session_id,data->'task'->'input'->>'path' AS path
         FROM minion_jobs WHERE queue=$1 AND id>$2 AND status='completed' AND result->>'status' IN ('imported','skipped')
-        AND data->>'sessionId' IS NOT NULL AND data->'task'->'input'->>'path' IS NOT NULL ORDER BY id LIMIT 200`, [SYNC_FILE_QUEUE,after]);
-      for (const row of rows) await this.removeSnapshot(Number(row.session_id),row.path);
+        AND data->>'sessionId'=ANY($3::text[]) AND data->'task'->'input'->>'path' IS NOT NULL ORDER BY id LIMIT 200`, [SYNC_FILE_QUEUE,after,[...snapshots.keys()]]);
+      for (const row of rows) {
+        if (snapshots.get(row.session_id)?.has(resolve(row.path))) await this.removeSnapshot(Number(row.session_id),row.path);
+      }
       if (rows.length < 200) return;
       after = rows.at(-1)!.id;
     }
   }
 
   async cleanupStoppedSnapshots(sessionId?:number) {
+    const snapshots = await this.existingSnapshots(sessionId);
+    if (!snapshots.size) return;
     let after=0;
     while(true){
       const rows=await this.engine.executeRaw<{id:number;session_id:string;input:SyncFileInput}>(`SELECT child.id,child.data->>'sessionId' AS session_id,child.data->'task'->'input' AS input
         FROM minion_jobs child JOIN minion_jobs parent ON parent.id=child.parent_job_id
-        WHERE child.queue=$1 AND child.id>$2 AND ($3::bigint IS NULL OR parent.id=$3)
+        WHERE child.queue=$1 AND child.id>$2 AND parent.id=ANY($3::int[])
         AND parent.queue='pmbrain-product' AND parent.data->'task'->>'type'='dream' AND (parent.data->'task'->'input'->>'preset'='quick' OR parent.data->>'fileSession'='true')
         AND child.status IN ('paused','cancelled','dead','failed') AND parent.status IN ('cancelled','paused','dead','failed','completed')
         AND (child.data->'task'->'input'->>'originalPath' IS NOT NULL OR child.data->'task'->'input'->>'sourceRoot' IS NOT NULL)
-        ORDER BY child.id LIMIT 200`,[SYNC_FILE_QUEUE,after,sessionId??null]);
+        ORDER BY child.id LIMIT 200`,[SYNC_FILE_QUEUE,after,[...snapshots.keys()].map(Number)]);
       for(const row of rows){
         const input=row.input;
+        if (!input.path || !snapshots.get(row.session_id)?.has(resolve(input.path))) continue;
         const snapshot=await stat(input.path).catch(error=>{if(error.code==='ENOENT')return null;throw error;});
         if(!snapshot)continue;
         let originalPath=input.originalPath;
@@ -399,6 +406,34 @@ export class SyncFileQueue {
       if(rows.length<200)return;
       after=rows.at(-1)!.id;
     }
+  }
+
+  private async existingSnapshots(sessionId?: number): Promise<Map<string, Set<string>>> {
+    const root = resolve(gbrainPath('task-artifacts'), 'sync-files');
+    const snapshots = new Map<string, Set<string>>();
+    const entries = (dir: string) => readdir(dir, { withFileTypes: true }).catch(error => {
+      if (error.code === 'ENOENT') return [];
+      throw error;
+    });
+    const validId = (name: string) => /^[1-9]\d*$/.test(name) && Number(name) <= 2147483647;
+    const collect = async (dir: string, id: string) => {
+      if (sessionId !== undefined && id !== String(sessionId)) return;
+      for (const file of await entries(dir)) {
+        if (!file.isFile() || !/^[a-f0-9]{64}-/.test(file.name)) continue;
+        const paths = snapshots.get(id) ?? new Set<string>();
+        paths.add(join(dir, file.name));
+        snapshots.set(id, paths);
+      }
+    };
+    for (const entry of await entries(root)) {
+      if (!entry.isDirectory()) continue;
+      const dir = join(root, entry.name);
+      if (validId(entry.name)) await collect(dir, entry.name);
+      else for (const session of await entries(dir)) {
+        if (session.isDirectory() && validId(session.name)) await collect(join(dir, session.name), session.name);
+      }
+    }
+    return snapshots;
   }
 
   private snapshotPath(sessionId:number,value:string){

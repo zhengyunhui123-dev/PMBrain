@@ -1,4 +1,4 @@
-import {afterAll,beforeAll,beforeEach,expect,test} from 'bun:test';
+import {afterAll,beforeAll,beforeEach,expect,spyOn,test} from 'bun:test';
 import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,copyFileSync,statSync,utimesSync,rmSync} from 'node:fs';
 import {join,resolve,sep} from 'node:path';
 import {tmpdir} from 'node:os';
@@ -17,6 +17,8 @@ import {assertSafeE2eDatabaseUrl} from './helpers/db-guard';
 import {createDocumentOcr} from '../src/core/document/ocr-cache';
 import {parseDocument} from '../src/core/document/document-import';
 import {renderStructuredDocument} from '../src/core/document/markdown-renderer';
+import * as documentSnapshot from '../src/core/document/file-snapshot';
+import {streamFileHash} from '../src/product/tasks/resource-guard';
 let root:string,engine:BrainEngine,calls=0,failAt=0,model='mimo:mimo-v2.6-flash',onOcr:(()=>Promise<void>)|undefined;
 const keys=['PMBRAIN_HOME','GBRAIN_HOME','DATABASE_URL','GBRAIN_DATABASE_URL','PMBRAIN_DATABASE_URL'];
 const saved=Object.fromEntries(keys.map(k=>[k,process.env[k]]));
@@ -57,6 +59,36 @@ test('导入中修改文件拒绝提交不匹配正文，原文件保留，重�
   const current=readFileSync(f.path);const next=await importOfficeFile(engine,f.path,'report.docx',f.options);
   const page=await engine.getPage(next.slug,{sourceId:f.sourceId});expect(page!.compiled_truth).toContain('OTHER version');
   expect(page!.frontmatter.raw_sha256).toBe(createHash('sha256').update(current).digest('hex'));expect(readFileSync(f.path).equals(current)).toBe(true);
+},60_000);
+test('任务指纹用于 Office 查重，算完指纹后发生的同大小同时间修改仍被拒绝',async()=>{
+  const f=await fixture('shared-hash','FIRST content',0);
+  const fixed=new Date('2026-01-01T00:00:00Z');
+  utimesSync(f.path,fixed,fixed);
+  await importOfficeFile(engine,f.path,'report.docx',{...f.options,documentOcr:false});
+  const original=statSync(f.path);
+  const options={path:f.dir,noEmbed:true,fresh:true,includeOffice:true,documentOcr:false};
+  const run=(beforeFile:(path:string)=>Promise<{rawFileHash:string}>)=>runStructuredImport(engine,options,{
+    sourceId:f.sourceId,runtime:{signal:new AbortController().signal,beforeFile,onFile:async()=>{}},
+  });
+  const hashReads=spyOn(documentSnapshot,'documentFileHash');
+  try{
+    const unchanged=await run(async path=>({rawFileHash:await streamFileHash(path)}));
+    expect(unchanged.unchanged).toBe(1);
+    expect(hashReads).toHaveBeenCalledTimes(1);
+  }finally{hashReads.mockRestore();}
+  const changed=await run(async path=>{
+    const rawFileHash=await streamFileHash(path);
+    await docx(path,'OTHER content',0);
+    utimesSync(path,fixed,fixed);
+    expect(statSync(path).size).toBe(original.size);
+    expect(statSync(path).mtimeMs).toBe(original.mtimeMs);
+    return {rawFileHash};
+  });
+  expect(changed.errors).toBe(1);
+  expect(changed.failures[0]?.error).toContain('资料在导入期间已修改');
+  expect((await engine.getPage('report.docx',{sourceId:f.sourceId}))?.compiled_truth).toContain('FIRST content');
+  expect((await run(async path=>({rawFileHash:await streamFileHash(path)}))).imported).toBe(1);
+  expect((await engine.getPage('report.docx',{sourceId:f.sourceId}))?.compiled_truth).toContain('OTHER content');
 },60_000);
 test('已有文件改成另一份已存内容时仍更新原路径，跨 Source 不合并',async()=>{
   const f=await fixture('duplicate','Document AAA',0);const other=join(f.dir,'second.docx');await docx(other,'Document BBB',0);

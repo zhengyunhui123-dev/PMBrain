@@ -807,6 +807,8 @@ export async function queryAgentClientSpend(engine: BrainEngine): Promise<AgentC
 }
 
 export async function runServeHttp(engine: BrainEngine, options: ServeHttpOptions) {
+  const httpPreparationStarted = performance.now();
+  console.error(`[serve] database ready; preparing HTTP service (pid=${process.pid})`);
   const { port, tokenTtl, enableDcr, publicUrl, logFullParams } = options;
   // v0.34.1 (#864, D11): default bind flipped from 0.0.0.0 to 127.0.0.1.
   // gbrain's primary use case is a personal-knowledge brain on a laptop;
@@ -2983,7 +2985,10 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
 
   let httpServer: HttpServer;
   try {
+    const taskRecoveryStarted = performance.now();
+    console.error(`[serve] recovering background tasks; HTTP preparation took ${Math.round(taskRecoveryStarted - httpPreparationStarted)} ms`);
     await productTasks.start();
+    console.error(`[serve] background tasks ready in ${Math.round(performance.now() - taskRecoveryStarted)} ms; binding HTTP service`);
     httpServer = await listenHttpServer(app, port, bind, () => {
     console.error(`
 ╔══════════════════════════════════════════════════════╗

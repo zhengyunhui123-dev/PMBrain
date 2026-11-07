@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { appendFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { WorkerPgliteEngine } from '../src/product/database/worker-engine';
@@ -9,6 +9,8 @@ import { resetPgliteState } from './helpers/reset-pglite';
 import { assertSafeE2eDatabaseUrl } from './helpers/db-guard';
 import { LATEST_VERSION } from '../src/core/migrate';
 import { ProductTaskRuntime } from '../src/product/tasks/runtime';
+import { loadSearchOptimize } from '../src/product/tasks/search-optimize-store';
+import { taskArtifactPath } from '../src/product/tasks/checkpoint';
 import { configPath } from '../src/core/config';
 import { reloadLiveGateway } from '../src/core/ai/reload-live-gateway';
 import { resetGateway } from '../src/core/ai/gateway';
@@ -97,7 +99,8 @@ test('忙时导入先成功，空闲才向量化；慢模型请求不占用数�
     writeFileSync(path, '# 第一份\n\n原始资料内容需要保留。');
     const first = await runtime.submitImport({ path });
     const imported = await until(() => runtime.getRun(first.id), row => row?.status === 'completed', '导入未先成功');
-    expect(imported!.result).toMatchObject({ searchOptimizeAccepted: true });
+    expect(imported!.result).toMatchObject({ vectorsPending: true });
+    expect(imported!.result).not.toHaveProperty('searchOptimizeAccepted');
     const queued = await until(() => runtime.listRuns(), rows => rows.some(row => row.searchOptimize && row.product?.background?.mode === 'waiting'), '没有等待空闲状态');
     const vectorTask = queued.find(row => row.searchOptimize)!;
     expect(vectorTask.status).toBe('queued');
@@ -116,6 +119,7 @@ test('忙时导入先成功，空闲才向量化；慢模型请求不占用数�
       expect(completed!.status).toBe('completed');
       expect((await runtime.listRuns()).filter(row => row.searchOptimize && ['queued', 'running'].includes(row.status)).map(row => row.id)).toEqual([vectorTask.id]);
       expect((await engine.getPage('second'))?.compiled_truth).toContain('慢向量模型');
+      await until(() => loadSearchOptimize(engine), view => view.done + view.pending === 2, '第二份资料未交接给仍在执行的后台任务');
     } finally { state.delay = undefined; release(); await runtime.adjustResourcePressure(false); }
     await until(() => runtime.listRuns(), rows => rows.some(row => row.searchOptimize && row.status === 'completed'), '没有自动完成向量化');
     for (const slug of ['first', 'second']) {
@@ -153,7 +157,7 @@ test('手动暂停跨重启保留，新导入仍成功但不解除暂停，继�
     writeFileSync(join(directory, 'before.md'), '# 暂停前\n\n暂停前导入的资料。');
     const first = await ctx.runtime.submitImport({ path: join(directory, 'before.md') });
     await until(() => ctx.runtime.getRun(first.id), row => row?.status === 'completed', '导入未完成');
-    const vectorRun = (await ctx.runtime.listRuns()).find(row => row.searchOptimize)!;
+    const vectorRun = (await until(() => ctx.runtime.listRuns(), rows => rows.some(row => row.searchOptimize), '没有后台向量任务')).find(row => row.searchOptimize)!;
     await ctx.runtime.pauseSearchOptimize(vectorRun.id);
     await ctx.restart();
     state.cpu = 0.1; state.now += 20000;
@@ -162,6 +166,7 @@ test('手动暂停跨重启保留，新导入仍成功但不解除暂停，继�
     await until(() => ctx.runtime.getRun(second.id), row => row?.status === 'completed', '暂停不应阻止导入');
     expect((await ctx.runtime.getRun(vectorRun.id))?.status).toBe('paused');
     expect(calls).toHaveLength(0);
+    await until(() => loadSearchOptimize(engine), view => view.done + view.pending === 2, '新资料未加入已暂停的后台队列');
     await ctx.runtime.continueSearchOptimize(vectorRun.id);
     await until(() => ctx.runtime.getRun(vectorRun.id), row => row?.status === 'completed', '手动继续没有完成');
     await ctx.restart();
@@ -218,15 +223,46 @@ test('旧版数据库中断的导入从保存点继续，停止过的任务不�
     writeFileSync(join(directory, 'recovered.md'), '# 已保存\n\n数据库恢复后不用重新导入。');
     const imported = await ctx.runtime.submitImport({ path: join(directory, 'recovered.md') });
     await until(() => ctx.runtime.getRun(imported.id), row => row?.status === 'completed', '初次导入未完成');
+    appendFileSync(taskArtifactPath(Number(imported.id.slice(5))), '{"path":');
     await engine.executeRaw(`UPDATE minion_jobs SET status='paused',result=NULL,error_text='数据库执行曾中断，请查看已完成资料后手动继续。' WHERE id=$1`, [Number(imported.id.slice(5))]);
     await ctx.restart();
     const recovered = await until(() => ctx.runtime.getRun(imported.id), row => row?.status === 'completed', '没有自动继续被数据库恢复波及的导入');
     expect(recovered!.result).toMatchObject({ resumedFiles: 1 });
     expect((await engine.listPages({ sourceId: 'default', limit: 100 })).filter(page => page.slug === 'recovered')).toHaveLength(1);
-    const vectors = (await ctx.runtime.listRuns()).find(row => row.searchOptimize)!;
+    const vectors = (await until(() => ctx.runtime.listRuns(), rows => rows.some(row => row.searchOptimize), '没有后台向量任务')).find(row => row.searchOptimize)!;
     await ctx.runtime.pauseSearchOptimize(vectors.id);
     await ctx.restart();
     expect((await ctx.runtime.getRun(vectors.id))!.status).toBe('paused');
+  });
+}, 90000);
+
+test('重启补交停止前已入库的资料，仅关键词的资料仍不生成向量', async () => {
+  await fixture(async ctx => {
+    const { engine, directory, calls, state } = ctx;
+    state.cpu = 0.95;
+    const keptPath = join(directory, 'saved-before-stop.md');
+    const keywordPath = join(directory, 'keyword-only.md');
+    writeFileSync(keptPath, '# 已落库\n\n重启继续交给后台的正文。');
+    writeFileSync(keywordPath, '# 仅关键词\n\n不会被后台自动领走。');
+    const kept = await ctx.runtime.submitImport({ path: keptPath, noEmbed: true });
+    await until(() => ctx.runtime.getRun(kept.id), row => row?.status === 'completed', '已落库资料缺失');
+    const keyword = await ctx.runtime.submitImport({ path: keywordPath, noEmbed: true });
+    await until(() => ctx.runtime.getRun(keyword.id), row => row?.status === 'completed', '仅关键词资料缺失');
+    appendFileSync(taskArtifactPath(Number(kept.id.slice(5))), '{"path":');
+    await engine.executeRaw(`UPDATE minion_jobs SET status='cancelled', result=NULL,
+      data=jsonb_set(data,'{task,input,noEmbed}','false'::jsonb)||'{"importVectorsPending":true}'::jsonb WHERE id=$1`, [Number(kept.id.slice(5))]);
+    await ctx.restart();
+    await until(() => loadSearchOptimize(engine), view => view.done + view.pending === 1, '重启没有发现尚未交接的资料');
+    expect((await ctx.runtime.getRun(kept.id))?.status).toBe('cancelled');
+    state.cpu = 0.1;
+    state.now += 20000;
+    await until(() => engine.getChunks('saved-before-stop'), chunks => chunks.length > 0 && chunks.every(chunk => !!chunk.embedded_at), '已入库资料未完成向量化');
+    expect((await engine.getChunks('keyword-only')).every(chunk => !chunk.embedded_at)).toBe(true);
+    expect(calls.flat()).toHaveLength(1);
+    await until(() => loadSearchOptimize(engine), view => view.pending === 0 && view.done === 1, '后台队列没有保存处理结果');
+    await ctx.restart();
+    expect(await loadSearchOptimize(engine)).toMatchObject({ pending: 0, done: 1 });
+    expect(calls.flat()).toHaveLength(1);
   });
 }, 90000);
 
@@ -237,7 +273,7 @@ test('导入失败不会停掉知识向量化；被停止的向量任务空闲�
     writeFileSync(join(directory, 'kept.md'), '# 已保存\n\n导入失败不能带走向量化。');
     const imported = await ctx.runtime.submitImport({ path: join(directory, 'kept.md') });
     await until(() => ctx.runtime.getRun(imported.id), row => row?.status === 'completed', '导入未完成');
-    const vectors = (await ctx.runtime.listRuns()).find(row => row.searchOptimize)!;
+    const vectors = (await until(() => ctx.runtime.listRuns(), rows => rows.some(row => row.searchOptimize), '没有后台向量任务')).find(row => row.searchOptimize)!;
     await engine.executeRaw(`UPDATE minion_jobs SET status='dead', error_text='任务已停止', lock_token=NULL, lock_until=NULL, finished_at=now() WHERE id=$1`, [Number(vectors.id.slice(5))]);
     writeFileSync(join(directory, 'huge.md'), Buffer.alloc(5_000_001, 0x61));
     const failed = await ctx.runtime.submitImport({ path: join(directory, 'huge.md') });

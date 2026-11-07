@@ -25,7 +25,7 @@ export async function importMaterials(items: Material[], dependencies: {
 }) {
   for (const item of items) {
     dependencies.starting(item);
-    const options = { autoEmbed: dependencies.autoEmbed ?? true, structuredDocuments: true, documentOcr: dependencies.documentOcr??true, workers: 1, sourceId: dependencies.sourceId };
+    const options = { autoEmbed: dependencies.autoEmbed ?? true, structuredDocuments: true, documentOcr: dependencies.documentOcr ?? false, workers: 1, sourceId: dependencies.sourceId };
     let accepted: { runId: string };
     if (item.runId) {
       if (item.taskSourceId !== dependencies.sourceId) throw new Error('此资料已有导入任务，不能更换数据源后继续；请先完成原任务，或移除后重新添加资料。');

@@ -142,6 +142,7 @@ export async function importOfficeFile(
     deferredOcrVectors?:boolean;
     deferredOcrMaintenanceOwnerId?:number;
     runtime?:DocumentRuntime;
+    rawFileHash?: string;
     activePack?: { page_types: ReadonlyArray<{ name: string; path_prefixes: ReadonlyArray<string> }> };
   } = {},
 ): Promise<ImportResult> {
@@ -164,7 +165,7 @@ export async function importOfficeFile(
   const ocrRequested=opts.documentOcr??gateway.isOcrEnabled();
   const ocrEnabled = !opts.checkOnly && ocrRequested;
   const deferOcr=opts.deferDocumentOcr===true&&ocrRequested;
-  const rawHash = await documentFileHash(filePath,runtime);
+  const rawHash = opts.rawFileHash ?? await documentFileHash(filePath,runtime);
   const validate=async()=>{
     if(lstatSync(filePath).isSymbolicLink()||await documentFileHash(filePath,runtime)!==rawHash)throw new Error(`资料在导入期间已修改，请重新导入：${relativePath}`);
   };

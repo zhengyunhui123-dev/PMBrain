@@ -14,13 +14,13 @@ import { assertDreamPresetAllowGenerative, assertPhasesAllowGenerative } from '.
 import { TaskEngineHost } from './engine-host.ts';
 import type { DreamTaskInput, ImportTaskInput, ProductTask, TaskWorkerMessage } from './types.ts';
 import { removeAdminUploadTempDir } from '../../commands/pmbrain-admin-support.ts';
-import { appendTaskCheckpoint, taskArtifactPath, resumeMaintenanceCheckpoint, retireAutomaticCapture, setMaintenanceCheckpoint } from './checkpoint.ts';
+import { appendTaskCheckpoint, readTaskCheckpoint, taskArtifactPath, resumeMaintenanceCheckpoint, retireAutomaticCapture, setMaintenanceCheckpoint } from './checkpoint.ts';
 import { DEFAULT_PRODUCT_TASK_TIMEOUT_MS, DREAM_TASK_TIMEOUT_KEY, SLEEP_INTERRUPT_REASON, isUnboundedDeepOrganize, parseTaskTimeout } from './timeout.ts';
 import { IMAGE_BACKLOG_REASON } from '../../core/pmbrain-adapters/image-ocr-policy.ts';
 import { FileProjection } from './file-projection.ts';
 import { WorkerPgliteEngine } from '../database/worker-engine.ts';
 import { TaskProgressAdapter, finishTaskProgress,applyTaskBudget } from './progress-adapter.ts';
-import { taskUsesFileQueue, usesSyncFileQueue, type DocumentOcrOverview, type TaskProductProgress } from '../../../shared/task-progress.ts';
+import { taskUsesFileQueue, usesSyncFileQueue, type DocumentOcrOverview, type SyncFileDetails, type TaskProductProgress } from '../../../shared/task-progress.ts';
 import { withDatabasePriority } from '../database/priority';
 import { SyncFileQueue, SYNC_FILE_QUEUE, SYNC_FILE_TASK } from './sync-file-queue.ts';
 import type { MaintenanceCheckpoint, SyncFileInput } from './types.ts';
@@ -34,7 +34,7 @@ import {
   SEARCH_OPTIMIZE_JOB_KEY, SEARCH_OPTIMIZE_NOTICE, SEARCH_OPTIMIZE_PAUSED, assignSearchOptimizeAcceptance, vectorizationInterrupted, vectorizationRetryDelay,
   type SearchOptimizeAcceptance,
 } from './search-optimize.ts';
-import { enqueueCapturedSearchOptimize, enqueueSearchOptimize, completeSearchOptimize, loadSearchOptimize, pauseSearchOptimize } from './search-optimize-store.ts';
+import { enqueueCapturedSearchOptimize, enqueueSearchOptimize, completeSearchOptimize, handoffImportVectorBatch, loadSearchOptimize, pauseSearchOptimize } from './search-optimize-store.ts';
 import { TaskResourceGuard, PRODUCT_QUEUE_CAPACITY, isSyncCapacityError, type TaskResourceOptions } from './resource-guard.ts';
 import { WorkbenchMemoryCoordinator, memoryVersion, type WorkbenchMemoryTask } from '../workbench/memory';
 import { WorkbenchStore } from '../workbench/store';
@@ -53,6 +53,12 @@ import {QuickVectorProgress} from './vector-progress';
 
 export const PRODUCT_TASK_QUEUE = 'pmbrain-product';
 const TASK_NAME = 'pmbrain-product-task';
+const FILE_DETAIL_FIELDS = `id, COALESCE(data->'task'->'input'->'options'->>'sourceId','default') AS "sourceId",
+  data->'task'->'input'->>'relativePath' AS path,
+  CASE WHEN result->>'status' IN ('failed','partial','error') OR status IN ('dead','failed') THEN 'failed'
+    WHEN status='completed' THEN 'completed' WHEN status='active' THEN 'running' ELSE 'pending' END AS status,
+  left(COALESCE(result->>'error',error_text),2048) AS error,
+  CASE WHEN status='active' THEN progress->'product'->'activeFiles'->0 END AS activity`;
 type Progress = { product?: TaskProductProgress; output?: string; result?: Record<string, unknown>; cancelRequested?: boolean; files?: Record<string, unknown>[] };
 
 function toRun(job: MinionJob, stopping = false): ConsoleRun {
@@ -109,6 +115,8 @@ export class ProductTaskRuntime {
   private idleFileThreads: Worker[] = [];
   private idleMaintenanceThreads: Worker[] = [];
   private sessionRefresh = new Map<number, { timer: ReturnType<typeof setTimeout>; file?: string; dirty: boolean }>();
+  private pendingImportVectors = new Set<number>();
+  private importVectorHandoff: Promise<void> | null = null;
   private quickProgressPersistedAt = new Map<number,number>();
   private loop: Promise<void> | null = null;
   private stopped = false;
@@ -201,6 +209,7 @@ export class ProductTaskRuntime {
       ownsLockedTransaction: id => this.executions.get(id)?.ownsLockedTransaction() === true,
     });
     this.worker.on('unhealthy', info => console.error('[tasks]', info));
+    this.worker.on('job-finished', job => { if (this.pendingImportVectors.has(job.id)) this.scheduleImportVectorHandoff(); });
     this.worker.register(TASK_NAME, job => withDatabasePriority((job.data.task as ProductTask).type === 'import' ? 2 : 3, () => this.execute(job)));
   }
 
@@ -243,9 +252,11 @@ export class ProductTaskRuntime {
     );
     await this.recoverSearchOptimize();
     await this.recoverInterruptedImports();
+    const pendingImports = await this.engine.executeRaw<{ id: number }>(`SELECT id FROM minion_jobs
+      WHERE queue=$1 AND name=$2 AND data->>'importVectorsPending'='true'`, [PRODUCT_TASK_QUEUE, TASK_NAME]);
+    for (const job of pendingImports) this.pendingImportVectors.add(job.id);
     await this.listRuns();
-    for (const run of this.cached.filter(run=>taskUsesFileQueue(run.kind))) await this.fileProjection.load(Number(run.id.slice(5)));
-    await this.hydrateFiles(this.cached.filter(run=>taskUsesFileQueue(run.kind)).map(run=>Number(run.id.slice(5))));
+    await this.hydrateFiles(this.cached.filter(run => taskUsesFileQueue(run.kind) && ['running','queued'].includes(run.status)).map(run => Number(run.id.slice(5))));
     await this.clearImageBacklog();
     this.fileLoop = withDatabasePriority(2, () => this.fileWorker.start()).catch(error => { this.failure = error instanceof Error ? error : new Error(String(error)); console.error('[tasks] file worker stopped:', error); });
     this.loop = withDatabasePriority(3, () => this.worker.start()).catch(error => {
@@ -253,8 +264,9 @@ export class ProductTaskRuntime {
       console.error('[tasks] worker stopped:', error instanceof Error ? error.message : error);
     });
     if(this.resourceTimer)clearInterval(this.resourceTimer);
-    this.resourceTimer=setInterval(()=>{this.checkMemory();void this.resumeInterruptedSearchOptimize().catch(error=>console.error('[tasks] search optimize resume:',error instanceof Error?error.message:error));},this.resources.rssCheckIntervalMs);
+    this.resourceTimer=setInterval(()=>{this.checkMemory();this.scheduleImportVectorHandoff();void this.resumeInterruptedSearchOptimize().catch(error=>console.error('[tasks] search optimize resume:',error instanceof Error?error.message:error));},this.resources.rssCheckIntervalMs);
     this.resourceTimer.unref();
+    this.scheduleImportVectorHandoff();
   }
 
   private async submit(task: ProductTask, kind: string, idempotencyKey?: string, trigger: 'manual' | 'scheduled' = 'manual', queue = this.queue): Promise<ConsoleRun> {
@@ -358,7 +370,7 @@ export class ProductTaskRuntime {
   }
 
   private async queueDeferredImportVectors(task: ProductTask, payload: Record<string, unknown> | undefined, cancelled: boolean): Promise<void> {
-    if (cancelled || task.type !== 'import' || task.input.noEmbed === true || !payload || payload.searchOptimizeAccepted === true) return;
+    if (cancelled || task.type !== 'import' || !task.input.ocrOnly || task.input.noEmbed === true || !payload || payload.searchOptimizeAccepted === true) return;
     const slugs = Array.isArray(payload.embedSlugs) ? payload.embedSlugs.filter((slug): slug is string => typeof slug === 'string' && slug.length > 0 && !slug.includes(':')) : [];
     if (!slugs.length) return;
     const sourceId = typeof payload.embedSourceId === 'string' ? payload.embedSourceId : task.input.sourceId ?? 'default';
@@ -369,6 +381,50 @@ export class ProductTaskRuntime {
       payload.searchOptimizeError = true;
       delete payload.vectorsPending;
       delete payload.searchOptimizeAccepted;
+    }
+  }
+
+  private scheduleImportVectorHandoff(): void {
+    if (this.stopped || this.paused || this.failure || this.recoveringOwner || this.importVectorHandoff || !this.pendingImportVectors.size) return;
+    this.importVectorHandoff = withDatabasePriority(3, () => this.handoffImportedVectors())
+      .catch(error => console.error('[tasks] import vector handoff:', error))
+      .finally(() => { this.importVectorHandoff = null; });
+  }
+
+  private async handoffImportedVectors(): Promise<void> {
+    let queued = false;
+    for (const id of this.pendingImportVectors) {
+      if (this.stopped || this.paused || this.recoveringOwner) return;
+      if (this.executions.has(id)) continue;
+      const job = await this.queue.getJob(id);
+      if (!job || job.data.importVectorsPending !== true) {
+        this.pendingImportVectors.delete(id);
+        continue;
+      }
+      if (!['completed','failed','dead','cancelled','paused'].includes(job.status)) continue;
+      const task = job.data.task as ProductTask;
+      if (task.type !== 'import' || task.input.ocrOnly || task.input.noEmbed === true) continue;
+      const records = await readTaskCheckpoint(id).catch(error => {
+        console.error(`[tasks] import checkpoint ${id}:`, error instanceof Error ? error.message : error);
+        return null;
+      });
+      if (!records) continue;
+      let offset = Number(job.data.importVectorOffset ?? 0);
+      do {
+        if (this.stopped || this.paused || this.recoveringOwner) return;
+        const batch = records.slice(offset, offset + 16);
+        const next = offset + batch.length;
+        const finished = next >= records.length;
+        const slugs = batch.flatMap(file => file.vectorize === true && typeof file.slug === 'string' && file.slug && !file.slug.includes(':') ? [file.slug] : []);
+        if (!await handoffImportVectorBatch(this.engine, { jobId: id, attempt: job.attempts_started, sourceId: task.input.sourceId ?? 'default', offset, next, finished, slugs })) break;
+        queued ||= slugs.length > 0;
+        if (finished) this.pendingImportVectors.delete(id);
+        offset = next;
+      } while (offset < records.length);
+    }
+    if (queued && !this.stopped && !this.paused && !this.recoveringOwner) {
+      const scheduled = await this.ensureSearchOptimizeJob();
+      if (scheduled.error && !this.stopped && !this.paused) console.error('[tasks] import vector scheduling:', scheduled.error);
     }
   }
 
@@ -458,7 +514,8 @@ export class ProductTaskRuntime {
     const state = await loadSearchOptimize(this.engine);
     if (state.paused || !state.items.length) return;
     const job = await this.findSearchOptimizeJob();
-    if (!job || !['failed', 'dead'].includes(job.status) || !vectorizationInterrupted(job.error_text ?? '')) return;
+    if (job && !['completed','cancelled'].includes(job.status)
+      && (!['failed','dead'].includes(job.status) || !vectorizationInterrupted(job.error_text ?? ''))) return;
     await this.ensureSearchOptimizeJob();
   }
 
@@ -578,15 +635,21 @@ export class ProductTaskRuntime {
     return this.submit({ type: 'sync', input: {} }, 'sync_all');
   }
 
-  async files(id: string, after = 0): Promise<import('../../../shared/task-progress.ts').SyncFileDetails | null> {
+  async files(id: string, after = 0): Promise<SyncFileDetails | null> {
     if (!/^task-\d+$/.test(id) || !Number.isSafeInteger(after) || after < 0) return null;
     const projected=this.fileProjection.details(Number(id.slice(5)),after);
     if (projected) return projected;
-    if (this.executions.size || this.recoveringOwner) return null;
+    if (this.recoveringOwner) return null;
     const parent = await this.queue.getJob(Number(id.slice(5)));
     if (parent?.queue !== PRODUCT_TASK_QUEUE || parent.name !== TASK_NAME) return null;
-    await this.hydrateFiles([parent.id]);
-    return this.fileProjection.details(parent.id,after);
+    const rows = await this.engine.executeRaw<SyncFileDetails['rows'][number]>(
+      `SELECT * FROM (
+         SELECT DISTINCT ON ("sourceId", path) ${FILE_DETAIL_FIELDS}
+         FROM minion_jobs WHERE queue=$1 AND (parent_job_id=$2 OR (parent_job_id IS NULL AND data->>'sessionId'=$2::int::text))
+           AND id>$3::bigint AND data->>'superseded' IS DISTINCT FROM 'true'
+         ORDER BY "sourceId", path, id DESC
+       ) AS files ORDER BY id LIMIT 51`, [SYNC_FILE_QUEUE, parent.id, after]);
+    return { rows: rows.slice(0,50), next: rows.length > 50 ? rows[49].id : null, updatedAt: parent.updated_at.toISOString() };
   }
 
   async listRuns(): Promise<ConsoleRun[]> {
@@ -797,6 +860,7 @@ export class ProductTaskRuntime {
           await this.clearStopIntent(child.id);
         }
       }
+      await this.hydrateFiles([jobId]);
       await this.clearStopIntent(jobId);
       await this.fileQueue.resume(jobId);
       if (unboundedResume) await this.engine.executeRaw(`UPDATE minion_jobs SET timeout_ms=NULL, timeout_at=NULL, data=CASE WHEN id=$1 THEN data ELSE jsonb_set(data,'{unboundedRuntime}','true'::jsonb) END WHERE id=$1 OR (queue=$2 AND parent_job_id=$1 AND name=$3)`, [jobId, SYNC_FILE_QUEUE, SYNC_FILE_TASK]);
@@ -876,6 +940,14 @@ export class ProductTaskRuntime {
     const record = await this.queue.getJob(context.id);
     if (!record?.lock_token) throw new Error('任务执行租约无效');
     const structuredTask = record.data.task as ProductTask;
+    if (structuredTask.type === 'import' && !structuredTask.input.ocrOnly && structuredTask.input.noEmbed !== true) {
+      if (record.data.importVectorsPending !== true) {
+        const owned = await this.engine.executeRaw(`UPDATE minion_jobs SET data=jsonb_set(data,'{importVectorsPending}','true'::jsonb)
+          WHERE id=$1 AND lock_token=$2 AND status='active' RETURNING id`, [context.id, record.lock_token]);
+        if (!owned.length) throw new Error('任务执行租约无效');
+      }
+      this.pendingImportVectors.add(context.id);
+    }
     if (structuredTask.type === 'dream' && structuredTask.input.preset === 'full' && structuredTask.input.dryRun !== true && record.data.vectorizationWait === true) {
       record.data.vectorizationWait = false;
       await this.engine.executeRaw(`UPDATE minion_jobs SET data=jsonb_set(data,'{vectorizationWait}','false'::jsonb) WHERE id=$1 AND lock_token=$2`, [context.id, record.lock_token]);
@@ -1596,6 +1668,7 @@ export class ProductTaskRuntime {
     await this.fileProjection.flush();
     await this.loop;
     await this.fileLoop;
+    await this.importVectorHandoff;
     await Promise.all([...this.idleFileThreads.splice(0),...this.idleMaintenanceThreads.splice(0)].map(thread => thread.terminate()));
     await this.refreshingRuns;
     await this.ocrOverviewRefreshing;
@@ -1616,6 +1689,7 @@ export class ProductTaskRuntime {
     await Promise.allSettled([...this.executions.values()].map(execution => execution.done));
     await this.loop;
     await this.fileLoop;
+    await this.importVectorHandoff;
     await Promise.all([...this.idleFileThreads.splice(0),...this.idleMaintenanceThreads.splice(0)].map(thread => thread.terminate()));
     await Promise.allSettled([...this.executions.values()].map(execution => execution.done));
     this.loop = null;
@@ -1857,14 +1931,11 @@ export class ProductTaskRuntime {
       const seen=dirtyOnly?null:new Set<number>();
       let after=0;
       for(;;){
-        const rows=await this.engine.executeRaw<import('../../../shared/task-progress.ts').SyncFileDetails['rows'][number]>(
-          `SELECT id, data->'task'->'input'->'options'->>'sourceId' AS "sourceId",data->'task'->'input'->>'relativePath' AS path,
-           CASE WHEN result->>'status' IN ('failed','partial','error') OR status IN ('dead','failed') THEN 'failed'
-             WHEN status='completed' THEN 'completed' WHEN status='active' THEN 'running' ELSE 'pending' END AS status,
-           COALESCE(result->>'error',error_text) AS error,progress->'product'->'activeFiles'->0 AS activity
-           FROM minion_jobs WHERE queue=$1 AND (data->>'sessionId')::bigint=$2 AND id>$3
+        const rows=await this.engine.executeRaw<SyncFileDetails['rows'][number]>(
+          `SELECT ${FILE_DETAIL_FIELDS}
+           FROM minion_jobs WHERE queue=$1 AND (parent_job_id=$2 OR (parent_job_id IS NULL AND data->>'sessionId'=$2::int::text)) AND id>$3
              AND data->>'superseded' IS DISTINCT FROM 'true' AND ($4::bigint[] IS NULL OR id=ANY($4::bigint[])) ORDER BY id LIMIT 200`,[SYNC_FILE_QUEUE,id,after,selected]);
-          this.fileProjection.seed(id,rows);
+          this.fileProjection.seed(id,rows,dirtyOnly);
           if(seen)for(const row of rows)seen.add(row.id);
           await this.fileProjection.flush();
         for(const row of rows)if(row.status!=='running')this.dirtyFiles.get(id)?.delete(row.id);

@@ -89,14 +89,14 @@ export class FileProjection {
     this.apply(id,row); this.save(id,row);
   }
 
-  seed(id:number,rows:Row[]) {
+  seed(id:number,rows:Row[],persist=true) {
     const session=this.session(id);
     for(const row of rows){
       const previous=session.rows.get(row.id);
       const next={...row,activity:row.status==='running'?(previous?.activity??row.activity):undefined};
       if(next.status!=='running'){session.activitySavedAt.delete(row.id);session.dirtyActivity.delete(row.id);}
       this.apply(id,next);
-      if(JSON.stringify(previous)!==JSON.stringify(next))this.save(id,next);
+      if(persist&&JSON.stringify(previous)!==JSON.stringify(next))this.save(id,next);
     }
   }
   activity(id:number,child:number,activity:SyncFileActivity,coalesce=false) {
