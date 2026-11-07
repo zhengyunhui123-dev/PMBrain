@@ -63,6 +63,34 @@ afterAll(async () => {
 }, 60000);
 
 describe('快速维护文件任务与恢复', () => {
+  test('历史文件明细日志损坏时仍能启动，并按页读取数据库里保存的结果', async () => {
+    const queue = new MinionQueue(engine);
+    const parent = await queue.add('pmbrain-product-task', { kind: 'dream_quick', task: { type: 'dream', input: { preset: 'quick' } } }, { queue: PRODUCT_TASK_QUEUE, delay: 86400000 });
+    await engine.executeRaw("UPDATE minion_jobs SET status='completed' WHERE id=$1", [parent.id]);
+    await engine.executeRaw(`INSERT INTO minion_jobs(name,queue,parent_job_id,status,data,result)
+      SELECT $1,$2,$3,'completed',jsonb_build_object('sessionId',$3::int,'task',jsonb_build_object('input',jsonb_build_object('relativePath','file-'||n||'.md','options',jsonb_build_object('sourceId','default')))),
+        CASE WHEN n=52 THEN '{"status":"failed","error":"读取失败"}'::jsonb ELSE '{"status":"imported"}'::jsonb END
+      FROM generate_series(1,52) AS n`, [SYNC_FILE_TASK, SYNC_FILE_QUEUE, parent.id]);
+    const artifact = taskArtifactPath(parent.id, 'files.jsonl');
+    mkdirSync(join(artifact, '..'), { recursive: true });
+    writeFileSync(artifact, 'truncated history\n');
+    await runtime.close();
+    runtime = new ProductTaskRuntime(engine);
+    await runtime.start();
+    const id = `task-${parent.id}`;
+    expect((await runtime.getRun(id))?.status).toBe('completed');
+    const first = await runtime.files(id);
+    expect(first?.rows).toHaveLength(50);
+    expect(first?.rows[0]).toMatchObject({ path: 'file-1.md', status: 'completed' });
+    expect(first?.next).toBe(first?.rows[49].id);
+    const second = await runtime.files(id, first!.next!);
+    expect(second?.rows.map(row => [row.path, row.status, row.error])).toEqual([
+      ['file-51.md', 'completed', null], ['file-52.md', 'failed', '读取失败'],
+    ]);
+    expect(second?.next).toBeNull();
+    expect(readFileSync(artifact, 'utf8')).toBe('truncated history\n');
+  }, 60000);
+
   test('快速维护不为无需模型的资料逐份初始化费用预算', async () => {
     const capacityIndex=await engine.executeRaw<{partial:boolean}>("SELECT i.indpred IS NOT NULL AS partial FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid WHERE c.relname='idx_minion_jobs_capacity'");
     expect(capacityIndex).toEqual([{partial:true}]);

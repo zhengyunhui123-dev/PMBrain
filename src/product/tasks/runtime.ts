@@ -20,7 +20,7 @@ import { IMAGE_BACKLOG_REASON } from '../../core/pmbrain-adapters/image-ocr-poli
 import { FileProjection } from './file-projection.ts';
 import { WorkerPgliteEngine } from '../database/worker-engine.ts';
 import { TaskProgressAdapter, finishTaskProgress,applyTaskBudget } from './progress-adapter.ts';
-import { taskUsesFileQueue, usesSyncFileQueue, type DocumentOcrOverview, type TaskProductProgress } from '../../../shared/task-progress.ts';
+import { taskUsesFileQueue, usesSyncFileQueue, type DocumentOcrOverview, type SyncFileDetails, type TaskProductProgress } from '../../../shared/task-progress.ts';
 import { withDatabasePriority } from '../database/priority';
 import { SyncFileQueue, SYNC_FILE_QUEUE, SYNC_FILE_TASK } from './sync-file-queue.ts';
 import type { MaintenanceCheckpoint, SyncFileInput } from './types.ts';
@@ -53,6 +53,12 @@ import {QuickVectorProgress} from './vector-progress';
 
 export const PRODUCT_TASK_QUEUE = 'pmbrain-product';
 const TASK_NAME = 'pmbrain-product-task';
+const FILE_DETAIL_FIELDS = `id, COALESCE(data->'task'->'input'->'options'->>'sourceId','default') AS "sourceId",
+  data->'task'->'input'->>'relativePath' AS path,
+  CASE WHEN result->>'status' IN ('failed','partial','error') OR status IN ('dead','failed') THEN 'failed'
+    WHEN status='completed' THEN 'completed' WHEN status='active' THEN 'running' ELSE 'pending' END AS status,
+  left(COALESCE(result->>'error',error_text),2048) AS error,
+  CASE WHEN status='active' THEN progress->'product'->'activeFiles'->0 END AS activity`;
 type Progress = { product?: TaskProductProgress; output?: string; result?: Record<string, unknown>; cancelRequested?: boolean; files?: Record<string, unknown>[] };
 
 function toRun(job: MinionJob, stopping = false): ConsoleRun {
@@ -244,8 +250,7 @@ export class ProductTaskRuntime {
     await this.recoverSearchOptimize();
     await this.recoverInterruptedImports();
     await this.listRuns();
-    for (const run of this.cached.filter(run=>taskUsesFileQueue(run.kind))) await this.fileProjection.load(Number(run.id.slice(5)));
-    await this.hydrateFiles(this.cached.filter(run=>taskUsesFileQueue(run.kind)).map(run=>Number(run.id.slice(5))));
+    await this.hydrateFiles(this.cached.filter(run => taskUsesFileQueue(run.kind) && ['running','queued'].includes(run.status)).map(run => Number(run.id.slice(5))));
     await this.clearImageBacklog();
     this.fileLoop = withDatabasePriority(2, () => this.fileWorker.start()).catch(error => { this.failure = error instanceof Error ? error : new Error(String(error)); console.error('[tasks] file worker stopped:', error); });
     this.loop = withDatabasePriority(3, () => this.worker.start()).catch(error => {
@@ -578,15 +583,21 @@ export class ProductTaskRuntime {
     return this.submit({ type: 'sync', input: {} }, 'sync_all');
   }
 
-  async files(id: string, after = 0): Promise<import('../../../shared/task-progress.ts').SyncFileDetails | null> {
+  async files(id: string, after = 0): Promise<SyncFileDetails | null> {
     if (!/^task-\d+$/.test(id) || !Number.isSafeInteger(after) || after < 0) return null;
     const projected=this.fileProjection.details(Number(id.slice(5)),after);
     if (projected) return projected;
-    if (this.executions.size || this.recoveringOwner) return null;
+    if (this.recoveringOwner) return null;
     const parent = await this.queue.getJob(Number(id.slice(5)));
     if (parent?.queue !== PRODUCT_TASK_QUEUE || parent.name !== TASK_NAME) return null;
-    await this.hydrateFiles([parent.id]);
-    return this.fileProjection.details(parent.id,after);
+    const rows = await this.engine.executeRaw<SyncFileDetails['rows'][number]>(
+      `SELECT * FROM (
+         SELECT DISTINCT ON ("sourceId", path) ${FILE_DETAIL_FIELDS}
+         FROM minion_jobs WHERE queue=$1 AND (parent_job_id=$2 OR (parent_job_id IS NULL AND data->>'sessionId'=$2::int::text))
+           AND id>$3::bigint AND data->>'superseded' IS DISTINCT FROM 'true'
+         ORDER BY "sourceId", path, id DESC
+       ) AS files ORDER BY id LIMIT 51`, [SYNC_FILE_QUEUE, parent.id, after]);
+    return { rows: rows.slice(0,50), next: rows.length > 50 ? rows[49].id : null, updatedAt: parent.updated_at.toISOString() };
   }
 
   async listRuns(): Promise<ConsoleRun[]> {
@@ -797,6 +808,7 @@ export class ProductTaskRuntime {
           await this.clearStopIntent(child.id);
         }
       }
+      await this.hydrateFiles([jobId]);
       await this.clearStopIntent(jobId);
       await this.fileQueue.resume(jobId);
       if (unboundedResume) await this.engine.executeRaw(`UPDATE minion_jobs SET timeout_ms=NULL, timeout_at=NULL, data=CASE WHEN id=$1 THEN data ELSE jsonb_set(data,'{unboundedRuntime}','true'::jsonb) END WHERE id=$1 OR (queue=$2 AND parent_job_id=$1 AND name=$3)`, [jobId, SYNC_FILE_QUEUE, SYNC_FILE_TASK]);
@@ -1857,14 +1869,11 @@ export class ProductTaskRuntime {
       const seen=dirtyOnly?null:new Set<number>();
       let after=0;
       for(;;){
-        const rows=await this.engine.executeRaw<import('../../../shared/task-progress.ts').SyncFileDetails['rows'][number]>(
-          `SELECT id, data->'task'->'input'->'options'->>'sourceId' AS "sourceId",data->'task'->'input'->>'relativePath' AS path,
-           CASE WHEN result->>'status' IN ('failed','partial','error') OR status IN ('dead','failed') THEN 'failed'
-             WHEN status='completed' THEN 'completed' WHEN status='active' THEN 'running' ELSE 'pending' END AS status,
-           COALESCE(result->>'error',error_text) AS error,progress->'product'->'activeFiles'->0 AS activity
-           FROM minion_jobs WHERE queue=$1 AND (data->>'sessionId')::bigint=$2 AND id>$3
+        const rows=await this.engine.executeRaw<SyncFileDetails['rows'][number]>(
+          `SELECT ${FILE_DETAIL_FIELDS}
+           FROM minion_jobs WHERE queue=$1 AND (parent_job_id=$2 OR (parent_job_id IS NULL AND data->>'sessionId'=$2::int::text)) AND id>$3
              AND data->>'superseded' IS DISTINCT FROM 'true' AND ($4::bigint[] IS NULL OR id=ANY($4::bigint[])) ORDER BY id LIMIT 200`,[SYNC_FILE_QUEUE,id,after,selected]);
-          this.fileProjection.seed(id,rows);
+          this.fileProjection.seed(id,rows,dirtyOnly);
           if(seen)for(const row of rows)seen.add(row.id);
           await this.fileProjection.flush();
         for(const row of rows)if(row.status!=='running')this.dirtyFiles.get(id)?.delete(row.id);
