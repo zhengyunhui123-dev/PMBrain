@@ -116,20 +116,39 @@ export async function loadSearchOptimize(engine: BrainEngine): Promise<SearchOpt
   return { paused: meta.paused, done: meta.done, pending: meta.pending, items: item ? [item] : [] };
 }
 
+async function putPendingSlugs(tx: BrainEngine, sourceId: string, slugs: string[]): Promise<void> {
+  const meta = decode<QueueMeta>(await tx.getConfig(SEARCH_OPTIMIZE_CONFIG))!;
+  if (!meta.pending) meta.done = 0;
+  const revisions = await searchOptimizeRevisions(tx, sourceId, slugs);
+  for (const slug of slugs) await putPending(tx, meta, { sourceId, slug, ...(revisions[slug] && { revision: revisions[slug] }) }, true);
+  await tx.setConfig(SEARCH_OPTIMIZE_CONFIG, JSON.stringify(meta));
+}
+
 export async function enqueueSearchOptimize(engine: BrainEngine, sourceId: string, slugs: string[]): Promise<SearchOptimizeView> {
   await ready(engine);
   const clean = cleanSlugs(slugs);
   for (let start = 0; start < clean.length; start += 16) {
     const batch = clean.slice(start, start + 16);
-    await locked(engine, async tx => {
-      const meta = decode<QueueMeta>(await tx.getConfig(SEARCH_OPTIMIZE_CONFIG))!;
-      if (!meta.pending) meta.done = 0;
-      const revisions = await searchOptimizeRevisions(tx, sourceId, batch);
-      for (const slug of batch) await putPending(tx, meta, { sourceId, slug, ...(revisions[slug] && { revision: revisions[slug] }) }, true);
-      await tx.setConfig(SEARCH_OPTIMIZE_CONFIG, JSON.stringify(meta));
-    });
+    await locked(engine, tx => putPendingSlugs(tx, sourceId, batch));
   }
   return loadSearchOptimize(engine);
+}
+
+export async function handoffImportVectorBatch(engine: BrainEngine, batch: {
+  jobId: number; attempt: number; sourceId: string; offset: number; next: number; finished: boolean; slugs: string[];
+}): Promise<boolean> {
+  await ready(engine);
+  return locked(engine, async tx => {
+    const [job] = await tx.executeRaw<{ id: number }>(`SELECT id FROM minion_jobs WHERE id=$1
+      AND status IN ('completed','failed','dead','cancelled','paused') AND data->>'importVectorsPending'='true'
+      AND COALESCE((data->>'importVectorOffset')::int,0)=$2 AND attempts_started=$3 FOR UPDATE`, [batch.jobId, batch.offset, batch.attempt]);
+    if (!job) return false;
+    const slugs = cleanSlugs(batch.slugs);
+    if (slugs.length) await putPendingSlugs(tx, batch.sourceId, slugs);
+    await tx.executeRaw(`UPDATE minion_jobs SET data=data || $2::jsonb WHERE id=$1`,
+      [batch.jobId, { importVectorOffset: batch.next, importVectorsPending: !batch.finished }]);
+    return true;
+  });
 }
 
 export async function completeSearchOptimize(engine: BrainEngine, sourceId: string, slug: string, revision?: string): Promise<SearchOptimizeView> {

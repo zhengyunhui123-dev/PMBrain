@@ -1,4 +1,4 @@
-import { appendFile, mkdir, readFile } from 'node:fs/promises';
+import { appendFile, mkdir, readFile, truncate } from 'node:fs/promises';
 import { join } from 'node:path';
 import { gbrainPath, loadConfig } from '../../core/config.ts';
 import { createHash } from 'node:crypto';
@@ -86,10 +86,24 @@ export async function appendTaskCheckpoint(id: number, file: Record<string, unkn
   await appendFile(taskArtifactPath(id), `${JSON.stringify(file)}\n`, { mode: 0o600 });
 }
 
-export async function readTaskCheckpoint(id: number): Promise<Array<Record<string, unknown>>> {
-  const text = await readFile(taskArtifactPath(id), 'utf8').catch(error => {
+export async function readTaskCheckpoint(id: number, repairTail = false): Promise<Array<Record<string, unknown>>> {
+  const path = taskArtifactPath(id);
+  const text = await readFile(path, 'utf8').catch(error => {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return '';
     throw error;
   });
-  return text.split('\n').filter(Boolean).map(line => JSON.parse(line) as Record<string, unknown>);
+  const lines = text.split('\n');
+  const tail = lines.pop();
+  const records = lines.filter(Boolean).map(line => JSON.parse(line) as Record<string, unknown>);
+  if (tail) {
+    let last: Record<string, unknown>;
+    try { last = JSON.parse(tail); }
+    catch {
+      if (repairTail) await truncate(path, Buffer.byteLength(text.slice(0, -tail.length)));
+      return records;
+    }
+    if (repairTail) await appendFile(path, '\n');
+    records.push(last);
+  }
+  return records;
 }

@@ -1058,25 +1058,20 @@ async function executeTask(task: ProductTask, kind: BrainEngine['kind']) {
   } else if (task.type === 'import') {
     const input = task.input;
     const vectorsRequested = input.noEmbed !== true;
-    const sourceId = input.sourceId ?? 'default';
     const filePhases = ['collect', 'process', 'write'];
     send({ type: 'progress', phases: filePhases });
     send({ type: 'progress', event: { phase: 'import.collect' } });
     const completedPaths: string[] = [];
-    const resumedVectorSlugs: string[] = [];
     if (input.resumeCheckpointId) {
-      for (const file of await readTaskCheckpoint(input.resumeCheckpointId)) {
+      for (const file of await readTaskCheckpoint(input.resumeCheckpointId, true)) {
         if (file.completed !== true || file.modelFingerprint !== taskModelFingerprint()) continue;
         const current = await stat(String(file.absolutePath)).catch(() => null);
         if (current?.size === file.size && typeof file.hash==='string' && await streamFileHash(String(file.absolutePath),abort.signal)===file.hash) {
           completedPaths.push(String(file.path));
-          const slug = typeof file.slug === 'string' ? file.slug : '';
-          if (vectorsRequested && file.vectorize === true && slug.length > 0 && !slug.includes(':')) resumedVectorSlugs.push(slug);
-          await rpc('task.checkpoint', [file]);
         }
       }
     }
-    if (vectorsRequested && resumedVectorSlugs.length) await rpc('task.searchOptimize', [sourceId, [...new Set(resumedVectorSlugs)]]);
+    let vectorsPending = false;
     let fileSnapshot: Record<string, unknown> = {};
     const imported = await runStructuredImport(engine, {
       path: input.path, noEmbed: true, fresh: true, jsonOutput: true, reportFiles: true,
@@ -1095,39 +1090,29 @@ async function executeTask(task: ProductTask, kind: BrainEngine['kind']) {
           importFile = path;
           send({ type: 'progress', event: { phase: 'import.process', file: path } });
           const file = await stat(path);
-          fileSnapshot = { absolutePath: path, size: file.size, mtimeMs: file.mtimeMs, hash:await streamFileHash(path,abort.signal), modelFingerprint: taskModelFingerprint() };
+          const rawFileHash = await streamFileHash(path, abort.signal);
+          fileSnapshot = { absolutePath: path, size: file.size, mtimeMs: file.mtimeMs, hash: rawFileHash, modelFingerprint: taskModelFingerprint() };
           try {
             await rpc('task.inputFile', [{ path, size: file.size, mtimeMs: file.mtimeMs }]);
           } catch (error) {
             if (!isOversizedImportError(error)) throw error;
             return error instanceof Error ? error.message : String(error);
           }
+          return { rawFileHash };
         },
         onFile: async progress => {
           const outcome=importOutcome(progress);
           if(outcome)send({type:'import-counts',value:{processed:outcome.processed,imported:Math.max(0,outcome.processed-outcome.failed-outcome.partial-outcome.unchanged),unchanged:outcome.unchanged,failed:outcome.failed,partial:outcome.partial}});
           send({ type: 'progress', event: { phase: 'import.files', done: Number(progress.processed) } });
           importFile = undefined;
-          const slug = typeof progress.slug === 'string' ? progress.slug : '';
-          if (vectorsRequested && progress.vectorize === true && slug.length > 0 && !slug.includes(':')) {
-            await rpc('task.searchOptimize', [sourceId, [slug]]);
-          }
+          const slug = progress.slug;
+          if (vectorsRequested && progress.vectorize === true && typeof slug === 'string' && slug && !slug.includes(':')) vectorsPending = true;
           await rpc('task.checkpoint', [{ ...progress, ...fileSnapshot }]);
         },
       },
     });
-    const embedSlugs=[...new Set((imported.importedSlugs??[]).filter(slug=>slug.length>0&&!slug.includes(':')))];
     result = { ...imported, resumedFiles: completedPaths.length };
-    if(vectorsRequested&&embedSlugs.length){
-      result.embedSlugs=embedSlugs;
-      result.embedSourceId=sourceId;
-      try{
-        assignSearchOptimizeAcceptance(result, await rpc('task.searchOptimize',[sourceId,embedSlugs]) as SearchOptimizeAcceptance);
-      }catch(error){
-        if(abort.signal.aborted)throw error;
-        result.searchOptimizeError=true;
-      }
-    }
+    if (vectorsPending) result.vectorsPending = true;
   } else if (task.type === 'dream') {
     result = await runWithDreamBudget(task.input,async()=>({...await runDreamTask(engine,task.input)}),request=>rpc('task.budget',[request]) as Promise<TaskBudgetReply>);
   } else if (task.type === 'sync') {

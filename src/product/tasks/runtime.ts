@@ -14,7 +14,7 @@ import { assertDreamPresetAllowGenerative, assertPhasesAllowGenerative } from '.
 import { TaskEngineHost } from './engine-host.ts';
 import type { DreamTaskInput, ImportTaskInput, ProductTask, TaskWorkerMessage } from './types.ts';
 import { removeAdminUploadTempDir } from '../../commands/pmbrain-admin-support.ts';
-import { appendTaskCheckpoint, taskArtifactPath, resumeMaintenanceCheckpoint, retireAutomaticCapture, setMaintenanceCheckpoint } from './checkpoint.ts';
+import { appendTaskCheckpoint, readTaskCheckpoint, taskArtifactPath, resumeMaintenanceCheckpoint, retireAutomaticCapture, setMaintenanceCheckpoint } from './checkpoint.ts';
 import { DEFAULT_PRODUCT_TASK_TIMEOUT_MS, DREAM_TASK_TIMEOUT_KEY, SLEEP_INTERRUPT_REASON, isUnboundedDeepOrganize, parseTaskTimeout } from './timeout.ts';
 import { IMAGE_BACKLOG_REASON } from '../../core/pmbrain-adapters/image-ocr-policy.ts';
 import { FileProjection } from './file-projection.ts';
@@ -34,7 +34,7 @@ import {
   SEARCH_OPTIMIZE_JOB_KEY, SEARCH_OPTIMIZE_NOTICE, SEARCH_OPTIMIZE_PAUSED, assignSearchOptimizeAcceptance, vectorizationInterrupted, vectorizationRetryDelay,
   type SearchOptimizeAcceptance,
 } from './search-optimize.ts';
-import { enqueueCapturedSearchOptimize, enqueueSearchOptimize, completeSearchOptimize, loadSearchOptimize, pauseSearchOptimize } from './search-optimize-store.ts';
+import { enqueueCapturedSearchOptimize, enqueueSearchOptimize, completeSearchOptimize, handoffImportVectorBatch, loadSearchOptimize, pauseSearchOptimize } from './search-optimize-store.ts';
 import { TaskResourceGuard, PRODUCT_QUEUE_CAPACITY, isSyncCapacityError, type TaskResourceOptions } from './resource-guard.ts';
 import { WorkbenchMemoryCoordinator, memoryVersion, type WorkbenchMemoryTask } from '../workbench/memory';
 import { WorkbenchStore } from '../workbench/store';
@@ -115,6 +115,8 @@ export class ProductTaskRuntime {
   private idleFileThreads: Worker[] = [];
   private idleMaintenanceThreads: Worker[] = [];
   private sessionRefresh = new Map<number, { timer: ReturnType<typeof setTimeout>; file?: string; dirty: boolean }>();
+  private pendingImportVectors = new Set<number>();
+  private importVectorHandoff: Promise<void> | null = null;
   private quickProgressPersistedAt = new Map<number,number>();
   private loop: Promise<void> | null = null;
   private stopped = false;
@@ -207,6 +209,7 @@ export class ProductTaskRuntime {
       ownsLockedTransaction: id => this.executions.get(id)?.ownsLockedTransaction() === true,
     });
     this.worker.on('unhealthy', info => console.error('[tasks]', info));
+    this.worker.on('job-finished', job => { if (this.pendingImportVectors.has(job.id)) this.scheduleImportVectorHandoff(); });
     this.worker.register(TASK_NAME, job => withDatabasePriority((job.data.task as ProductTask).type === 'import' ? 2 : 3, () => this.execute(job)));
   }
 
@@ -249,6 +252,9 @@ export class ProductTaskRuntime {
     );
     await this.recoverSearchOptimize();
     await this.recoverInterruptedImports();
+    const pendingImports = await this.engine.executeRaw<{ id: number }>(`SELECT id FROM minion_jobs
+      WHERE queue=$1 AND name=$2 AND data->>'importVectorsPending'='true'`, [PRODUCT_TASK_QUEUE, TASK_NAME]);
+    for (const job of pendingImports) this.pendingImportVectors.add(job.id);
     await this.listRuns();
     await this.hydrateFiles(this.cached.filter(run => taskUsesFileQueue(run.kind) && ['running','queued'].includes(run.status)).map(run => Number(run.id.slice(5))));
     await this.clearImageBacklog();
@@ -258,8 +264,9 @@ export class ProductTaskRuntime {
       console.error('[tasks] worker stopped:', error instanceof Error ? error.message : error);
     });
     if(this.resourceTimer)clearInterval(this.resourceTimer);
-    this.resourceTimer=setInterval(()=>{this.checkMemory();void this.resumeInterruptedSearchOptimize().catch(error=>console.error('[tasks] search optimize resume:',error instanceof Error?error.message:error));},this.resources.rssCheckIntervalMs);
+    this.resourceTimer=setInterval(()=>{this.checkMemory();this.scheduleImportVectorHandoff();void this.resumeInterruptedSearchOptimize().catch(error=>console.error('[tasks] search optimize resume:',error instanceof Error?error.message:error));},this.resources.rssCheckIntervalMs);
     this.resourceTimer.unref();
+    this.scheduleImportVectorHandoff();
   }
 
   private async submit(task: ProductTask, kind: string, idempotencyKey?: string, trigger: 'manual' | 'scheduled' = 'manual', queue = this.queue): Promise<ConsoleRun> {
@@ -363,7 +370,7 @@ export class ProductTaskRuntime {
   }
 
   private async queueDeferredImportVectors(task: ProductTask, payload: Record<string, unknown> | undefined, cancelled: boolean): Promise<void> {
-    if (cancelled || task.type !== 'import' || task.input.noEmbed === true || !payload || payload.searchOptimizeAccepted === true) return;
+    if (cancelled || task.type !== 'import' || !task.input.ocrOnly || task.input.noEmbed === true || !payload || payload.searchOptimizeAccepted === true) return;
     const slugs = Array.isArray(payload.embedSlugs) ? payload.embedSlugs.filter((slug): slug is string => typeof slug === 'string' && slug.length > 0 && !slug.includes(':')) : [];
     if (!slugs.length) return;
     const sourceId = typeof payload.embedSourceId === 'string' ? payload.embedSourceId : task.input.sourceId ?? 'default';
@@ -374,6 +381,50 @@ export class ProductTaskRuntime {
       payload.searchOptimizeError = true;
       delete payload.vectorsPending;
       delete payload.searchOptimizeAccepted;
+    }
+  }
+
+  private scheduleImportVectorHandoff(): void {
+    if (this.stopped || this.paused || this.failure || this.recoveringOwner || this.importVectorHandoff || !this.pendingImportVectors.size) return;
+    this.importVectorHandoff = withDatabasePriority(3, () => this.handoffImportedVectors())
+      .catch(error => console.error('[tasks] import vector handoff:', error))
+      .finally(() => { this.importVectorHandoff = null; });
+  }
+
+  private async handoffImportedVectors(): Promise<void> {
+    let queued = false;
+    for (const id of this.pendingImportVectors) {
+      if (this.stopped || this.paused || this.recoveringOwner) return;
+      if (this.executions.has(id)) continue;
+      const job = await this.queue.getJob(id);
+      if (!job || job.data.importVectorsPending !== true) {
+        this.pendingImportVectors.delete(id);
+        continue;
+      }
+      if (!['completed','failed','dead','cancelled','paused'].includes(job.status)) continue;
+      const task = job.data.task as ProductTask;
+      if (task.type !== 'import' || task.input.ocrOnly || task.input.noEmbed === true) continue;
+      const records = await readTaskCheckpoint(id).catch(error => {
+        console.error(`[tasks] import checkpoint ${id}:`, error instanceof Error ? error.message : error);
+        return null;
+      });
+      if (!records) continue;
+      let offset = Number(job.data.importVectorOffset ?? 0);
+      do {
+        if (this.stopped || this.paused || this.recoveringOwner) return;
+        const batch = records.slice(offset, offset + 16);
+        const next = offset + batch.length;
+        const finished = next >= records.length;
+        const slugs = batch.flatMap(file => file.vectorize === true && typeof file.slug === 'string' && file.slug && !file.slug.includes(':') ? [file.slug] : []);
+        if (!await handoffImportVectorBatch(this.engine, { jobId: id, attempt: job.attempts_started, sourceId: task.input.sourceId ?? 'default', offset, next, finished, slugs })) break;
+        queued ||= slugs.length > 0;
+        if (finished) this.pendingImportVectors.delete(id);
+        offset = next;
+      } while (offset < records.length);
+    }
+    if (queued && !this.stopped && !this.paused && !this.recoveringOwner) {
+      const scheduled = await this.ensureSearchOptimizeJob();
+      if (scheduled.error && !this.stopped && !this.paused) console.error('[tasks] import vector scheduling:', scheduled.error);
     }
   }
 
@@ -463,7 +514,8 @@ export class ProductTaskRuntime {
     const state = await loadSearchOptimize(this.engine);
     if (state.paused || !state.items.length) return;
     const job = await this.findSearchOptimizeJob();
-    if (!job || !['failed', 'dead'].includes(job.status) || !vectorizationInterrupted(job.error_text ?? '')) return;
+    if (job && !['completed','cancelled'].includes(job.status)
+      && (!['failed','dead'].includes(job.status) || !vectorizationInterrupted(job.error_text ?? ''))) return;
     await this.ensureSearchOptimizeJob();
   }
 
@@ -888,6 +940,14 @@ export class ProductTaskRuntime {
     const record = await this.queue.getJob(context.id);
     if (!record?.lock_token) throw new Error('任务执行租约无效');
     const structuredTask = record.data.task as ProductTask;
+    if (structuredTask.type === 'import' && !structuredTask.input.ocrOnly && structuredTask.input.noEmbed !== true) {
+      if (record.data.importVectorsPending !== true) {
+        const owned = await this.engine.executeRaw(`UPDATE minion_jobs SET data=jsonb_set(data,'{importVectorsPending}','true'::jsonb)
+          WHERE id=$1 AND lock_token=$2 AND status='active' RETURNING id`, [context.id, record.lock_token]);
+        if (!owned.length) throw new Error('任务执行租约无效');
+      }
+      this.pendingImportVectors.add(context.id);
+    }
     if (structuredTask.type === 'dream' && structuredTask.input.preset === 'full' && structuredTask.input.dryRun !== true && record.data.vectorizationWait === true) {
       record.data.vectorizationWait = false;
       await this.engine.executeRaw(`UPDATE minion_jobs SET data=jsonb_set(data,'{vectorizationWait}','false'::jsonb) WHERE id=$1 AND lock_token=$2`, [context.id, record.lock_token]);
@@ -1608,6 +1668,7 @@ export class ProductTaskRuntime {
     await this.fileProjection.flush();
     await this.loop;
     await this.fileLoop;
+    await this.importVectorHandoff;
     await Promise.all([...this.idleFileThreads.splice(0),...this.idleMaintenanceThreads.splice(0)].map(thread => thread.terminate()));
     await this.refreshingRuns;
     await this.ocrOverviewRefreshing;
@@ -1628,6 +1689,7 @@ export class ProductTaskRuntime {
     await Promise.allSettled([...this.executions.values()].map(execution => execution.done));
     await this.loop;
     await this.fileLoop;
+    await this.importVectorHandoff;
     await Promise.all([...this.idleFileThreads.splice(0),...this.idleMaintenanceThreads.splice(0)].map(thread => thread.terminate()));
     await Promise.allSettled([...this.executions.values()].map(execution => execution.done));
     this.loop = null;
