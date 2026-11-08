@@ -52,6 +52,49 @@ async function quick(){const run=await runtime.submitDream({preset:'quick',sourc
 async function embeddingEnabled(enabled:boolean){const config=JSON.parse(readFileSync(configPath(),'utf8'));config.embedding_disabled=!enabled;config.model_usage.embedding_enabled=enabled;writeFileSync(configPath(),JSON.stringify(config));await reloadLiveGateway(engine);}
 async function waitUntil(read:()=>Promise<boolean>,label:string){const end=Date.now()+180000;while(Date.now()<end){if(await read())return;await Bun.sleep(100);}throw new Error(label);}
 
+test('深度整理无文件增量时先提交新概念，解除向量暂停后再补齐搜索索引', async () => {
+  const sourceId = 'deep-concept-vector';
+  const folder = join(root, sourceId);
+  mkdirSync(folder);
+  await engine.executeRaw('INSERT INTO sources(id,name,local_path) VALUES($1,$1,$2)', [sourceId, folder]);
+  const previousKnowledge = await engine.getConfig('dream.knowledge.enabled');
+  const previousPaused = (await loadSearchOptimize(engine)).paused;
+  const previousCpu = cpu;
+  await engine.setConfig('dream.knowledge.enabled', 'true');
+  await embeddingEnabled(true);
+  await pauseSearchOptimize(engine, true);
+  try {
+    for (const label of ['alpha', 'beta']) {
+      await engine.putPage(`atoms/${label}`, {
+        title: label, type: 'atom', compiled_truth: `Independent evidence for the staged concept ${label}.`, frontmatter: { concepts: ['staged-vector'] },
+      }, { sourceId });
+    }
+    const before = calls;
+    const task = await runtime.submitDream({ preset: 'full', sourceId });
+    await waitUntil(async () => String((await runtime.getRun(task.id))?.product?.stage).includes('知识向量化已暂停'), '概念阶段未释放数据库并进入索引阶段');
+    const waiting = await runtime.getRun(task.id);
+    expect(waiting?.product?.deep?.scan.incremental ?? 0).toBe(0);
+    expect(calls).toBe(before);
+    const scope = { sourceId };
+    const slug = 'concepts/staged-vector';
+    const chunks = await engine.getChunks(slug, scope);
+    expect(chunks.length).toBeGreaterThan(0);
+    expect(chunks.every(chunk => !chunk.embedded_at)).toBe(true);
+    expect((await engine.getLinks(slug, scope)).some(link => link.link_type === 'derives_from')).toBe(true);
+    cpu = 0.1;
+    await pauseSearchOptimize(engine, false);
+    const completed = await finish(task.id);
+    expect(completed.status, JSON.stringify(completed.result)).toBe('completed');
+    expect(calls).toBeGreaterThan(before);
+    expect((await engine.getChunks(slug, scope)).every(chunk => !!chunk.embedded_at)).toBe(true);
+  } finally {
+    if (previousKnowledge === null) await engine.unsetConfig('dream.knowledge.enabled');
+    else await engine.setConfig('dream.knowledge.enabled', previousKnowledge);
+    await pauseSearchOptimize(engine, previousPaused);
+    cpu = previousCpu;
+  }
+}, 240000);
+
 test('快速维护按内容更新同大小同时间的 Word 和 Markdown，再次不变不新增文件任务',async()=>{
   await embeddingEnabled(false);
   await pauseSearchOptimize(engine,true);
@@ -87,6 +130,7 @@ test('旧维护回执缺少分块指纹时完成一次核验，后续不重复�
 },120000);
 
 test('深度整理遵守向量暂停和电脑忙闲，后台恢复后只补缺失向量',async()=>{
+  cpu=0.95;await pauseSearchOptimize(engine,true);
   await embeddingEnabled(true);
   writeFileSync(join(directory,'vectors.md'),'# Vector task\n\n'+Array.from({length:12},(_,i)=>`## 第 ${i} 节\n\n`+'独立的测试资料需要保留已有成果并确保后台暂停有效。'.repeat(30)).join('\n\n'));
   const before=calls;const task=await runtime.submitDream({preset:'full',sourceId:'default'},'scheduled');

@@ -625,6 +625,10 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
           roundSlugs = undefined;
           skippedRound = false;
         }
+        if (stage.id === 'index' && skippedRound) {
+          skippedRound = !sources.some(source => checkpoint.phases[source.id]?.some(phase =>
+            Number(phase.details.knowledge_created ?? 0) > 0 || Number(phase.details.knowledge_maintained ?? 0) > 0));
+        }
         if (stage.id === 'entities' && ingestEnabled && !input.dryRun) {
           for (const source of sources) {
             const requested = await rpc('task.captureRequest', [source.id]) as string[] | undefined;

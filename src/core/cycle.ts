@@ -1648,6 +1648,7 @@ export async function runCycle(
   const start = performance.now();
   const requestedPhases = opts.phases ?? DEFAULT_PHASES;
   const resolvedPhases = resolveCyclePhases(opts.phases, opts.sourceId);
+  const defersDerivedEmbedding = resolvedPhases.includes('embed');
   const restored = (opts.completedPhases ?? []).filter(item => resolvedPhases.includes(item.phase));
   const phases = resolvedPhases.filter(phase => !restored.some(item => item.phase === phase) && (!opts.phaseWindow || opts.phaseWindow.includes(phase)));
   const excludedPhases = requestedPhases.filter(phase => !resolvedPhases.includes(phase));
@@ -2385,7 +2386,7 @@ export async function runCycle(
           since:opts.knowledgeSince,
           requireSourceQuotes:opts.includePendingKnowledge,
           reuseDuplicateSources:opts.reuseDuplicateKnowledgeSources,
-          deferEmbedding:phases.includes('embed'),
+          deferEmbedding: defersDerivedEmbedding,
           // v0.41.19.0 (T3): closure refreshes cycle lock + fires outer hook.
           yieldDuringPhase: buildYieldDuringPhase(lock, opts.yieldDuringPhase),
           // v0.41.19.0 (T4): pass same reporter (not a child — cycle.ts
@@ -2553,7 +2554,7 @@ export async function runCycle(
           brainDir: brainDir ?? undefined,
           sourceId: cycleSourceId ?? undefined,
           dryRun,
-          deferEmbedding:phases.includes('embed'),
+          deferEmbedding: defersDerivedEmbedding,
           since:opts.knowledgeSince,
           // v0.41.19.0 (T3): closure refreshes cycle lock + fires outer hook.
           yieldDuringPhase: buildYieldDuringPhase(lock, opts.yieldDuringPhase),
