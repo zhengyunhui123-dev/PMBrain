@@ -32,6 +32,7 @@ import { upsertExtractRollup } from '../extract/rollup-writer.ts';
 import { chat as gatewayChat, isAvailable } from '../ai/gateway.ts';
 import { importFromContent } from '../import-file.ts';
 import { serializeMarkdown } from '../markdown.ts';
+import { validateSlug } from '../utils.ts';
 import { dreamModelDetails, resolveDreamModel } from './model-routing.ts';
 
 const DEFAULT_BUDGET_USD = 1.5;
@@ -289,7 +290,7 @@ export async function runPhaseSynthesizeConcepts(
   for (const group of atomGroups) {
     throwIfAborted(opts.signal, '[dream] synthesize_concepts');
     const title=group.conceptSlug.split('/').pop()??group.conceptSlug;
-    const outputSlug=`concepts/${title}`;
+    const outputSlug = validateSlug(`concepts/${title}`);
     const outputSourceId=opts.sourceId??'default';
     const baseline=await engine.getPage(outputSlug,{sourceId:outputSourceId});
     const membersHash=createHash('sha256').update(JSON.stringify(['dream-concept-v1',group.tier,group.atomRefs.map((ref,i)=>[ref.source_id,ref.slug,group.atomTitles[i],group.atomBodies[i]]).sort((a,b)=>JSON.stringify(a).localeCompare(JSON.stringify(b)))])).digest('hex');

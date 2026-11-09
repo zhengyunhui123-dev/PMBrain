@@ -145,6 +145,43 @@ describe('synthesize_concepts concept-provenance edges', () => {
     expect((await provenanceRows()).length).toBe(4);
   }, 120_000);
 
+  test('uses one canonical slug for mixed-case concepts, their chunks and provenance', async () => {
+    const label = 'AI协作的版本控制';
+    const slug = 'concepts/ai协作的版本控制';
+    const entries = atoms.map((atom, index) => ({
+      ...atom,
+      concept_refs: [index === 0 ? label : label.toLowerCase()],
+    }));
+    for (const atom of entries) {
+      await engine.putPage(atom.slug, {
+        type: 'atom',
+        title: atom.title,
+        compiled_truth: atom.body,
+        timeline: '',
+        frontmatter: { concepts: atom.concept_refs },
+      }, { sourceId: 'personal' });
+    }
+
+    const opts = { _atoms: entries, sourceId: 'personal', deferEmbedding: true };
+    const result = await runPhaseSynthesizeConcepts(engine, opts);
+    expect(result.status).toBe('ok');
+    expect(result.details?.concept_slugs).toEqual([slug]);
+
+    const page = await engine.getPage(slug, { sourceId: 'personal' });
+    expect(page?.title).toBe(label);
+    expect(await engine.getPage(slug, { sourceId: 'default' })).toBeNull();
+    expect((await engine.getChunks(slug, { sourceId: 'personal' })).length).toBeGreaterThan(0);
+
+    const rows = await provenanceRows();
+    expect(rows.filter(row => row.from_slug === slug).map(row => row.to_slug).sort()).toEqual(memberSlugs);
+    expect(rows.filter(row => row.to_slug === slug).map(row => row.from_slug).sort()).toEqual(memberSlugs);
+
+    const repeated = await runPhaseSynthesizeConcepts(engine, opts);
+    expect(repeated.details?.concepts_cached).toBe(1);
+    expect((await engine.getPage(slug, { sourceId: 'personal' }))?.id).toBe(page?.id);
+    expect(await provenanceRows()).toHaveLength(rows.length);
+  }, 120_000);
+
   test('dry-run writes zero provenance edges', async () => {
     await seedThemeAtoms();
     const result = await runPhaseSynthesizeConcepts(engine, {
