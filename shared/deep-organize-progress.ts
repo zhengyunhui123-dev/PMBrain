@@ -7,12 +7,31 @@ export const DEEP_ORGANIZE_STAGES = [
   { id: 'knowledge', title: '提炼长期知识', detail: '从资料中提炼有出处的长期知识点', phases: ['extract_atoms'] },
   { id: 'entities', title: '识别和更新实体', detail: '识别人物、项目、公司和组织，写入新的实体页面', phases: ['capture_entities'] },
   { id: 'concepts', title: '整理模式与概念', detail: '按现有规则整理模式、概念和薄弱页面', phases: ['patterns', 'synthesize_concepts', 'recompute_emotional_weight', 'consolidate', 'edge_contradictions', 'drift', 'standing_questions', 'conversation_facts_backfill', 'enrich_thin'] },
-  { id: 'index', title: '更新搜索索引', detail: '更新本次待处理内容的搜索向量', phases: ['embed'] },
   { id: 'review', title: '完成检查', detail: '检查孤立页面和知识结构', phases: ['orphans', 'schema-suggest', 'purge'] },
 ] as const;
 
-export type DeepStageId = typeof DEEP_ORGANIZE_STAGES[number]['id'];
+type CurrentDeepStageId = typeof DEEP_ORGANIZE_STAGES[number]['id'];
+export type DeepStageId = CurrentDeepStageId | 'index';
+const contentBudgetMinutes = { relations: 5, knowledge: 15, entities: 5, concepts: 5 } as const;
+
+export function deepContentBudgetMs(id: DeepStageId, stages: DeepStageResult[]): number | undefined {
+  const keys = Object.keys(contentBudgetMinutes) as (keyof typeof contentBudgetMinutes)[];
+  const index = keys.findIndex(key => key === id);
+  if (index < 0) return undefined;
+  const previous = keys.slice(0, index);
+  const spent = stages.filter(stage => previous.some(key => key === stage.id)).reduce((total, stage) => total + stage.durationMs, 0);
+  return Math.max(0, keys.slice(0, index + 1).reduce((minutes, key) => minutes + contentBudgetMinutes[key], 0) * 60_000 - spent);
+}
 export type DeepPhaseSnapshot = DreamPhaseState & { duration_ms?: number };
+
+export interface DeepRunTiming {
+  elapsedMs: number;
+  activeSince: number | null;
+}
+
+export function deepOrganizeElapsed(timing: DeepRunTiming, now: number): number {
+  return timing.elapsedMs + (timing.activeSince === null ? 0 : Math.max(0, now - timing.activeSince));
+}
 
 export interface DeepStageResult {
   id: DeepStageId;
@@ -47,25 +66,46 @@ export interface DeepRoundProgress {
   stage: DeepStageId | 'done';
   stages: DeepStageResult[];
   scan: { scanned: number; unchanged: number; incremental?: number; total?: number; complete: boolean };
-  current?: { result?: string; file?: string; startedAt?: string };
+  current?: { result?: string; file?: string; startedAt?: string; elapsedMs?: number };
   log?: DeepStageLogEntry[];
+}
+
+export function deepStageClosed(round: DeepRoundProgress, id: CurrentDeepStageId): boolean {
+  const index = DEEP_ORGANIZE_STAGES.findIndex(stage => stage.id === id);
+  const cursor = round.stage === 'done' ? DEEP_ORGANIZE_STAGES.length : DEEP_ORGANIZE_STAGES.findIndex(stage => stage.id === (round.stage === 'index' ? 'review' : round.stage));
+  return index < cursor && round.stages.some(stage => stage.id === id && stage.status !== 'failed')
+    && (id !== 'sync' || round.scan.complete);
+}
+
+export function deepStageElapsed(current: NonNullable<DeepRoundProgress['current']>, now: number): number {
+  return (current.elapsedMs ?? 0) + (current.startedAt ? Math.max(0, now - Date.parse(current.startedAt)) : 0);
+}
+
+export function pauseDeepStage(round: DeepRoundProgress, now: number): void {
+  if (round.current?.elapsedMs == null || !round.current.startedAt) return;
+  round.current.elapsedMs = deepStageElapsed(round.current, now);
+  delete round.current.startedAt;
 }
 
 export function isStagedDeepOrganize(input: { preset?: string | null; dryRun?: boolean; phase?: string | null }): boolean {
   return input.preset === 'full' && input.dryRun !== true && (!input.phase || input.phase === 'all');
 }
 
-export function deepOrganizePhaseNames(): string[] {
+export function deepOrganizePhaseNames(): (typeof DEEP_ORGANIZE_STAGES[number]['phases'][number])[] {
   return DEEP_ORGANIZE_STAGES.flatMap(stage => [...stage.phases]);
 }
 
 export function deepStageTitle(round: DeepRoundProgress): string {
   if (round.stage === 'done') return round.stages.some(stage => stage.status === 'failed' || stage.status === 'partial') ? '深度整理部分完成' : '深度整理完成';
-  return DEEP_ORGANIZE_STAGES.find(stage => stage.id === round.stage)?.title ?? '深度整理';
+  return DEEP_ORGANIZE_STAGES.find(stage => stage.id === (round.stage === 'index' ? 'review' : round.stage))?.title ?? '深度整理';
+}
+
+export function deepOrganizeRecordedStages(round: DeepRoundProgress): number {
+  return DEEP_ORGANIZE_STAGES.filter(stage => round.stages.some(saved => saved.id === stage.id)).length;
 }
 
 export function deepOrganizePercent(round: DeepRoundProgress): number {
-  const done = new Set(round.stages.map(stage => stage.id)).size;
+  const done = deepOrganizeRecordedStages(round);
   if (round.stage === 'done') return round.stages.some(stage => stage.status === 'failed' || stage.status === 'partial') ? 99 : 100;
   return Math.min(99, Math.round(done / DEEP_ORGANIZE_STAGES.length * 100));
 }
@@ -82,7 +122,7 @@ export function deepOrganizeTotals(round: DeepRoundProgress) {
 
 const count = (phases: DeepPhaseSnapshot[], key: string) => phases.reduce((sum, phase) => sum + Number(phase.details?.[key] ?? 0), 0);
 
-export function summarizeDeepStage(id: DeepStageId, phases: DeepPhaseSnapshot[], scan?: DeepRoundProgress['scan']): DeepStageResult {
+export function summarizeDeepStage(id: CurrentDeepStageId, phases: DeepPhaseSnapshot[], scan?: DeepRoundProgress['scan']): DeepStageResult {
   const spec = DEEP_ORGANIZE_STAGES.find(stage => stage.id === id)!;
   const names = new Set<string>(spec.phases);
   const relevant = phases.filter(phase => names.has(String(phase.phase)));
@@ -122,11 +162,20 @@ export function summarizeDeepStage(id: DeepStageId, phases: DeepPhaseSnapshot[],
   }
   if (id === 'concepts' && !explained) result = skipped ? (relevant.map(phase => phase.summary).find(Boolean) || spec.detail) : spec.detail;
   if (tracked && ['relations', 'knowledge', 'concepts'].includes(id)) result = `新建 ${newKnowledge} 个知识成果，维护 ${maintainedKnowledge} 个${extractLinks ? `，新增 ${extractLinks} 条关联` : ''}`;
-  if (id === 'index' && !explained) result = `已保存 ${count(relevant, 'embedded')} 个向量，剩余 ${count(relevant, 'remainingChunks')} 个分块`;
   if (id === 'review' && !explained) result = `孤立页面 ${count(relevant, 'total_orphans')}`;
+  const roundWork = relevant.some(phase => typeof phase.details?.round_fresh_processed === 'number');
+  const roundTimeReached = relevant.some(phase => phase.details?.round_time_reached === true);
+  const synthesisWork = relevant.some(phase => typeof phase.details?.round_synthesis_fresh === 'number');
+  const unit = id === 'concepts' ? '个概念' : '份资料';
+  const roundDetail = [
+    ...(roundWork ? [`本轮新增或变更处理 ${count(relevant, 'round_fresh_processed')} ${unit}，历史积压处理 ${count(relevant, 'round_older_processed')} ${unit}，待处理候选 ${count(relevant, 'round_remaining')}`] : []),
+    ...(synthesisWork || count(relevant, 'round_synthesis_remaining') ? [`综合本轮对话 ${count(relevant, 'round_synthesis_fresh')} 份，历史对话 ${count(relevant, 'round_synthesis_older')} 份，待综合 ${count(relevant, 'round_synthesis_remaining')} 份`] : []),
+    ...(roundTimeReached ? ['本阶段时间额度已用完，剩余留到下一轮'] : []),
+  ];
+  const detail = id === 'sync' && scan?.complete ? `扫描 ${scan.total ?? scan.scanned}，未变化 ${scan.unchanged}，失败 ${failedFiles}` : explained && tracked ? `${spec.detail}；${explained}` : spec.detail;
   return {
     id, status, durationMs, result,
-    detail: id === 'sync' && scan?.complete ? `扫描 ${scan.total ?? scan.scanned}，未变化 ${scan.unchanged}，失败 ${failedFiles}` : explained && tracked ? `${spec.detail}；${explained}` : spec.detail,
+    detail: [detail, ...roundDetail].join('。'),
     ...(id === 'sync' ? { imported: added + modified, added, modified, failed: failedFiles } : {}),
     ...(id === 'knowledge' ? { knowledge } : {}),
     ...(tracked ? { newKnowledge, maintainedKnowledge,
@@ -136,4 +185,12 @@ export function summarizeDeepStage(id: DeepStageId, phases: DeepPhaseSnapshot[],
     ...(id === 'check' ? { checked, links: count(relevant, 'added') } : {}),
     ...(cost > 0 ? { costCny: cost } : {}),
   };
+}
+
+export function applyDeepSyncFileCounts(summary: DeepStageResult, scan: DeepRoundProgress['scan'], files?: { total: number; completed: number; failed: number; remaining: number }): DeepStageResult {
+  if (!files?.total || summary.id !== 'sync') return summary;
+  const unlisted = Math.max(0, (summary.failed ?? 0) - files.failed);
+  const failed = files.failed + unlisted;
+  const status = summary.status === 'failed' ? 'failed' : failed || files.remaining ? 'partial' : summary.status;
+  return { ...summary, status, failed, detail: `扫描 ${scan.total ?? scan.scanned}，未变化 ${scan.unchanged}，文件队列成功 ${files.completed}，失败 ${files.failed}${files.remaining ? `，待处理 ${files.remaining}` : ''}${unlisted ? `，同步阶段另有 ${unlisted} 份失败未进入文件队列` : ''}` };
 }

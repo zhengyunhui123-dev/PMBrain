@@ -15,6 +15,7 @@ import { syncFileContentFingerprint } from './checkpoint.ts';
 import { TaskResourceGuard, SYNC_QUEUE_CAPACITY, streamFileHash, copyFileSnapshot, assertImportFileSize, isSyncCapacityError } from './resource-guard.ts';
 import {readDocumentChunkManifest} from '../../core/document/chunk-manifest.ts';
 import { syncFileManifestKey } from '../../core/sync-file-identity.ts';
+import type { DeepRunTiming } from '../../../shared/deep-organize-progress.ts';
 export { syncFileManifestKey } from '../../core/sync-file-identity.ts';
 
 export const SYNC_FILE_QUEUE = 'pmbrain-sync-files';
@@ -268,13 +269,16 @@ export class SyncFileQueue {
       AND (status<>'cancelled' OR data->>'capacityParked' IS DISTINCT FROM 'true')`, [SYNC_FILE_QUEUE, sessionId]);
   }
 
-  async resume(sessionId: number) {
+  async resume(sessionId: number, timing?: { value: DeepRunTiming; status: MinionJob['status'] }, resumeFiles = true) {
     await this.engine.transaction(async tx => {
-      await tx.executeRaw(`UPDATE minion_jobs SET status = 'delayed', parent_job_id = $2, lock_token = NULL, lock_until = NULL,
+      if (resumeFiles) await tx.executeRaw(`UPDATE minion_jobs SET status = 'delayed', parent_job_id = $2, lock_token = NULL, lock_until = NULL,
         delay_until = now() + interval '1 day', error_text = NULL, updated_at = now()
         WHERE queue = $1 AND (data->>'sessionId')::bigint = $2 AND status IN ('paused','dead','failed') AND data->>'superseded' IS DISTINCT FROM 'true'`, [SYNC_FILE_QUEUE, sessionId]);
       await tx.executeRaw(`UPDATE minion_jobs SET status = 'waiting', lock_token = NULL, lock_until = NULL, timeout_at = NULL,
-        data = jsonb_set(data, '{resumeOnRestart}', 'false'::jsonb), error_text = NULL, finished_at = NULL, updated_at = now() WHERE id = $1`, [sessionId]);
+        data = jsonb_set(data, '{resumeOnRestart}', 'false'::jsonb) || $2::jsonb,
+        error_text = NULL, finished_at = NULL, updated_at = now()
+        WHERE id = $1 AND ($3::text IS NULL OR status = $3)`,
+      [sessionId, timing ? { deepTiming: timing.value } : {}, timing?.status ?? null]);
     });
   }
 

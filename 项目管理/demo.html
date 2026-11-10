@@ -650,10 +650,9 @@ const deepDemoStages=[
   {id:'knowledge',title:'提炼长期知识',label:'提炼长期知识中',seconds:305,cents:152,newKnowledge:36,result:'处理 24 / 24 份资料，新建 36 个知识点',detail:'18 份本轮变更，6 份此前待提炼，每个知识点保留出处',live:{seconds:152,cents:76,newKnowledge:18,count:'12 / 24 份资料',result:'已保存 18 个知识点，剩余 12 份待处理',file:'项目交付复盘.md'}},
   {id:'entities',title:'识别和更新实体',label:'识别和更新实体中',seconds:112,cents:84,entities:12,links:9,result:'新建 4 个实体，更新 8 个，新增 9 条关联',detail:'核对人物、项目、公司和组织的名称、来源与关系',live:{seconds:48,cents:40,entities:5,links:3,count:'8 / 18 份资料',result:'已新建 2 个实体，更新 3 个，新增 3 条关联',file:'客户访谈纪要.md'}},
   {id:'concepts',title:'整理模式与概念',label:'整理模式与概念中',seconds:180,cents:64,newKnowledge:3,maintainedKnowledge:6,result:'新建 1 个模式、2 个概念，维护 1 个模式、2 个概念和 3 个知识页',detail:'按有效证据补充已有内容，只统计实际保存的变更',live:{seconds:87,cents:32,newKnowledge:2,maintainedKnowledge:2,count:'2 / 4 个概念',result:'新建 1 个模式、1 个概念，维护 1 个模式、1 个概念'}},
-  {id:'index',title:'更新搜索索引',label:'更新搜索索引中',seconds:153,cents:18,result:'已保存 180 / 180 个分块的向量',detail:'更新本次待处理的搜索向量',live:{seconds:85,cents:10,count:'108 / 180 个分块',result:'已保存 108 个分块的向量，剩余 72 个',file:'项目交付复盘.md'}},
   {id:'review',title:'完成检查',label:'完成检查中',seconds:30,result:'检查孤立页面和知识结构，发现 2 个页面待补关联',detail:'待补关联保留在本轮结果中',live:{seconds:13,count:'孤立页面检查已完成',result:'发现 2 个页面待补关联，知识结构待检查'}}
 ];
-const deepDemoScenarios=[...deepDemoStages.map(stage=>[stage.id,stage.label]),['stopped','已停止'],['failed','阶段失败'],['no-vector','完成 · 跳过向量'],['done','已完成']];
+const deepDemoScenarios=[...deepDemoStages.map(stage=>[stage.id,stage.label]),['stopped','已停止'],['failed','阶段失败'],['partial','部分完成'],['done','已完成']];
 const deepDemoDuration=seconds=>[Math.floor(seconds/60)?`${Math.floor(seconds/60)} 分`:'',`${seconds%60} 秒`].filter(Boolean).join(' ');
 const deepDemoCost=cents=>`¥${(cents/100).toFixed(2)}`;
 function deepDemoSnapshot(t){
@@ -661,15 +660,14 @@ function deepDemoSnapshot(t){
   const stageIndex=t.state==='done'?deepDemoStages.length:deepDemoStages.findIndex(stage=>stage.id===phase);
   const stage=deepDemoStages[stageIndex];
   const live=stage?.live;
-  const skipped=t.state==='done'&&t.deepSkipVector;
-  const records=deepDemoStages.slice(0,stageIndex).map(item=>skipped&&item.id==='index'?{...item,seconds:0,cents:0,skipped:true,result:'尚未配置向量模型',detail:'本轮跳过向量更新'}:item);
+  const records=deepDemoStages.slice(0,stageIndex).map(item=>t.deepPartial&&item.id==='concepts'?{...item,partial:true,detail:'已有成果已保存，仍有概念待整理'}:item);
   const completed=stageIndex===deepDemoStages.length;
   const failed=t.state==='error';
   const stopped=['stopped','paused'].includes(t.state);
-  const label=completed?'已完成':failed?'阶段失败':stopped?'已停止':'进行中';
-  const percent=stageIndex/deepDemoStages.length*100;
+  const label=completed?(t.deepPartial?'部分完成':'已完成'):failed?'阶段失败':stopped?'已停止':'进行中';
+  const percent=t.deepPartial?99:stageIndex/deepDemoStages.length*100;
   const totals=key=>records.reduce((sum,item)=>sum+(item[key]??0),live?.[key]??0);
-  const scenario=completed?(skipped?'no-vector':'done'):failed?'failed':stopped?'stopped':phase;
+  const scenario=completed?(t.deepPartial?'partial':'done'):failed?'failed':stopped?'stopped':phase;
   return {stage,live,records,completed,failed,stopped,label,percent,totals,scenario};
 }
 function openDeepDemo(t){
@@ -692,22 +690,22 @@ function openDeepDemo(t){
   const stages=deepDemoStages.map((item,index)=>{
     const record=records[index];
     const active=item===stage;
-    const state=record?(record.skipped?'已跳过':'已完成'):active?label:'待执行';
+    const state=record?(record.skipped?'已跳过':record.partial?'部分完成':'已完成'):active?label:'待执行';
     return `<li class="mp-result-row mp-deep-stage ${record?'is-recorded':''} ${record?.skipped?'is-skipped':''}" ${active?'aria-current="step"':''}>
-      <span class="mp-step-dot" aria-hidden="true">${record&&!record.skipped?'✓':index+1}</span><strong>${item.title}<small>${state}</small></strong>
+      <span class="mp-step-dot" aria-hidden="true">${record&&!record.skipped?(record.partial?'!':'✓'):index+1}</span><strong>${item.title}<small>${state}</small></strong>
       <span>${record?`${record.result}<small>${record.detail}</small>`:active?live.count:'—'}</span>
       ${record&&!record.skipped?`<time datetime="PT${record.seconds}S">${deepDemoDuration(record.seconds)}<small>${deepDemoCost(record.cents??0)}</small></time>`:''}</li>`;
   });
   const contentStart=2,contentEnd=6;
   const contentItems=[...records,live].slice(contentStart,contentEnd);
   const contentTotal=key=>contentItems.reduce((sum,item)=>sum+(item?.[key]??0),0);
-  const contentState=records.length>=contentEnd?'已完成':records.length>=contentStart?label:'待执行';
+  const contentState=records.length>=contentEnd?(t.deepPartial?'部分完成':'已完成'):records.length>=contentStart?label:'待执行';
   const results=`<section class="mp-results" aria-label="阶段记录"><h3>阶段记录</h3>
     <ol class="mp-deep-stages">${stages.slice(0,contentStart).join('')}</ol>
     <section class="mp-deep-content" aria-label="理解内容与关联">
       <div class="mp-deep-content-heading"><h4>理解内容与关联</h4><span>${contentState}</span></div>
       <p class="mp-deep-content-counts">新建 ${contentTotal('newKnowledge')} 个知识成果 · 维护 ${contentTotal('maintainedKnowledge')} 个 · 新增关联 ${contentTotal('links')} 条</p>
-      <p class="mp-note">整理符合条件的新增、变更资料，也补做此前待处理的资料。观点生成默认关闭。</p>
+      <p class="mp-note">优先整理本轮新增和变更的资料，同时补做历史积压。四个内容阶段共享 30 分钟软预算，剩余候选留到下一轮。</p>
       <ol class="mp-deep-stages" start="${contentStart+1}">${stages.slice(contentStart,contentEnd).join('')}</ol>
     </section>
     <ol class="mp-deep-stages" start="${contentEnd+1}">${stages.slice(contentEnd).join('')}</ol>
@@ -729,9 +727,9 @@ document.addEventListener('change',event=>{
   if(event.target.id!=='deepDemoState')return;
   const key=event.target.value;
   const t=tasks.find(item=>item.id===Number(event.target.dataset.id));
-  t.state=key==='failed'?'error':key==='stopped'?'stopped':['done','no-vector'].includes(key)?'done':'active';
+  t.state=key==='failed'?'error':key==='stopped'?'stopped':['done','partial'].includes(key)?'done':'active';
   t.deepStage=t.state==='active'?key:t.state==='error'||t.state==='stopped'?'knowledge':'check';
-  t.deepSkipVector=key==='no-vector';
+  t.deepPartial=key==='partial';
   saveDeepDemo(t);
   const root=$('#pageRoot');
   const scroll=root.scrollTop;

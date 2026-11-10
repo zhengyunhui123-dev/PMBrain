@@ -159,7 +159,7 @@ describe('Dream-derived pages reach retrieval without Embedding', () => {
 });
 
 describe('Dream-derived pages honor explicit Embedding configuration', () => {
-  test('概念阶段只保存正文和关联，单独的向量阶段还在本轮计划内', async () => {
+  test('移除向量阶段后，指定后台补齐的概念阶段仍只保存正文和关联', async () => {
     configureGateway({ embedding_model: EMBEDDING_MODEL, embedding_dimensions: EMBEDDING_DIMS, env: {} });
     let calls = 0;
     __setEmbedTransportForTests(async (args: { values: string[] }) => {
@@ -172,9 +172,10 @@ describe('Dream-derived pages honor explicit Embedding configuration', () => {
       });
     }
     const report = await runCycle(engine, {
-      brainDir: null, phases: ['synthesize_concepts','embed'], phaseWindow: ['synthesize_concepts'], forcePackPhases: ['synthesize_concepts'],
+      brainDir: null, phases: ['synthesize_concepts'], deferDerivedEmbedding: true, forcePackPhases: ['synthesize_concepts'],
     });
     expect(report.phases.find(phase => phase.phase === 'synthesize_concepts')?.details.concepts_written).toBe(1);
+    expect(report.phases.some(phase => phase.phase === 'embed')).toBe(false);
     expect(calls).toBe(0);
     const chunks = await engine.getChunks('concepts/staged-embedding');
     expect(chunks.length).toBeGreaterThan(0);

@@ -1,6 +1,6 @@
 import type { ConsoleRun } from '../lib/shared';
 import { importOutcome } from '../../../shared/import-outcome';
-import { deepOrganizePercent, deepOrganizeTotals, deepStageTitle } from '../../../shared/deep-organize-progress';
+import { deepOrganizePercent, deepOrganizeTotals, deepStageElapsed, deepStageTitle } from '../../../shared/deep-organize-progress';
 import {maintenancePercent} from '../../../shared/maintenance-progress';
 
 export function taskPhaseSummary(run: ConsoleRun, now = Date.now()) {
@@ -17,6 +17,7 @@ export function taskPhaseSummary(run: ConsoleRun, now = Date.now()) {
   }
   const elapsed=terminal
     ?typeof run.durationMs==='number'&&Number.isFinite(run.durationMs)?Math.max(0,run.durationMs):null
+    :view?.deep ? view.deep.current ? deepStageElapsed(view.deep.current,now) : null
     :phase?phase.elapsedMs+(run.status==='running'&&phase.startedAt?Math.max(0,now-Date.parse(phase.startedAt)):0):null;
   const seconds=elapsed==null?null:Math.floor(elapsed/1000);
   const sync=phase?.id==='sync'&&!view?.syncScan?.active?view?.syncFiles:undefined;
@@ -35,7 +36,7 @@ export const taskStopping = (run: ConsoleRun) => run.status === 'running' && run
 const taskWasSkipped = (run: ConsoleRun) => (run.result as {status?:string}|undefined)?.status === 'skipped' || run.product?.stage === '任务未执行';
 const taskIsPartial=(run:ConsoleRun)=>(run.result as {status?:string}|undefined)?.status==='partial'||run.product?.stage.startsWith('部分完成')===true
   || (run.kind==='import_path' && !['running','queued','cancelled'].includes(run.status) && importOutcome(run.result)?.outcome==='partial');
-export const taskCanRetry=(run:ConsoleRun)=>run.id.startsWith('task-')&&(['failed','cancelled'].includes(run.status)||(run.searchOptimize===true&&run.status==='paused')||(run.status==='completed'&&['import_path','dream_capture_entities','dream_quick','dream_full','dream_cycle','dream_sync'].includes(run.kind)&&taskIsPartial(run)));
+export const taskCanRetry=(run:ConsoleRun)=>run.id.startsWith('task-')&&(['failed','cancelled'].includes(run.status)||(run.searchOptimize===true&&run.status==='paused')||(run.status==='completed'&&['import_path','dream_capture_entities','dream_quick','dream_cycle','dream_sync'].includes(run.kind)&&taskIsPartial(run)));
 export const taskRoundCompleted = (run: ConsoleRun) => run.kind.startsWith('dream_') && run.status === 'completed' && !taskWasSkipped(run);
 export const taskLiveStage = (run: ConsoleRun) => run.product?.deep ? deepStageTitle(run.product.deep) : run.product?.stage;
 export const taskPercent = (run: ConsoleRun) => run.product?.deep?deepOrganizePercent(run.product.deep)

@@ -48,6 +48,7 @@ export interface PatternsPhaseOpts {
   deadlineAtMs?: number | null;
   sourceId?: string;
   incremental?: boolean;
+  roundWork?: import('../pmbrain-adapters/deep-round-work.ts').DeepRoundWork;
   _handler?: MinionHandler;
   privateQueueOwnerJobId?: number | null;
 }
@@ -72,7 +73,15 @@ export async function runPhasePatterns(
     const modelDetails = dreamModelDetails(config.resolvedModel, executionMode);
 
     // Gather reflections within lookback window.
-    const reflections = await gatherReflections(engine, config.lookbackDays, opts.sourceId);
+    let reflections = await gatherReflections(engine, config.lookbackDays, opts.sourceId);
+    if (opts.roundWork) {
+      if (Date.now() >= opts.roundWork.deadlineAtMs) {
+        return { ...ok('本轮时间已用完，待下轮整理模式', { round_time_reached: true }), status: 'warn' };
+      }
+      const priority = new Set(opts.roundWork.prioritySlugs);
+      const { orderRoundWork } = await import('../pmbrain-adapters/deep-round-work.ts');
+      reflections = orderRoundWork(reflections, reflection => priority.has(reflection.slug), reflections.length);
+    }
     if (reflections.length < config.minEvidence) {
       return skipped(
         'insufficient_evidence',

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import type { ConsoleRun } from '../shared/contracts/common.ts';
-import { taskHasRemaining, taskPercent, taskRoundCompleted, taskRoundSummary, taskStatus, taskPhaseSummary } from '../admin/src/product/task-presentation.ts';
+import { taskCanRetry, taskHasRemaining, taskPercent, taskRoundCompleted, taskRoundSummary, taskStatus, taskPhaseSummary } from '../admin/src/product/task-presentation.ts';
 
 const sample = (): ConsoleRun => ({ id:'task-7',kind:'dream_full',status:'completed',command:[],stdout:'',stderr:'',error:null,exitCode:0,startedAt:'2026-10-09T01:00:00Z',completedAt:'2026-10-09T01:01:00Z',durationMs:60000,
   product:{name:'AI 深度整理',stage:'部分完成，请查看未完成步骤',percent:0,phasePercent:null,completedSteps:1,processed:0,total:1482,file:null,
@@ -23,6 +23,28 @@ describe('整理按本轮成果展示',()=>{
     const run=sample(),before=JSON.stringify(run);
     expect(taskStatus(run)).toBe('部分完成');expect(taskRoundCompleted(run)).toBe(true);expect(taskPercent(run)).toBeNull();
     expect(taskHasRemaining(run)).toBe(true);expect(JSON.stringify(run)).toBe(before);expect(run.product?.percent).toBe(0);
+  });
+  test('任务中心的深度整理阶段耗时累计已运行窗口，等待时保持不变',()=>{
+    const run=sample();
+    const now=Date.parse('2026-11-09T07:59:04Z');
+    run.product!.deep={stage:'entities',stages:[],scan:{scanned:2,unchanged:0,complete:true},current:{elapsedMs:60_000}};
+    run.status='queued';
+    expect(taskPhaseSummary(run,now).duration).toBe('1 分 0 秒');
+    run.status='running';
+    run.product!.deep.current!.startedAt='2026-11-09T07:59:00Z';
+    expect(taskPhaseSummary(run,now).duration).toBe('1 分 4 秒');
+  });
+  test('深度整理部分完成保留结果但不提供继续入口，失败和已停止仍可继续',()=>{
+    const run=sample();
+    expect(taskCanRetry(run)).toBe(false);
+    for(const status of ['failed','cancelled'] as const){
+      run.status=status;
+      expect(taskCanRetry(run)).toBe(true);
+    }
+    run.status='completed';run.kind='dream_quick';
+    expect(taskCanRetry(run)).toBe(true);
+    run.kind='import_path';
+    expect(taskCanRetry(run)).toBe(true);
   });
   test('真实成果先展示，待检查和剩余页分开，不把Token与预算当成果',()=>{
     const summary=taskRoundSummary(sample());

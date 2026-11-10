@@ -88,7 +88,7 @@ function preferLiveRun(saved: ConsoleRun, live: ConsoleRun | undefined): Console
   if (!live) return saved;
   const moving = ['running', 'queued'].includes(live.status) || ['running', 'queued'].includes(saved.status);
   if (!moving) return saved;
-  return { ...saved, status: live.status, error: live.error, product: live.product ?? saved.product, completedAt: live.completedAt, durationMs: live.durationMs, result: live.result ?? saved.result };
+  return { ...saved, status: live.status, error: live.error, product: live.product ?? saved.product, completedAt: live.completedAt, durationMs: live.durationMs, deepTiming: live.deepTiming ?? saved.deepTiming, result: live.result ?? saved.result };
 }
 
 function isToday(value: string | null): boolean {

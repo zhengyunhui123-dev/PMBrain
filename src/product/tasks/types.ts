@@ -24,6 +24,8 @@ export interface SyncFileInput {
 export interface MaintenanceCheckpoint {
   quickProgress?: import('../../../shared/maintenance-progress').MaintenanceRoundProgress;
   deepProgress?: import('../../../shared/deep-organize-progress').DeepRoundProgress;
+  deepVectorHandoff?: true;
+  deepAtomPlans?: Record<string, string[]>;
   quickSync?: { sourceIds?: string[]; sources: Record<string, { root: string; paths: string[]; checked: number; checkedPaths: string[]; unchanged: number; entries: SyncFileInput[]; complete: boolean }> };
   retiredCapture?: Record<string, { phases: PhaseResult[]; report?: Record<string, unknown> }>;
   captureWindows?:Record<string,PhaseResult>;

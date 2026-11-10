@@ -57,6 +57,7 @@ import { serializeMarkdown } from '../markdown.ts';
 import { dreamModelDetails, resolveDreamModel } from './model-routing.ts';
 import { writeReceipt } from '../extract/receipt-writer.ts';
 import { throwIfAborted } from '../abort-check.ts';
+import { mixRoundWork, type DeepRoundWork } from '../pmbrain-adapters/deep-round-work.ts';
 import { upsertExtractRollup } from '../extract/rollup-writer.ts';
 import { parseLlmJson } from '../llm-json.ts';
 import {defaultMaxOutputTokens,isThinkingModel} from '../ai/model-compatibility.ts';
@@ -111,6 +112,7 @@ export interface ExtractAtomsOpts {
   sourceId?: string;
   dryRun?: boolean;
   affectedSlugs?: string[];
+  roundWork?: DeepRoundWork;
   /** Test seam: alternative chat function (bypasses real LLM calls). */
   _chat?: typeof gatewayChat;
   /**
@@ -227,12 +229,13 @@ export async function discoverExtractablePages(
   engine: BrainEngine,
   sourceId: string,
   affectedSlugs?: string[],
-  scope?:{schemaPack?:string;since?:string;strict?:boolean;reuseDuplicateSources?:boolean;retrySignature?:string},
+  scope?:{schemaPack?:string;since?:string;strict?:boolean;reuseDuplicateSources?:boolean;retrySignature?:string;excludeSlugs?:string[];oldestFirst?:boolean},
 ): Promise<DiscoveredPage[]> {
   if (Array.isArray(affectedSlugs) && affectedSlugs.length === 0) return [];
   const hasFilter = Array.isArray(affectedSlugs) && affectedSlugs.length > 0;
   const capSlot = hasFilter ? '$8' : '$7';
   const retrySlot = hasFilter ? '$9' : '$8';
+  const excludeSlot = hasFilter ? '$10' : '$9';
   const sql = `
     SELECT p.slug,
            p.id,p.knowledge_revision,(SELECT incarnation FROM sources WHERE id=p.source_id) AS source_incarnation,
@@ -265,6 +268,7 @@ export async function discoverExtractablePages(
       AND ($5::timestamptz IS NULL OR p.updated_at >= $5::timestamptz)
       AND p.slug !~* $6
       ${hasFilter ? "AND p.slug = ANY($7::text[])" : ''}
+      ${scope?.excludeSlugs?.length ? `AND NOT (p.slug = ANY(${excludeSlot}::text[]))` : ''}
       AND NOT (
         COALESCE(p.frontmatter->>'atoms_fail_hash','') = p.content_hash
         AND COALESCE(p.frontmatter->>'atoms_fail_signature','') = ${retrySlot}
@@ -280,7 +284,7 @@ export async function discoverExtractablePages(
           AND atom.frontmatter->>'source_hash' = substring(p.content_hash from 1 for 16)
           AND atom.deleted_at IS NULL
       )`}
-    ORDER BY p.updated_at DESC
+    ORDER BY p.updated_at ${scope?.oldestFirst ? 'ASC' : 'DESC'}, p.id
     LIMIT $4
   `;
   const params: unknown[] = [
@@ -294,6 +298,7 @@ export async function discoverExtractablePages(
   if (hasFilter) params.push(affectedSlugs);
   params.push(await resolveExtractAtomsInputCap(engine));
   params.push(scope?.retrySignature??'');
+  if (scope?.excludeSlugs?.length) params.push(scope.excludeSlugs);
 
   try {
     const rows = await engine.executeRaw<{
@@ -495,6 +500,17 @@ export async function runPhaseExtractAtoms(
   let pages: DiscoveredPage[];
   if (opts._pages !== undefined) {
     pages = opts._pages;
+  } else if (opts.roundWork) {
+    const { prioritySlugs, atomPlan, saveAtomPlan } = opts.roundWork;
+    if (atomPlan) {
+      const pending = new Map((await discoverExtractablePages(engine, sourceId, atomPlan, {...sourceScope,strict:true})).map(page => [page.slug, page]));
+      pages = atomPlan.flatMap(slug => pending.has(slug) ? [pending.get(slug)!] : []);
+    } else {
+      const fresh = await discoverExtractablePages(engine, sourceId, prioritySlugs, {...sourceScope,strict:true,oldestFirst:true});
+      const older = await discoverExtractablePages(engine, sourceId, undefined, {...sourceScope,strict:true,excludeSlugs:prioritySlugs,oldestFirst:true});
+      pages = mixRoundWork(fresh, older, PAGE_DISCOVERY_BUDGET);
+      await saveAtomPlan?.(pages.map(page => page.slug));
+    }
   } else {
     pages = await discoverExtractablePages(engine, sourceId, opts.affectedSlugs,{...sourceScope,strict:true});
   }
@@ -586,6 +602,10 @@ export async function runPhaseExtractAtoms(
   const writtenAtomSlugs: string[] = [];
   let transcriptsProcessed = 0;
   let pagesProcessed = 0;
+  const freshSlugs = new Set(opts.roundWork?.prioritySlugs);
+  let freshProcessed = 0;
+  let roundTimeReached = false;
+  const pageCompleted = (slug: string) => { pagesProcessed++; if (freshSlugs.has(slug)) freshProcessed++; };
   let transcriptsSkipped = 0;
   let pagesSkipped = 0;
   const failures: Array<{ source: string; error: string }> = [];
@@ -626,11 +646,12 @@ export async function runPhaseExtractAtoms(
   await withBudgetTracker(budgetTracker, async () => {
   for (const item of work) {
     throwIfAborted(opts.signal, '[dream] extract_atoms');
+    if (opts.roundWork && Date.now() >= opts.roundWork.deadlineAtMs) { roundTimeReached = true; break; }
     await maybeYield();
     const originLabel = item.kind === 'transcript' ? item.filePath : item.slug;
     try {
       if(item.kind==='page'&&opts.reuseDuplicateSources&&!opts.dryRun&&opts._pages===undefined&&await reuseAtomSource(engine,sourceId,item,inputCap)){
-        duplicatesSkipped++;pagesProcessed++;
+        duplicatesSkipped++;pageCompleted(item.slug);
         opts.progress?.tick(1,`${totalAtomsExtracted} atoms / ${duplicatesSkipped} skipped`);
         continue;
       }
@@ -716,7 +737,7 @@ export async function runPhaseExtractAtoms(
           else await stampTranscriptTombstone(engine, sourceId, item.filePath, item.contentHash);
         }
         if (item.kind === 'transcript') transcriptsProcessed++;
-        else pagesProcessed++;
+        else pageCompleted(item.slug);
         continue;
       }
 
@@ -803,7 +824,7 @@ export async function runPhaseExtractAtoms(
         totalAtomsExtracted += atoms.length; // count for dry-run reporting
       }
       if (item.kind === 'transcript') transcriptsProcessed++;
-      else pagesProcessed++;
+      else pageCompleted(item.slug);
       // v0.41.19.0 (T4): one tick per processed item, with a count note.
       // Reporter rate-limits to ~1 line/sec; safe to tick every iter.
       opts.progress?.tick(1, `${totalAtomsExtracted} atoms / ${duplicatesSkipped} skipped`);
@@ -891,7 +912,7 @@ export async function runPhaseExtractAtoms(
   }
   return {
     phase: 'extract_atoms',
-    status: failures.length > 0||budgetExhausted||Number(remainingPages)>0||unresolvedLinks.length>0 ? 'warn' : 'ok',
+    status: failures.length > 0||budgetExhausted||roundTimeReached||Number(remainingPages)>0||unresolvedLinks.length>0 ? 'warn' : 'ok',
     duration_ms: 0,
     summary:
       `extract_atoms: ${totalAtomsExtracted} atoms from ` +
@@ -908,6 +929,7 @@ export async function runPhaseExtractAtoms(
       transcripts_total: transcripts.length,
       transcripts_skipped_budget: transcriptsSkipped,
       pages_processed: pagesProcessed,
+      ...(opts.roundWork && { round_fresh_processed: freshProcessed, round_older_processed: pagesProcessed - freshProcessed, round_remaining: remainingPages, round_time_reached: roundTimeReached }),
       pages_remaining:remainingPages,
       pages_held:heldPages,
       pages_total: pages.length,

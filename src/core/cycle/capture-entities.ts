@@ -86,6 +86,7 @@ export interface EntityCaptureChunk extends EntityCaptureCandidate {
 }
 
 export interface CaptureEntitiesOpts {
+  roundWork?: import('../pmbrain-adapters/deep-round-work.ts').DeepRoundWork;
   quickEntitiesOnly?: boolean;
   window?:{maxChunks:number;maxDurationMs:number};
   batchCapture?: boolean;
@@ -567,6 +568,9 @@ export async function runPhaseCaptureEntities(
   let afterPageId = 0;
   for (;;) {
     throwIfAborted(opts.signal, '[dream] capture candidate planning');
+    if (opts.roundWork && Date.now() >= opts.roundWork.deadlineAtMs) {
+      return phaseResult('warn', '本轮时间已用完，待下轮继续识别实体', { round_time_reached: true });
+    }
     if(opts.slugs?.length===0)break;
     const batch = await selectEntityCaptureCandidates(engine, opts.sourceId, { metadataOnly: true, slugs: opts.slugs, afterPageId, limit: 100 });
     selected.push(...batch.filter(page=>!excludedEntityCapturePath(page.slug)));
@@ -681,6 +685,11 @@ export async function runPhaseCaptureEntities(
     });
   }
   candidates.splice(0,candidates.length,...pendingCandidates);
+  const prioritySlugs = new Set(opts.roundWork?.prioritySlugs);
+  if (opts.roundWork) {
+    const { orderRoundWork } = await import('../pmbrain-adapters/deep-round-work.ts');
+    candidates.splice(0, candidates.length, ...orderRoundWork(candidates, page => prioritySlugs.has(page.slug), candidates.length));
+  }
   const prunedCounts={created:0};
   const relationsRemoved=await pruneEntityIngestLinks(engine,opts.sourceId,prunedCounts);
   const { runMentionPass } = await import('../mentions/pass.ts');
@@ -790,6 +799,7 @@ export async function runPhaseCaptureEntities(
   const relationSlugs = new Set<string>(initialRepair.slugs);
   let pagesSubmitted = 0;
   let pagesProcessed = 0;
+  let freshProcessed = 0;
   let chunksSubmitted = 0;
   let chunksProcessed = 0;
   let activeChunks=0,peakChunks=0;
@@ -821,7 +831,8 @@ export async function runPhaseCaptureEntities(
   let failureReason: CaptureStopReason = 'failure';
   let budgetStop: 'cost' | null = null;
   const failedPageSlugs = new Set<string>();
-  const windowReached=()=>opts.window!=null&&windowStartedAt>0&&(windowAdmissions>=Math.max(1,opts.window.maxChunks)||Date.now()-windowStartedAt>=Math.max(1,opts.window.maxDurationMs));
+  const windowReached=()=>Boolean(opts.roundWork && Date.now() >= opts.roundWork.deadlineAtMs)
+    || (opts.window!=null&&windowStartedAt>0&&(windowAdmissions>=Math.max(1,opts.window.maxChunks)||Date.now()-windowStartedAt>=Math.max(1,opts.window.maxDurationMs)));
   const verifiedChildIds:number[]=[];
   const duplicateLocks=new Map<string,Promise<void>>();
   const chunkLocks=new Map<string,Promise<void>>();
@@ -916,6 +927,7 @@ export async function runPhaseCaptureEntities(
     let cursor = 0;
     while (cursor < candidates.length) {
       throwIfAborted(opts.signal, '[dream] capture entities');
+      if (opts.roundWork && windowReached()) { windowDeferred = true; break; }
       if(stopState()){budgetStop='cost';break;}
       const beforeIndex = await loadCaptureEntityIndex(engine, opts.sourceId);
       const batchEnd = Math.min(candidates.length, cursor + batchSize);
@@ -1135,7 +1147,11 @@ export async function runPhaseCaptureEntities(
           });
         },{signal:opts.signal,shouldStop:()=>pageStopped||!!budgetStop||fatalFailure||windowDeferred,sizeOf:planned=>planned.length*3,getConcurrency});
         if (submittedForPage > 0) pagesSubmitted += 1;
-        if (!budgetStop && completedForPage === item.chunks.length) {pagesProcessed += 1;manifestPages.get(manifestId(item.page))!.complete=true;}
+        if (!budgetStop && completedForPage === item.chunks.length) {
+          pagesProcessed++;
+          if (prioritySlugs.has(item.page.slug)) freshProcessed++;
+          manifestPages.get(manifestId(item.page))!.complete=true;
+        }
       }),{signal:opts.signal,shouldStop:()=>!!budgetStop||fatalFailure||windowDeferred,sizeOf:item=>item.bytes,
         getConcurrency});}catch(error){
         if(!opts.signal?.aborted&&!phaseAbort.signal.aborted)throw error;
@@ -1254,6 +1270,7 @@ export async function runPhaseCaptureEntities(
       pages_cached:skippedCandidates,
       pages_submitted: pagesSubmitted,
       pages_processed: pagesProcessed,
+      ...(opts.roundWork && { round_fresh_processed: relationError ? 0 : freshProcessed, round_older_processed: pagesProcessed - (relationError ? 0 : freshProcessed), round_remaining: pagesRemaining, round_time_reached: Date.now() >= opts.roundWork.deadlineAtMs }),
       chunks_submitted: chunksSubmitted,
       chunks_processed: chunksProcessed,
       peak_active_chunks:peakChunks,

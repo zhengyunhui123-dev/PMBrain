@@ -815,6 +815,9 @@ export class MinionQueue {
                           ELSE NULL END,
         attempts_started = attempts_started + 1,
         started_at = COALESCE(started_at, now()),
+        data = CASE WHEN data->'deepTiming'->'activeSince' = 'null'::jsonb
+                    THEN jsonb_set(data, '{deepTiming,activeSince}', to_jsonb(floor(extract(epoch FROM now()) * 1000)::bigint))
+                    ELSE data END,
         updated_at = now()
        WHERE id = (
          SELECT id FROM minion_jobs

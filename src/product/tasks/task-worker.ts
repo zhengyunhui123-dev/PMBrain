@@ -38,15 +38,17 @@ import { classifyErrorCode, isInfrastructureFailureCode } from '../../core/sync-
 import { performSync } from '../../commands/sync.ts';
 import { readTaskCheckpoint, taskModelFingerprint, syncFileContentFingerprint, syncFileCompatibleFingerprints, retireAutomaticCapture } from './checkpoint.ts';
 import { DeepOutputReceipt } from './deep-output-receipt';
+import { planDeepRelations } from './deep-relation-work';
+import { deferRoundPhase } from '../../core/pmbrain-adapters/deep-round-work.ts';
 import { loadAllowedSlugPrefixes } from '../../core/cycle/allowed-slug-prefixes';
 import { phaseHasPendingWork } from '../../../shared/dream-phase-state.ts';
 import { usesSyncFileQueue } from '../../../shared/task-progress.ts';
 import { isGinRepairAbortText } from '../../core/pglite-gin-repair.ts';
 import type { SyncStrategy } from '../../core/sync.ts';
-import { isOfficeFilePath, resolveSlugForPath } from '../../core/sync.ts';
+import { isOfficeFilePath } from '../../core/sync.ts';
 import { isImageFilePath } from '../../core/import-file.ts';
 import { QuickSyncPlan } from './quick-sync-plan';
-import { DEEP_ORGANIZE_STAGES, deepOrganizePhaseNames, isStagedDeepOrganize, summarizeDeepStage, type DeepRoundProgress } from '../../../shared/deep-organize-progress';
+import { DEEP_ORGANIZE_STAGES, applyDeepSyncFileCounts, deepContentBudgetMs, deepOrganizePhaseNames, deepStageClosed, deepStageElapsed, isStagedDeepOrganize, pauseDeepStage, summarizeDeepStage, type DeepRoundProgress } from '../../../shared/deep-organize-progress';
 import { DEEP_ORGANIZE_PHASE_HORIZON_MS } from './timeout.ts';
 import { classifyQuickScanHash, classifyQuickScanStat } from './quick-scan-index';
 import type { MaintenanceRoundProgress, MaintenanceStageId, MaintenanceStageResult } from '../../../shared/maintenance-progress';
@@ -347,7 +349,7 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
     },
     });
   };
-  const phases = input.preset === 'quick' ? resolveQuickMaintenancePhases()
+  const phases = stagedFull ? deepOrganizePhaseNames() : input.preset === 'quick' ? resolveQuickMaintenancePhases()
     : input.phase && input.phase !== 'all' ? [input.phase]
     : resolveDreamPresetPhases(input.preset ?? 'full');
   send({ type: 'progress', phases: [...progressPrefix,...phases] });
@@ -506,7 +508,7 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
       const partial=phases.some(phase=>phase.status==='fail'||phaseHasPendingWork(phase)||Number(phase.details.refused??0)>0);
       const result:MaintenanceStageResult={id:group.id,status:partial?'partial':phases.every(phase=>phase.status==='skipped')?'skipped':'completed',completed,total:round.current!.total,durationMs:phases.reduce((sum,phase)=>sum+phase.duration_ms,0)};
       if(group.id==='sync'){
-        const counts=await rpc('task.quickFileCounts',[]) as {completed:number;failed:number;remaining:number};
+        const counts=await rpc('task.maintenanceFileCounts',[]) as {completed:number;failed:number;remaining:number};
         Object.assign(result,{added:number('added'),modified:number('modified'),failed:counts.failed,completed:counts.completed});
         if(counts.failed||counts.remaining)result.status='partial';
       }
@@ -566,7 +568,7 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
     await dreamKnowledge.prepareProductEnrichThin(engine);
     const currentPack = loadConfig()?.schema_pack ?? 'gbrain-base';
     const knowledgePack = knowledgeEnabled ? (currentPack === 'gbrain-base-v2' ? 'pmbrain-knowledge' : currentPack === 'gbrain-base' ? 'gbrain-creator' : undefined) : undefined;
-    const deepPhases = deepOrganizePhaseNames() as CyclePhase[];
+    const deepPhases = deepOrganizePhaseNames();
     const available = (await loadAllSources(engine)).filter(source => parseSourceConfig(source.config).syncEnabled !== false);
     const ids = checkpoint.quickSync!.sourceIds ?? (input.allSources ? available.map(source => source.id) : [sourceId ?? 'default']);
     checkpoint.quickSync!.sourceIds = ids;
@@ -576,88 +578,63 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
       return source;
     });
     if (!sources.length) throw new Error('没有可同步的知识源');
+    if (!checkpoint.deepVectorHandoff) {
+      if (input.checkpoint?.deepProgress) await rpc('task.restoreDeepVectorReceipts', []);
+      checkpoint.deepVectorHandoff = true;
+    }
+    if (deepRound.stages.some(stage => stage.id === 'sync')) {
+      const counts = await rpc('task.maintenanceFileCounts', []) as { total: number; completed: number; failed: number; remaining: number };
+      deepRound.stages = deepRound.stages.map(stage => applyDeepSyncFileCounts(stage, deepRound.scan, counts));
+    }
     let lastReport: CycleReport | undefined;
     const stageReady = (stage: typeof DEEP_ORGANIZE_STAGES[number]) => {
+      if (deepStageClosed(deepRound, stage.id)) return true;
+      if (deepRound.stage === stage.id && deepRound.current?.elapsedMs != null) return false;
       const saved = deepRound.stages.find(item => item.id === stage.id);
       if (!saved || !['completed', 'skipped'].includes(saved.status)) return false;
       if (stage.id === 'sync' && !Object.values(syncPlan.sources).every(plan => plan.complete)) return false;
       return sources.every(source => (stage.phases as readonly string[]).every(phase => checkpoint.phases[source.id]?.some(savedPhase => savedPhase.phase === phase)));
     };
     const publish = (): CycleReport => {
-      const phases = sources.flatMap(source => checkpoint.phases[source.id] ?? []);
+      const phases = sources.flatMap(source => (checkpoint.phases[source.id] ?? []).filter(phase => phase.phase !== 'embed'));
       const totals = extractTotals(phases);
       let status = deriveStatus(phases, totals);
-      if (!['failed', 'skipped'].includes(status) && deepRound.stages.some(stage => stage.status === 'partial' || stage.status === 'failed')) status = 'partial';
+      if (!['failed', 'skipped'].includes(status) && deepRound.stages.some(stage => stage.id !== 'index' && (stage.status === 'partial' || stage.status === 'failed'))) status = 'partial';
       return { schema_version: '1', timestamp: startedAt.toISOString(), duration_ms: Date.now() - startedAt.getTime(), status, brain_dir: lastReport?.brain_dir ?? null, phases, totals };
     };
     const noteStage = (stageId: string, event: 'start' | 'finish', result?: string, durationMs?: number) => {
       deepRound.log = [...(deepRound.log ?? []), { at: new Date().toISOString(), stage: stageId, event, ...(durationMs !== undefined ? { durationMs } : {}), ...(result ? { result } : {}) }].slice(-24);
     };
-    const roundChanged = (): string[] | undefined => {
-      if (!deepRound.scan.complete) return undefined;
-      const syncPhases = sources.map(source => checkpoint.phases[source.id]?.find(phase => phase.phase === 'sync'));
-      const fromPhases = [...new Set(syncPhases.flatMap(phase => syncPhasePages(phase) ?? []).filter(slug => slug.length > 0))];
-      const recorded = syncPhases.every(phase => Array.isArray((phase as { pagesAffected?: unknown } | undefined)?.pagesAffected) || Array.isArray(phase?.details?.pages_affected));
-      if (recorded) return fromPhases;
-      const fromPlan = [...new Set(sources.flatMap(source => (syncPlan.sources[source.id]?.entries ?? []).map(file => resolveSlugForPath(file.relativePath))).filter(slug => slug.length > 0))];
-      if (fromPlan.length > 0) return fromPlan;
-      return (deepRound.scan.incremental ?? 0) === 0 ? [] : undefined;
+    let recoveredChanged: { sourceId: string; slug: string }[] | undefined;
+    const roundChanged = async (sourceId: string): Promise<string[]> => {
+      const syncPhase = checkpoint.phases[sourceId]?.find(phase => phase.phase === 'sync');
+      const fromPhase = syncPhasePages(syncPhase);
+      if (fromPhase !== undefined) return [...fromPhase];
+      recoveredChanged ??= (await rpc('task.deepSyncChanged', [])) as typeof recoveredChanged;
+      return (recoveredChanged ?? []).filter(row => row.sourceId === sourceId).map(row => row.slug);
     };
     notifyDeep();
-    for (const stage of DEEP_ORGANIZE_STAGES) {
+    for (const [stageIndex, stage] of DEEP_ORGANIZE_STAGES.entries()) {
       if (stageReady(stage)) continue;
       abort.signal.throwIfAborted();
+      const prior = deepRound.stage === stage.id ? deepRound.current : undefined;
       deepRound.stage = stage.id;
-      deepRound.current = { result: stage.detail, startedAt: new Date().toISOString() };
-      noteStage(stage.id, 'start');
+      deepRound.current = {
+        ...prior,
+        result: stage.detail,
+        elapsedMs: prior?.elapsedMs ?? 0,
+        startedAt: (prior?.elapsedMs != null ? prior.startedAt : undefined) ?? new Date().toISOString(),
+      };
+      if (!prior) noteStage(stage.id, 'start');
       notifyDeep();
       await rpc('task.maintenanceCheckpoint', [checkpoint]);
       pauseForDocumentOcr = stage.id !== 'check' && stage.id !== 'sync';
+      let waitingForFiles = false;
       try {
-        const changed = stage.id === 'check' || stage.id === 'sync' ? undefined : roundChanged();
-        let roundSlugs = changed;
-        let skippedRound = Boolean(changed && changed.length === 0);
-        if (stage.id === 'knowledge' && knowledgeEnabled) {
-          roundSlugs = undefined;
-          skippedRound = false;
-        }
-        if (stage.id === 'concepts' && knowledgeEnabled) {
-          roundSlugs = undefined;
-          skippedRound = false;
-        }
-        if (stage.id === 'index' && skippedRound) {
-          skippedRound = !sources.some(source => checkpoint.phases[source.id]?.some(phase =>
-            Number(phase.details.knowledge_created ?? 0) > 0 || Number(phase.details.knowledge_maintained ?? 0) > 0));
-        }
-        if (stage.id === 'entities' && ingestEnabled && !input.dryRun) {
-          for (const source of sources) {
-            const requested = await rpc('task.captureRequest', [source.id]) as string[] | undefined;
-            const slugs = [...new Set([...(checkpoint.captureRequests?.[source.id] ?? []), ...(requested ?? []), ...(roundSlugs ?? [])])];
-            if (slugs.length) {
-              checkpoint.captureRequests = { ...checkpoint.captureRequests, [source.id]: slugs };
-              skippedRound = false;
-              if (roundSlugs?.length === 0) roundSlugs = slugs;
-            }
-          }
-        }
-        if (skippedRound) {
-          const pendingOcr = await engine.executeRaw<{ slug: string | null }>(`SELECT DISTINCT data->'task'->'input'->'ocrOnly'->>'slug' AS slug FROM minion_jobs
-            WHERE name='pmbrain-document-ocr' AND data->'task'->'input'->'ocrOnly'->>'maintenanceOwnerId'=$1
-            AND status IN ('waiting','active','delayed','paused','failed','dead','cancelled')
-            AND (status<>'cancelled' OR data->>'ocrOwnerCancelled'='true')`, [String(ownerJobId ?? '')]);
-          const slugs = pendingOcr.map(row => row.slug).filter((slug): slug is string => !!slug);
-          if (slugs.length) { skippedRound = false; roundSlugs = slugs; }
-        }
-        if (skippedRound) {
-          for (const source of sources) {
-            const saved = checkpoint.phases[source.id] ?? [];
-            const extra = (stage.phases as readonly string[]).filter(phase => !saved.some(item => item.phase === phase)).map(phase => ({
-              phase: phase as CyclePhase, status: 'skipped' as const, duration_ms: 0, summary: '跳过', details: { reason: 'round_unchanged', message: '本轮没有新的或变化的资料，已跳过' },
-            }));
-            checkpoint.phases[source.id] = [...saved, ...extra];
-          }
-        }
-        if (!skippedRound && stage.id === 'sync') {
+        const budgetMs = deepContentBudgetMs(stage.id, deepRound.stages);
+        const deadlineAtMs = budgetMs === undefined ? undefined
+          : Date.now() + Math.max(0, budgetMs - deepStageElapsed(deepRound.current, Date.now()));
+        if (stage.id === 'sync') {
           syncPlan.preparing = true;
           for (const [index, source] of sources.entries()) {
             abort.signal.throwIfAborted();
@@ -712,30 +689,70 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
           notifyDeep();
           await rpc('task.maintenanceCheckpoint', [checkpoint]);
           await syncPlan.discardLog();
+          if (pendingFiles) {
+            waitingForFiles = true;
+            throw new SyncFilesDeferred();
+          }
         }
-        if (!skippedRound && stage.id === 'entities' && !ingestEnabled) {
+        if (stage.id === 'entities' && !ingestEnabled) {
           const summary = automaticEnabled ? '未配置可用的实体识别模型' : '实体识别已关闭';
           const reason = automaticEnabled ? 'model_unavailable' : 'disabled';
           for (const source of sources) {
             const saved = checkpoint.phases[source.id] ?? [];
             if (!saved.some(phase => phase.phase === 'capture_entities')) checkpoint.phases[source.id] = [...saved, { phase: 'capture_entities', status: 'skipped', duration_ms: 0, summary, details: { reason, pages_submitted: 0 } }];
           }
-        } else if (!skippedRound && stage.id !== 'sync') {
+        } else if (stage.id !== 'sync') {
           for (const [index, source] of sources.entries()) {
             abort.signal.throwIfAborted();
             syncPlan.sourceId = source.id;
             send({ type: 'progress', scope: { name: source.name, index, total: sources.length } });
+            if (deadlineAtMs !== undefined && Date.now() >= deadlineAtMs) {
+              const saved = checkpoint.phases[source.id] ?? [];
+              const pending = stage.phases.filter(phase => !saved.some(result => result.phase === phase));
+              checkpoint.phases[source.id] = [...saved, ...pending.map(deferRoundPhase)];
+              continue;
+            }
             const options = await phaseOptions(source.id);
+            const prioritySlugs = deadlineAtMs === undefined ? [] : await roundChanged(source.id);
+            if (stage.id === 'concepts') {
+              for (const phase of checkpoint.phases[source.id] ?? []) {
+                if (!Array.isArray(phase.details.knowledge_created_refs)) continue;
+                for (const value of phase.details.knowledge_created_refs) {
+                  if (typeof value !== 'string') continue;
+                  let ref: unknown;
+                  try { ref = JSON.parse(value); } catch { continue; }
+                  if (Array.isArray(ref) && ref[0] === source.id && typeof ref[1] === 'string') prioritySlugs.push(ref[1]);
+                }
+              }
+            }
+            const relations = stage.id === 'relations' && Date.now() < (deadlineAtMs ?? 0)
+              ? await planDeepRelations(engine, source.id, prioritySlugs) : undefined;
+            if (stage.id === 'entities' && Date.now() < (deadlineAtMs ?? 0)) {
+              const requested = await rpc('task.captureRequest', [source.id]) as string[] | undefined;
+              if (requested) checkpoint.captureRequests = { ...checkpoint.captureRequests, [source.id]: requested };
+            }
             deepOutput = ['relations', 'knowledge', 'concepts'].includes(stage.id) ? new DeepOutputReceipt(source.id, stage.id === 'concepts', await loadAllowedSlugPrefixes()) : undefined;
             const report = await runCycle(deepOutput?.observe(engine) ?? engine, {
               ...resolveDreamRelationOptions('full', null),
               ...common, sourceId: source.id, brainDir: await quickBrainDir(source.id), ...options,
-              phases: deepPhases, phaseWindow: [...stage.phases] as CyclePhase[],
+              phases: deepPhases, phaseWindow: [...stage.phases] as CyclePhase[], deferDerivedEmbedding: true,
               quickMaintenance: false, quickEntitiesOnly: true, reuseDuplicateKnowledgeSources: true,
               schemaPack: knowledgePack, includePendingKnowledge: knowledgeEnabled,
               enrichThinWhenUnset: true, enrichThinTypesWhenUnset: ['person', 'company', 'project'],
-              ...(stage.id === 'entities' && !options.prepareEntityCapture ? { captureEntitySlugs: options.captureEntitySlugs ?? [] } : {}),
-              ...(roundSlugs !== undefined ? { changedSlugs: roundSlugs, prepareEntityCapture: undefined, ...(stage.id === 'entities' ? { captureEntitySlugs: [...new Set([...(options.captureEntitySlugs ?? []), ...roundSlugs])] } : {}) } : {}),
+              ...(deadlineAtMs !== undefined && {
+                changedSlugs: relations?.slugs,
+                refreshRelationsAfterGeneration: false,
+                roundWork: {
+                  prioritySlugs, deadlineAtMs, relationPending: relations?.pending,
+                  ...(stage.id === 'knowledge' && {
+                    atomPlan: checkpoint.deepAtomPlans?.[source.id],
+                    saveAtomPlan: async (slugs: string[]) => {
+                      checkpoint.deepAtomPlans = { ...checkpoint.deepAtomPlans, [source.id]: slugs };
+                      await rpc('task.maintenanceCheckpoint', [checkpoint]);
+                    },
+                  }),
+                },
+              }),
             });
             lastReport = report;
             deepOutput = undefined;
@@ -752,18 +769,21 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
           }
         }
         const snapshots = sources.flatMap(source => (checkpoint.phases[source.id] ?? []).filter(phase => (stage.phases as readonly string[]).includes(phase.phase)));
-        const summary = summarizeDeepStage(stage.id, snapshots, deepRound.scan);
-        if (skippedRound) { summary.result = '跳过'; summary.detail = '本轮没有新的或变化的资料，已跳过'; }
-        noteStage(stage.id, 'finish', summary.result, summary.durationMs);
+        let summary = summarizeDeepStage(stage.id, snapshots, deepRound.scan);
+        if (stage.id === 'sync') {
+          const counts = await rpc('task.maintenanceFileCounts', []) as { total: number; completed: number; failed: number; remaining: number };
+          summary = applyDeepSyncFileCounts(summary, deepRound.scan, counts);
+        }
+        summary.durationMs = deepStageElapsed(deepRound.current, Date.now());
         deepRound.stages = [...deepRound.stages.filter(item => item.id !== stage.id), summary];
-        deepRound.current = { ...deepRound.current, result: summary.result };
-        notifyDeep();
-        await rpc('task.maintenanceCheckpoint', [checkpoint]);
         if (stage.id !== 'check' && snapshots.some(phase => phase.status === 'fail')) return publish();
-      } catch (error) {
+        noteStage(stage.id, 'finish', stage.id === 'sync' && summary.failed ? `${summary.result}，失败 ${summary.failed}` : summary.result, summary.durationMs);
+        deepRound.stage = DEEP_ORGANIZE_STAGES[stageIndex + 1]?.id ?? 'done';
+        deepRound.current = undefined;
+      } finally {
+        if (!waitingForFiles) pauseDeepStage(deepRound, Date.now());
         notifyDeep();
         await rpc('task.maintenanceCheckpoint', [checkpoint]);
-        throw error;
       }
     }
     deepRound.stage = 'done';
@@ -834,7 +854,10 @@ async function runSearchOptimize(engine: BrainEngine): Promise<void> {
       return;
     }
     const next = items[0]!;
-    const [ocrPending]=await engine.executeRaw("SELECT 1 FROM pages WHERE slug=$1 AND source_id=$2 AND deleted_at IS NULL AND frontmatter->>'document_ocr_deferred'='true'",[next.slug,next.sourceId]);
+    const [ocrPending]=await engine.executeRaw(`SELECT 1 FROM pages p JOIN minion_jobs j
+      ON j.id=(CASE WHEN p.frontmatter->>'document_ocr_task_id' ~ '^[0-9]{1,10}$' THEN p.frontmatter->>'document_ocr_task_id' END)::bigint
+      WHERE p.slug=$1 AND p.source_id=$2 AND p.deleted_at IS NULL AND p.frontmatter->>'document_ocr_deferred'='true'
+        AND j.status IN ('waiting','active','delayed','waiting-children')`,[next.slug,next.sourceId]);
     if(ocrPending){send({type:'deferred',phase:'search_optimize'});return;}
     const revision = next.revision;
     const total = Number.isFinite(state.total) ? Number(state.total) : done + items.length;

@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import type { SyncFileOptions } from '../../core/sync-file-runtime.ts';
 import { SYNC_FILE_FORMAT_VERSION } from '../../core/sync-file-runtime.ts';
 import { phaseHasPendingWork } from '../../../shared/dream-phase-state.ts';
+import { DEEP_ORGANIZE_STAGES, pauseDeepStage } from '../../../shared/deep-organize-progress.ts';
 import type { MaintenanceCheckpoint, ProductTask } from './types.ts';
 import { isOfficeFilePath } from '../../core/sync.ts';
 import { isImageFilePath } from '../../core/import-file.ts';
@@ -43,6 +44,25 @@ export function resumeMaintenanceCheckpoint(checkpoint:MaintenanceCheckpoint,ret
       phaseHasPendingWork(phase)
       || (retryCompleted && !preserveWarnings))));
     if(unfinished>=0)checkpoint.phases[source]=phases.slice(0,unfinished);
+  }
+}
+
+export function resumeDeepOrganizeCheckpoint(checkpoint: MaintenanceCheckpoint, stoppedAt: number): void {
+  const round = checkpoint.deepProgress;
+  if (!round) {
+    resumeMaintenanceCheckpoint(checkpoint, false, true);
+    return;
+  }
+  pauseDeepStage(round, stoppedAt);
+  const current = DEEP_ORGANIZE_STAGES.find(stage => stage.id === round.stage);
+  if (!current) return;
+  const phaseNames = new Set<string>(current.phases);
+  for (const [source, phases] of Object.entries(checkpoint.phases)) {
+    const unfinished = phases.findIndex(phase => phaseNames.has(phase.phase)
+      && (phase.status === 'fail' || (phase.status === 'warn' && phaseHasPendingWork(phase))));
+    if (unfinished < 0) continue;
+    checkpoint.phases[source] = phases.filter((phase, index) => index < unfinished || !phaseNames.has(phase.phase));
+    delete checkpoint.reports[source];
   }
 }
 

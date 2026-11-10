@@ -301,6 +301,7 @@ export interface SynthesizePhaseOpts {
   deadlineAtMs?: number | null;
   privateQueueOwnerJobId?: number | null;
   changedSlugs?: string[];
+  roundWork?: import('../pmbrain-adapters/deep-round-work.ts').DeepRoundWork;
 }
 
 export async function loadDreamWriteSettings(
@@ -411,12 +412,17 @@ export async function runPhaseSynthesize(
       ? dedupeExplicitInputTranscripts(rawTranscripts)
       : { transcripts: rawTranscripts, duplicateInputSkips: [] };
     const duplicateInputSkips = deduped.duplicateInputSkips;
-    const wanted = opts.changedSlugs === undefined ? null : new Set(opts.changedSlugs.map(slug => slug.replace(/\\/g, '/').toLowerCase()));
-    const transcripts = wanted === null ? deduped.transcripts : deduped.transcripts.filter(transcript => {
+    const scope = opts.roundWork?.prioritySlugs ?? opts.changedSlugs;
+    const wanted = new Set(scope?.map(slug => slug.replace(/\\/g, '/').toLowerCase()));
+    const isFresh = (transcript: DiscoveredTranscript) => {
       const path = transcript.filePath.replace(/\\/g, '/').toLowerCase();
       for (const slug of wanted) if (path.endsWith('/' + slug) || path.endsWith('/' + slug + '.md') || path.endsWith('/' + slug + '.txt') || path.includes('/' + slug + '.') || path.endsWith(slug)) return true;
       return false;
-    });
+    };
+    const orderRoundWork = opts.roundWork ? (await import('../pmbrain-adapters/deep-round-work.ts')).orderRoundWork : undefined;
+    const successfulKeys = opts.roundWork ? await loadSuccessfulLegacySynthesisKeys(engine, opts.sourceId ?? 'default') : undefined;
+    const pending = successfulKeys ? deduped.transcripts.filter(t => !findLegacyCompletion(successfulKeys, t.filePath, t.contentHash.slice(0, 16))) : deduped.transcripts;
+    const transcripts = orderRoundWork ? orderRoundWork(pending, isFresh, pending.length) : scope === undefined ? pending : pending.filter(isFresh);
 
     if (transcripts.length === 0) {
       return ok('no transcripts to process', {
@@ -482,7 +488,8 @@ export async function runPhaseSynthesize(
         threshold: config.triage.threshold,
         rescue: await engine.getConfig('dream.synthesize.triage_rescue') === 'true' ? undefined : { floor: 0.30, minSegments: 0, contentTypes: [] },
         concurrency: config.triage.concurrency,
-        maxMs: config.triage.maxMs,
+        maxMs: opts.roundWork ? Math.max(1, Math.min(config.triage.maxMs || Infinity, opts.roundWork.deadlineAtMs - Date.now())) : config.triage.maxMs,
+        maxJudgments: opts.roundWork ? 12 : undefined,
         judge: makeJudgeClient(config.verdictModel, opts.signal,{timeoutMs:config.triage.requestTimeoutMs}),
       }, opts.yieldDuringPhase);
       verdicts = triage.reports;
@@ -521,7 +528,7 @@ export async function runPhaseSynthesize(
       // Even with verdicts, the cooldown timestamp is updated only on a
       // real successful run — not on "nothing worth processing." Lets a
       // re-run pick up if a new transcript lands later.
-      return ok('all transcripts skipped by significance filter', {
+      const result = ok('all transcripts skipped by significance filter', {
         ...modelDetails,
         transcripts_discovered: rawTranscripts.length,
         transcripts_unique: transcripts.length,
@@ -531,6 +538,11 @@ export async function runPhaseSynthesize(
         triage: triageStats,
         duplicate_skips: duplicateInputSkips,
       });
+      if (opts.roundWork && triageStats.deferred) {
+        result.status = 'warn';
+        result.details.round_synthesis_remaining = triageStats.deferred;
+      }
+      return result;
     }
 
     // Fan-out: submit one subagent per worth-processing transcript (or one
@@ -576,13 +588,18 @@ export async function runPhaseSynthesize(
     const skipReports: Array<{ filePath: string; reason: string }> = [];
 
     const maxCharsPerChunk = computeChunkCharBudget(config.model, config.maxPromptTokens);
-    const successfulLegacyKeys = await loadSuccessfulLegacySynthesisKeys(
+    const successfulLegacyKeys = successfulKeys ?? await loadSuccessfulLegacySynthesisKeys(
       engine,
       opts.sourceId ?? 'default',
     );
 
-    for (const t of worthProcessing) {
+    const batch = orderRoundWork ? orderRoundWork(worthProcessing, isFresh, 6, 2) : worthProcessing;
+    const transcriptJobs = new Map<DiscoveredTranscript, number[]>();
+    let attempted = 0;
+    for (const t of batch) {
       throwIfAborted(opts.signal, '[dream] synthesize submission');
+      if (opts.roundWork && (Date.now() >= opts.roundWork.deadlineAtMs || childIds.length >= 8)) break;
+      attempted++;
       const hash16 = t.contentHash.slice(0, 16);
       const hash6 = t.contentHash.slice(0, 6);
 
@@ -625,6 +642,7 @@ export async function runPhaseSynthesize(
       }
 
       const isChunked = chunks.length > 1;
+      const jobsForTranscript: number[] = [];
       // queue.add subagent validator (classifyCapabilities → resolveRecipe)
       // requires `provider:model`. resolveModel can return a bare id when
       // TIER_DEFAULTS / DEFAULT_ALIASES carry a bare value; ensure the
@@ -695,14 +713,19 @@ export async function runPhaseSynthesize(
           { allowProtectedSubmit: true },
         );
         childIds.push(child.id);
+        jobsForTranscript.push(child.id);
         if (isChunked) {
           chunkInfo.set(child.id, { idx: i, hash6 });
         }
       }
+      if (opts.roundWork) {
+        transcriptJobs.set(t, jobsForTranscript);
+        await runSubagentsInline(engine, queue, childQueueName, renewPrivateQueueLease, undefined, undefined, opts.signal);
+      }
     }
 
     throwIfAborted(opts.signal, '[dream] synthesize children');
-    await runSubagentsInline(
+    if (!opts.roundWork) await runSubagentsInline(
       engine,
       queue,
       childQueueName,
@@ -775,7 +798,8 @@ export async function runPhaseSynthesize(
     const summarySlug = `dream-cycle-summaries/${summaryDate}`;
     // Back-compat: writeSummaryPage takes string[] for display; map refs back to slugs.
     const writtenSlugs = writtenRefs.map(r => r.slug);
-    if (SUMMARY_SLUG_RE.test(summarySlug)) {
+    const completedJobs = new Set(childOutcomes.filter(item => item.status === 'completed').map(item => item.jobId));
+    if (SUMMARY_SLUG_RE.test(summarySlug) && (!opts.roundWork || completedJobs.size)) {
       await writeSummaryPage(
         engine,
         outputRoot,
@@ -789,15 +813,25 @@ export async function runPhaseSynthesize(
     }
 
     // Write completion timestamp ON SUCCESS only.
-    await engine.setConfig('dream.synthesize.last_completion_ts', new Date().toISOString());
+    if (!opts.roundWork || completedJobs.size) await engine.setConfig('dream.synthesize.last_completion_ts', new Date().toISOString());
 
     const ms = Date.now() - start;
-    const submittedTranscripts = worthProcessing.length - skipReports.length;
-    return ok(`${submittedTranscripts} transcript(s) synthesized in ${(ms / 1000).toFixed(1)}s`, {
+    const submittedTranscripts = attempted - skipReports.length;
+    const completedTranscripts = [...transcriptJobs].filter(([, jobs]) => jobs.length > 0 && jobs.every(id => completedJobs.has(id))).map(([transcript]) => transcript);
+    const newTranscripts = completedTranscripts.filter(isFresh).length;
+    const roundRemaining = worthProcessing.length - attempted + triageStats.deferred + transcriptJobs.size - completedTranscripts.length
+      + skipReports.filter(item => item.reason.startsWith('oversize_after_split:')).length;
+    const report = ok(`${submittedTranscripts} transcript(s) synthesized in ${(ms / 1000).toFixed(1)}s`, {
       ...modelDetails,
       transcripts_discovered: rawTranscripts.length,
       transcripts_unique: transcripts.length,
       transcripts_processed: submittedTranscripts,
+      ...(opts.roundWork && {
+        round_synthesis_remaining: roundRemaining,
+        round_synthesis_fresh: newTranscripts,
+        round_synthesis_older: completedTranscripts.length - newTranscripts,
+        round_time_reached: Date.now() >= opts.roundWork.deadlineAtMs,
+      }),
       pages_written: writtenSlugs.length,
       // v0.29: emit the slug list so the recompute_emotional_weight phase can
       // union with sync's pagesAffected and recompute weights for every page
@@ -817,6 +851,8 @@ export async function runPhaseSynthesize(
       summary_slug: summarySlug,
       verdicts,
     });
+    if (opts.roundWork && roundRemaining) report.status = 'warn';
+    return report;
   } catch (e) {
     return failed(makeError('InternalError', 'SYNTH_PHASE_FAIL',
       e instanceof Error ? (e.message || 'synthesize phase threw') : String(e)));

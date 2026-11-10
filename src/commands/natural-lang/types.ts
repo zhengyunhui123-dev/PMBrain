@@ -36,6 +36,7 @@ export interface ConsoleRun {
   startedAt: string;
   completedAt: string | null;
   durationMs: number | null;
+  deepTiming?: import('../../../shared/deep-organize-progress.ts').DeepRunTiming;
   /** Bounded structured command result, kept separately from truncated logs. */
   result?: unknown;
 }

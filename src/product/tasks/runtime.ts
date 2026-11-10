@@ -14,7 +14,7 @@ import { assertDreamPresetAllowGenerative, assertPhasesAllowGenerative } from '.
 import { TaskEngineHost } from './engine-host.ts';
 import type { DreamTaskInput, ImportTaskInput, ProductTask, TaskWorkerMessage } from './types.ts';
 import { removeAdminUploadTempDir } from '../../commands/pmbrain-admin-support.ts';
-import { appendTaskCheckpoint, readTaskCheckpoint, taskArtifactPath, resumeMaintenanceCheckpoint, retireAutomaticCapture, setMaintenanceCheckpoint } from './checkpoint.ts';
+import { appendTaskCheckpoint, readTaskCheckpoint, taskArtifactPath, resumeDeepOrganizeCheckpoint, resumeMaintenanceCheckpoint, retireAutomaticCapture, setMaintenanceCheckpoint } from './checkpoint.ts';
 import { DEFAULT_PRODUCT_TASK_TIMEOUT_MS, DREAM_TASK_TIMEOUT_KEY, SLEEP_INTERRUPT_REASON, isUnboundedDeepOrganize, parseTaskTimeout } from './timeout.ts';
 import { IMAGE_BACKLOG_REASON } from '../../core/pmbrain-adapters/image-ocr-policy.ts';
 import { FileProjection } from './file-projection.ts';
@@ -34,7 +34,7 @@ import {
   SEARCH_OPTIMIZE_JOB_KEY, SEARCH_OPTIMIZE_NOTICE, SEARCH_OPTIMIZE_PAUSED, assignSearchOptimizeAcceptance, vectorizationInterrupted, vectorizationRetryDelay,
   type SearchOptimizeAcceptance,
 } from './search-optimize.ts';
-import { enqueueCapturedSearchOptimize, enqueueSearchOptimize, completeSearchOptimize, handoffImportVectorBatch, loadSearchOptimize, pauseSearchOptimize } from './search-optimize-store.ts';
+import { enqueueCapturedSearchOptimize, enqueueSearchOptimize, completeSearchOptimize, handoffDeepVectorBatch, handoffImportVectorBatch, loadSearchOptimize, pauseSearchOptimize, recordDeepVectorPages } from './search-optimize-store.ts';
 import { TaskResourceGuard, PRODUCT_QUEUE_CAPACITY, isSyncCapacityError, type TaskResourceOptions } from './resource-guard.ts';
 import { WorkbenchMemoryCoordinator, memoryVersion, type WorkbenchMemoryTask } from '../workbench/memory';
 import { WorkbenchStore } from '../workbench/store';
@@ -50,6 +50,7 @@ import {DOCUMENT_OCR_TASK,DOCUMENT_OCR_QUEUE} from '../../core/pmbrain-adapters/
 import {addDatabaseStatistic} from '../../../shared/database-occupancy';
 import type {TaskDatabaseStatistics} from '../../../shared/maintenance-progress';
 import {QuickVectorProgress} from './vector-progress';
+import { deepOrganizeElapsed, deepStageClosed, isStagedDeepOrganize, pauseDeepStage, type DeepRunTiming } from '../../../shared/deep-organize-progress.ts';
 
 export const PRODUCT_TASK_QUEUE = 'pmbrain-product';
 const TASK_NAME = 'pmbrain-product-task';
@@ -60,6 +61,12 @@ const FILE_DETAIL_FIELDS = `id, COALESCE(data->'task'->'input'->'options'->>'sou
   left(COALESCE(result->>'error',error_text),2048) AS error,
   CASE WHEN status='active' THEN progress->'product'->'activeFiles'->0 END AS activity`;
 type Progress = { product?: TaskProductProgress; output?: string; result?: Record<string, unknown>; cancelRequested?: boolean; files?: Record<string, unknown>[] };
+
+function deepRunTiming(job: MinionJob, endedAt: Date | null): DeepRunTiming {
+  const saved = job.data.deepTiming as DeepRunTiming | undefined;
+  const timing = saved ?? { elapsedMs: 0, activeSince: job.started_at?.getTime() ?? null };
+  return endedAt ? { elapsedMs: deepOrganizeElapsed(timing, endedAt.getTime()), activeSince: null } : timing;
+}
 
 function toRun(job: MinionJob, stopping = false): ConsoleRun {
   const progress = (job.progress ?? {}) as Progress;
@@ -73,6 +80,8 @@ function toRun(job: MinionJob, stopping = false): ConsoleRun {
     : job.status === 'cancelled' ? 'cancelled' : searchOptimize && job.status === 'paused' ? 'paused'
     : ['dead', 'failed', 'paused'].includes(job.status) ? 'failed'
     : ['active', 'waiting-children'].includes(job.status) ? 'running' : 'queued';
+  const endedAt = job.finished_at ?? (['completed', 'cancelled', 'dead', 'failed', 'paused'].includes(job.status) ? job.updated_at : null);
+  const deepTiming = task?.type === 'dream' && isStagedDeepOrganize(task.input) ? deepRunTiming(job, endedAt) : undefined;
   adapter.view.relations = { available: Object.hasOwn(job.data, 'relations'), total: Object.keys((job.data.relations ?? {}) as object).length };
   adapter.view.gitResults = Object.values(job.data.gitResults ?? {});
   if (searchOptimize && status === 'running' && job.data.searchOptimizePause === 'manual') {
@@ -92,7 +101,8 @@ function toRun(job: MinionJob, stopping = false): ConsoleRun {
     exitCode: status === 'completed' ? 0 : ['failed', 'cancelled'].includes(status) ? 1 : null,
     startedAt: (job.started_at ?? job.created_at).toISOString(),
     completedAt: job.finished_at?.toISOString() ?? null,
-    durationMs: job.finished_at ? job.finished_at.getTime() - (job.started_at ?? job.created_at).getTime() : null,
+    durationMs: deepTiming && endedAt ? deepTiming.elapsedMs : job.finished_at ? job.finished_at.getTime() - (job.started_at ?? job.created_at).getTime() : null,
+    ...(deepTiming ? { deepTiming } : {}),
     result: task?.type === 'assistant' ? { assistantId: task.input.assistantId, conversationId: task.input.conversationId, ...((job.result ?? progress.result) as Record<string, unknown> ?? {}) } : job.result ?? progress.result,
   };
 }
@@ -117,6 +127,7 @@ export class ProductTaskRuntime {
   private sessionRefresh = new Map<number, { timer: ReturnType<typeof setTimeout>; file?: string; dirty: boolean }>();
   private pendingImportVectors = new Set<number>();
   private importVectorHandoff: Promise<void> | null = null;
+  private searchOptimizeResume: Promise<void> | null = null;
   private quickProgressPersistedAt = new Map<number,number>();
   private loop: Promise<void> | null = null;
   private stopped = false;
@@ -189,7 +200,8 @@ export class ProductTaskRuntime {
         const quickOwner = parent?.data.kind === 'dream_quick' || (parentTask?.type === 'dream' && parentTask.input.preset === 'quick') || inlineFile ? sessionId : undefined;
         if (parent?.queue !== PRODUCT_TASK_QUEUE || (parent.status !== 'waiting-children' && !(quickOwner!==undefined&&parent.status==='active'))) throw new Error('同步会话已停止，文件尚未开始');
         this.scheduleSessionRefresh(sessionId, ((context.data.task as ProductTask).input as SyncFileInput).relativePath);
-        return await withDatabasePriority(2, () => this.execute(context, quickOwner));
+        const deepOwner = parentTask?.type === 'dream' && isStagedDeepOrganize(parentTask.input) ? sessionId : undefined;
+        return await withDatabasePriority(2, () => this.execute(context, quickOwner, deepOwner));
       } catch (error) {
         if (this.stopIntents.has(sessionId) || this.recoveringOwner) throw error;
         await this.fileQueue.pause(sessionId);
@@ -209,7 +221,11 @@ export class ProductTaskRuntime {
       ownsLockedTransaction: id => this.executions.get(id)?.ownsLockedTransaction() === true,
     });
     this.worker.on('unhealthy', info => console.error('[tasks]', info));
-    this.worker.on('job-finished', job => { if (this.pendingImportVectors.has(job.id)) this.scheduleImportVectorHandoff(); });
+    this.worker.on('job-finished', job => {
+      if (this.pendingImportVectors.has(job.id)) this.scheduleImportVectorHandoff();
+      const task = job.data.task as ProductTask;
+      if (task?.type === 'dream' && isStagedDeepOrganize(task.input)) this.scheduleSearchOptimizeResume();
+    });
     this.worker.register(TASK_NAME, job => withDatabasePriority((job.data.task as ProductTask).type === 'import' ? 2 : 3, () => this.execute(job)));
   }
 
@@ -264,9 +280,10 @@ export class ProductTaskRuntime {
       console.error('[tasks] worker stopped:', error instanceof Error ? error.message : error);
     });
     if(this.resourceTimer)clearInterval(this.resourceTimer);
-    this.resourceTimer=setInterval(()=>{this.checkMemory();this.scheduleImportVectorHandoff();void this.resumeInterruptedSearchOptimize().catch(error=>console.error('[tasks] search optimize resume:',error instanceof Error?error.message:error));},this.resources.rssCheckIntervalMs);
+    this.resourceTimer=setInterval(()=>{this.checkMemory();this.scheduleImportVectorHandoff();this.scheduleSearchOptimizeResume();},this.resources.rssCheckIntervalMs);
     this.resourceTimer.unref();
     this.scheduleImportVectorHandoff();
+    this.scheduleSearchOptimizeResume();
   }
 
   private async submit(task: ProductTask, kind: string, idempotencyKey?: string, trigger: 'manual' | 'scheduled' = 'manual', queue = this.queue): Promise<ConsoleRun> {
@@ -278,7 +295,8 @@ export class ProductTaskRuntime {
     const initialVectorTotals=task.type==='embed'&&task.input.quickVector?(await QuickVectorProgress.load(this.engine,task.input.sourceId??'default',task.input.slugs??[],Math.max(1,Math.min(1800000,task.input.windowMs??1800000)))).snapshot():undefined;
     const unbounded = task.type === 'dream' && isUnboundedDeepOrganize(task.input);
     if (unbounded && task.type === 'dream') delete task.input.timeoutMs;
-    const job = await queue.add(TASK_NAME, { task, kind, trigger, relations: {}, ...(unbounded ? { unboundedRuntime: true } : {}), ...(initialVectorTotals?{initialVectorTotals}:{}),fileSession: task.type === 'dream' && usesSyncFileQueue(task.input) }, {
+    const deepTiming: DeepRunTiming | undefined = task.type === 'dream' && isStagedDeepOrganize(task.input) ? { elapsedMs: 0, activeSince: null } : undefined;
+    const job = await queue.add(TASK_NAME, { task, kind, trigger, relations: {}, ...(unbounded ? { unboundedRuntime: true } : {}), ...(initialVectorTotals?{initialVectorTotals}:{}), ...(deepTiming ? { deepTiming } : {}), fileSession: task.type === 'dream' && usesSyncFileQueue(task.input) }, {
       queue: PRODUCT_TASK_QUEUE, max_attempts: 1, maxQueueSize: PRODUCT_QUEUE_CAPACITY,
       timeout_ms: unbounded ? undefined : task.input.timeoutMs ?? DEFAULT_PRODUCT_TASK_TIMEOUT_MS,
       idempotency_key: idempotencyKey ?? `product:${randomUUID()}`,
@@ -509,8 +527,18 @@ export class ProductTaskRuntime {
     }
   }
 
+  private scheduleSearchOptimizeResume(): void {
+    if (this.stopped || this.paused || this.failure || this.recoveringOwner || this.searchOptimizeResume) return;
+    this.searchOptimizeResume = withDatabasePriority(3, () => this.resumeInterruptedSearchOptimize())
+      .catch(error => console.error('[tasks] search optimize resume:', error instanceof Error ? error.message : error))
+      .finally(() => { this.searchOptimizeResume = null; });
+  }
+
   private async resumeInterruptedSearchOptimize(): Promise<void> {
-    if (this.stopped || this.paused || this.failure) return;
+    for (let batch = 0; batch < 4 && !this.stopped && !this.paused && !this.recoveringOwner; batch++) {
+      if (await handoffDeepVectorBatch(this.engine) < 16) break;
+    }
+    if (this.stopped || this.paused || this.recoveringOwner) return;
     const state = await loadSearchOptimize(this.engine);
     if (state.paused || !state.items.length) return;
     const job = await this.findSearchOptimizeJob();
@@ -756,6 +784,10 @@ export class ProductTaskRuntime {
     if (!job||!(job.queue===PRODUCT_TASK_QUEUE&&job.name===TASK_NAME||job.queue===DOCUMENT_OCR_QUEUE&&job.name===DOCUMENT_OCR_TASK)) return null;
     const [resolved]=await this.refreshOcrProgress([job]);
     const run = toRun(resolved, job.status === 'cancelled' && this.executions.has(job.id));
+    if (run.product?.deep?.stages.some(stage => stage.id === 'sync') && !run.product.syncFiles) {
+      const counts = await this.fileQueue.counts(job.id);
+      if (counts.total) run.product.syncFiles = counts;
+    }
     if(!['running','queued'].includes(run.status))this.sessionViews.delete(job.id);
     this.cached = [run, ...this.cached.filter(row => row.id !== run.id)].slice(0, 120);
     return run;
@@ -837,6 +869,9 @@ export class ProductTaskRuntime {
       await Promise.allSettled([...this.fileSessions].filter(([, owner]) => owner === jobId).map(([child]) => this.executions.get(child)?.done));
       await this.reconcileMaintenanceChildren(jobId);
       const checkpoint = task.input.checkpoint;
+      const deep = isStagedDeepOrganize(task.input);
+      const stoppedAt = record!.finished_at ?? record!.updated_at;
+      const resumeFiles = !deep || !checkpoint?.deepProgress || !deepStageClosed(checkpoint.deepProgress, 'sync');
       if(task.input.preset==='quick'&&checkpoint?.quickSync)task.input.refreshPendingSync=true;
       const unboundedResume = isUnboundedDeepOrganize(task.input);
       if (unboundedResume) { delete task.input.timeoutMs; record!.data.unboundedRuntime = true; delete record!.data.sleepPaused; }
@@ -846,10 +881,12 @@ export class ProductTaskRuntime {
       if(progress.product)progress.product.errorReason=null;
       await this.engine.executeRaw(`UPDATE minion_jobs SET data=(data-'resourceStopReason') || ($2::jsonb - 'relations' - 'gitFiles' - 'gitResults' - 'taskBudget'),progress=$3::jsonb WHERE id=$1`,[jobId,record!.data,progress]);
       if (checkpoint) {
-        resumeMaintenanceCheckpoint(checkpoint,run.status==='completed' || maintenanceFailure(run.result)!==null,true);
-        await this.engine.executeRaw(`UPDATE minion_jobs SET data = data || ($2::jsonb - 'relations' - 'gitFiles' - 'gitResults' - 'taskBudget') WHERE id = $1`, [jobId, { ...record!.data, task }]);
+        if (deep) resumeDeepOrganizeCheckpoint(checkpoint, stoppedAt.getTime());
+        else resumeMaintenanceCheckpoint(checkpoint,run.status==='completed' || maintenanceFailure(run.result)!==null,true);
+        if (deep && progress.product && checkpoint.deepProgress) progress.product.deep = checkpoint.deepProgress;
+        await this.engine.executeRaw(`UPDATE minion_jobs SET data = data || ($2::jsonb - 'relations' - 'gitFiles' - 'gitResults' - 'taskBudget'),progress=$3::jsonb WHERE id = $1`, [jobId, { ...record!.data, task }, progress]);
       }
-      await this.engine.executeRaw(`UPDATE minion_jobs SET status = 'paused', result = NULL WHERE queue = $1 AND (data->>'sessionId')::bigint = $2 AND result->>'status' IN ('failed','error','partial')`, [SYNC_FILE_QUEUE, jobId]);
+      if (resumeFiles) await this.engine.executeRaw(`UPDATE minion_jobs SET status = 'paused', result = NULL WHERE queue = $1 AND (data->>'sessionId')::bigint = $2 AND result->>'status' IN ('failed','error','partial')`, [SYNC_FILE_QUEUE, jobId]);
       const stoppedChildren = run.kind === 'dream_quick' || task.input.preset === 'quick' ? [...this.stopIntents].filter(childId => childId !== jobId) : [];
       if (stoppedChildren.length) {
         const children = await this.engine.executeRaw<{id:number}>(`SELECT id FROM minion_jobs WHERE queue=$1 AND (data->>'sessionId')::bigint=$2
@@ -862,7 +899,8 @@ export class ProductTaskRuntime {
       }
       await this.hydrateFiles([jobId]);
       await this.clearStopIntent(jobId);
-      await this.fileQueue.resume(jobId);
+      const timing = deep ? { value: deepRunTiming(record!, stoppedAt), status: record!.status } : undefined;
+      await this.fileQueue.resume(jobId, timing, resumeFiles);
       if (unboundedResume) await this.engine.executeRaw(`UPDATE minion_jobs SET timeout_ms=NULL, timeout_at=NULL, data=CASE WHEN id=$1 THEN data ELSE jsonb_set(data,'{unboundedRuntime}','true'::jsonb) END WHERE id=$1 OR (queue=$2 AND parent_job_id=$1 AND name=$3)`, [jobId, SYNC_FILE_QUEUE, SYNC_FILE_TASK]);
       this.sessionViews.delete(jobId);
       return this.getRun(id);
@@ -906,7 +944,11 @@ export class ProductTaskRuntime {
       this.cancelTracked(id, SLEEP_INTERRUPT_REASON);
       for (const [child, owner] of this.fileSessions) if (owner === id) this.cancelTracked(child, SLEEP_INTERRUPT_REASON);
       const view = this.sessionViews.get(id);
-      if (view) this.sessionViews.set(id, { ...view, status: 'failed', error: SLEEP_INTERRUPT_REASON });
+      if (view) {
+        const durationMs = view.deepTiming ? deepOrganizeElapsed(view.deepTiming, Date.now()) : view.durationMs;
+        const deepTiming = view.deepTiming && durationMs !== null ? { elapsedMs: durationMs, activeSince: null } : undefined;
+        this.sessionViews.set(id, { ...view, status: 'failed', error: SLEEP_INTERRUPT_REASON, durationMs, deepTiming });
+      }
     }
     return ids.length;
   }
@@ -931,7 +973,7 @@ export class ProductTaskRuntime {
     for (const id of new Set(parents.map(row => row.parent_job_id).filter((value): value is number => value !== null))) await this.queue.resolveParent(id);
   }
 
-  private async execute(context: MinionJobContext, quickTimeoutOwner?: number): Promise<unknown> {
+  private async execute(context: MinionJobContext, quickTimeoutOwner?: number, deepVectorOwner?: number): Promise<unknown> {
     this.checkMemory();
     if(this.failure)throw this.failure;
     if (this.stopped || this.paused) throw new Error('后台任务执行器已停止，任务未开始，请稍后重试');
@@ -962,6 +1004,10 @@ export class ProductTaskRuntime {
         return this.deferMaintenance(record,'资料已保存，深度整理进行中，图片识别稍后进行',60_000);
       }
       const schedule=await this.vectorizationDecision(context.id,true);if(schedule.mode==='waiting')return this.deferMaintenance(record,`资料已保存，图片识别${schedule.reason}`,Math.max(1000,schedule.delayMs));
+      if (ownerId) {
+        const owner = (await this.queue.getJob(ownerId))?.data.task as ProductTask | undefined;
+        if (owner?.type === 'dream' && isStagedDeepOrganize(owner.input)) deepVectorOwner = ownerId;
+      }
     }
     if (structuredTask.type === 'embed' && (structuredTask.input.searchOptimize || structuredTask.input.quickVector)) {
       const state = await this.searchOptimizeView();
@@ -1071,7 +1117,8 @@ export class ProductTaskRuntime {
       const input=structuredTask.input;const message=new WorkbenchStore(input.root).get(input.conversationId).messages.find(row=>row.id===input.messageId);
       const sources=await tx.executeRaw('SELECT id FROM sources WHERE id=$1 AND archived=false FOR SHARE',[input.sourceId]);
       if(!wb.enabled||!sources.length||message?.memory?.hash!==input.hash||memoryVersion(message)!==input.hash||(wb.visibility==='private'&&message.memory.visibility==='world'))throw new Error('自动记忆已关闭、来源或会话已改变，任务停止写入');
-    }:undefined,quickTimeoutOwner!==undefined || (structuredTask.type==='dream' && structuredTask.input.preset==='quick'));
+    }:undefined,quickTimeoutOwner!==undefined || (structuredTask.type==='dream' && structuredTask.input.preset==='quick'),
+    structuredTask.type === 'dream' && isStagedDeepOrganize(structuredTask.input) ? context.id : deepVectorOwner);
     const workerPath = /\/(?:~BUN|\$bunfs)\//.test(decodeURIComponent(import.meta.url))
       ? './product/tasks/task-worker.ts'
       : new URL(import.meta.url.endsWith('.ts') ? './task-worker.ts' : './task-worker.js', import.meta.url);
@@ -1310,8 +1357,8 @@ export class ProductTaskRuntime {
             for(const row of rows){value[row.type as 'person']=Number(row.entities);value.total+=Number(row.entities);value.links+=Number(row.links);}
             return value;
           }
-          if(message.method==='task.quickFileCounts'){
-            if(structuredTask.type!=='dream'||structuredTask.input.preset!=='quick')throw new Error('无效的文件统计');
+          if(message.method==='task.maintenanceFileCounts'){
+            if(structuredTask.type!=='dream'||!usesSyncFileQueue(structuredTask.input))throw new Error('无效的文件统计');
             return this.fileQueue.counts(context.id);
           }
           if(message.method==='task.quickCompletedFiles'){
@@ -1320,6 +1367,40 @@ export class ProductTaskRuntime {
               data->'task'->'input'->>'path' AS path,data->'task'->'input'->>'relativePath' AS "relativePath",data->'task'->'input'->>'hash' AS hash
               FROM minion_jobs WHERE queue=$1 AND parent_job_id=$2 AND status='completed' AND result->>'status' IN ('imported','skipped')
                 AND data->>'superseded' IS DISTINCT FROM 'true'`,[SYNC_FILE_QUEUE,context.id]);
+          }
+          if (message.method === 'task.deepSyncChanged') {
+            if (structuredTask.type !== 'dream' || !isStagedDeepOrganize(structuredTask.input)) throw new Error('无效的深度整理文件回执查询');
+            return this.engine.executeRaw<{ sourceId: string; slug: string }>(`SELECT DISTINCT result->>'slug' AS slug,
+                COALESCE(data->'task'->'input'->'options'->>'sourceId','default') AS "sourceId"
+              FROM minion_jobs WHERE queue=$1 AND parent_job_id=$2 AND status='completed' AND result->>'status'='imported'
+                AND result->>'slug'<>'' AND data->>'superseded' IS DISTINCT FROM 'true'`, [SYNC_FILE_QUEUE, context.id]);
+          }
+          if (message.method === 'task.restoreDeepVectorReceipts') {
+            if (structuredTask.type !== 'dream' || !isStagedDeepOrganize(structuredTask.input)) throw new Error('无效的深度整理向量回执查询');
+            const pages = await this.engine.executeRaw<{ sourceId: string; slug: string }>(`SELECT DISTINCT
+                COALESCE(data->'task'->'input'->'options'->>'sourceId','default') AS "sourceId", result->>'slug' AS slug
+                FROM minion_jobs WHERE queue=$1 AND parent_job_id=$2 AND result->>'status'='imported'
+                AND result->>'slug'<>'' AND data->>'superseded' IS DISTINCT FROM 'true'`, [SYNC_FILE_QUEUE, context.id]);
+            for (const [sourceId, phases] of Object.entries(structuredTask.input.checkpoint?.phases ?? {})) {
+              for (const phase of phases) {
+                for (const key of ['pages_affected', 'written_slugs', 'knowledge_created_refs', 'knowledge_maintained_refs']) {
+                  const values = key === 'pages_affected' && phase.phase === 'sync'
+                    ? (phase as { pagesAffected?: unknown }).pagesAffected ?? phase.details?.pages_affected : phase.details?.[key];
+                  if (!Array.isArray(values)) continue;
+                  for (const value of values) {
+                    if (typeof value !== 'string') continue;
+                    if (!key.endsWith('_refs')) pages.push({ sourceId, slug: value });
+                    else {
+                      let ref: unknown;
+                      try { ref = JSON.parse(value); } catch { continue; }
+                      if (Array.isArray(ref) && ref[0] === sourceId && typeof ref[1] === 'string') pages.push({ sourceId, slug: ref[1] });
+                    }
+                  }
+                }
+              }
+            }
+            for (let offset = 0; offset < pages.length; offset += 128) await recordDeepVectorPages(this.engine, context.id, pages.slice(offset, offset + 128));
+            return null;
           }
           if (message.method === 'task.gitCommit') {
             if (structuredTask.type !== 'dream' || structuredTask.input.preset !== 'quick' || structuredTask.input.dryRun) throw new Error('无效的自动 Git 提交任务');
@@ -1436,9 +1517,15 @@ export class ProductTaskRuntime {
         if (!this.stopIntents.has(context.id)) await this.settleSearchOptimize(record, adapter, progress, undefined, deferredError);
         return MINION_DEFERRED;
       }
-      if (structuredTask.type === 'dream' && outcome !== MINION_DEFERRED && (outcome as { reason?: string })?.reason === 'cycle_already_running') return this.deferMaintenance(record);
+      if (structuredTask.type === 'dream' && outcome !== MINION_DEFERRED && (outcome as { reason?: string })?.reason === 'cycle_already_running') {
+        record.progress = progress;
+        return this.deferMaintenance(record);
+      }
       if (outcome === MINION_DEFERRED && !this.stopIntents.has(context.id)) {
-        if(deferredPhase==='maintenance_ocr')return this.deferMaintenance(record,'资料已保存，等待后台识图后继续整理和向量化',1000);
+        if(deferredPhase==='maintenance_ocr'){
+          record.progress = progress;
+          return this.deferMaintenance(record,'资料已保存，等待后台识图后继续整理和向量化',1000);
+        }
         if(deferredPhase==='document_ocr')return this.deferMaintenance(record,'资料已保存，后台识图等待电脑空闲',1000);
         if(deferredPhase==='maintenance_embed'){
           const state=await loadSearchOptimize(this.engine),schedule=await this.vectorizationDecision(context.id);
@@ -1669,6 +1756,7 @@ export class ProductTaskRuntime {
     await this.loop;
     await this.fileLoop;
     await this.importVectorHandoff;
+    await this.searchOptimizeResume;
     await Promise.all([...this.idleFileThreads.splice(0),...this.idleMaintenanceThreads.splice(0)].map(thread => thread.terminate()));
     await this.refreshingRuns;
     await this.ocrOverviewRefreshing;
@@ -1690,6 +1778,7 @@ export class ProductTaskRuntime {
     await this.loop;
     await this.fileLoop;
     await this.importVectorHandoff;
+    await this.searchOptimizeResume;
     await Promise.all([...this.idleFileThreads.splice(0),...this.idleMaintenanceThreads.splice(0)].map(thread => thread.terminate()));
     await Promise.allSettled([...this.executions.values()].map(execution => execution.done));
     this.loop = null;
@@ -1855,7 +1944,11 @@ export class ProductTaskRuntime {
     }
     const status = reason ? 'failed' as const : 'cancelled' as const;
     const persisted=saved as MinionJob|null;
-    const finished = persisted?.status==='completed'?toRun(persisted):{ ...original, status, error: reason ?? null, completedAt: new Date().toISOString(),
+    const stoppedAt = new Date();
+    const timing = persisted && original.deepTiming ? deepRunTiming(persisted, persisted.finished_at ?? stoppedAt) : original.deepTiming
+      ? { elapsedMs: deepOrganizeElapsed(original.deepTiming, stoppedAt.getTime()), activeSince: null } : undefined;
+    const finished = persisted?.status==='completed'?toRun(persisted):{ ...original, status, error: reason ?? null, completedAt: stoppedAt.toISOString(),
+      ...(timing ? { deepTiming: timing, durationMs: timing.elapsedMs } : {}),
       product: original.product ? finishTaskProgress(original.product, status, original.result, reason ?? null) : undefined };
     this.sessionViews.set(id, finished);
     this.cached = [finished, ...this.cached.filter(run => run.id !== original.id)].slice(0, 120);
@@ -1974,7 +2067,14 @@ export class ProductTaskRuntime {
             data = jsonb_set(data, '{resumeOnRestart}', 'false'::jsonb), error_text = '后续知识增强阶段曾中断，请查看已完成资料后继续。' WHERE id = $1`, [id]);
         } else {
           await this.fileQueue.pause(id);
-          await this.fileQueue.resume(id);
+          const deepRound = task.type === 'dream' ? task.input.checkpoint?.deepProgress : undefined;
+          if (parent && deepRound?.current?.elapsedMs != null && deepRound.current.startedAt) {
+            pauseDeepStage(deepRound, parent.updated_at.getTime());
+            await this.engine.executeRaw(`UPDATE minion_jobs SET data=jsonb_set(data,'{task,input,checkpoint,deepProgress}',$2::jsonb) WHERE id=$1`, [id, deepRound]);
+          }
+          const timing = parent && task.type === 'dream' && isStagedDeepOrganize(task.input)
+            ? { value: deepRunTiming(parent, parent.finished_at ?? parent.updated_at), status: parent.status } : undefined;
+          await this.fileQueue.resume(id, timing);
         }
       }
     }

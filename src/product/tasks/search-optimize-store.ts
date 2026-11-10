@@ -29,7 +29,8 @@ const pendingPrefix = `${SEARCH_OPTIMIZE_CONFIG}.pending.`;
 const legacyKey = `${SEARCH_OPTIMIZE_CONFIG}.legacy`;
 const migrations = new WeakMap<BrainEngine, Promise<void>>();
 const cleanSlugs = (slugs: string[]) => [...new Set(slugs.filter(slug => slug.length > 0 && !slug.includes(':')))];
-const pageKey = (sourceId: string, slug: string) => `${SEARCH_OPTIMIZE_CONFIG}.page.${createHash('sha256').update(searchOptimizeKey(sourceId, slug)).digest('hex')}`;
+const pageDigest = (sourceId: string, slug: string) => createHash('sha256').update(searchOptimizeKey(sourceId, slug)).digest('hex');
+const pageKey = (sourceId: string, slug: string) => `${SEARCH_OPTIMIZE_CONFIG}.page.${pageDigest(sourceId, slug)}`;
 const decode = <T>(raw: string | null): T | null => { try { return JSON.parse(raw ?? 'null') as T | null; } catch { return null; } };
 
 async function locked<T>(engine: BrainEngine, run: (tx: BrainEngine) => Promise<T>): Promise<T> {
@@ -148,6 +149,47 @@ export async function handoffImportVectorBatch(engine: BrainEngine, batch: {
     await tx.executeRaw(`UPDATE minion_jobs SET data=data || $2::jsonb WHERE id=$1`,
       [batch.jobId, { importVectorOffset: batch.next, importVectorsPending: !batch.finished }]);
     return true;
+  });
+}
+
+const deepVectorPrefix = 'pmbrain.deep.vector-handoff.';
+const deepVectorPattern = `${deepVectorPrefix}%`;
+
+export async function recordDeepVectorPages(tx: Pick<BrainEngine, 'executeRaw'>, ownerId: number, pages: { sourceId: string; slug: string }[]): Promise<void> {
+  const records = pages.filter(({ slug }) => slug && !slug.includes(':')).map(({ sourceId, slug }) => ({
+    key: `${deepVectorPrefix}${ownerId}.${pageDigest(sourceId, slug)}`,
+    value: JSON.stringify({ ownerId, sourceId, slug }),
+  }));
+  if (!records.length) return;
+  await tx.executeRaw(`INSERT INTO config(key, value)
+    SELECT DISTINCT key, value FROM jsonb_to_recordset($1::jsonb) AS records(key text, value text)
+    ON CONFLICT (key) DO UPDATE SET value=excluded.value WHERE config.value IS DISTINCT FROM excluded.value`, [records]);
+}
+
+export async function handoffDeepVectorBatch(engine: BrainEngine): Promise<number> {
+  const pending = await engine.executeRaw(`SELECT 1 FROM config WHERE key LIKE $1 LIMIT 1`, [deepVectorPattern]);
+  if (!pending.length) return 0;
+  await ready(engine);
+  return locked(engine, async tx => {
+    const rows = await tx.executeRaw<{ key: string; sourceId: string; slug: string; stale: boolean }>(`
+      SELECT c.key, v."sourceId", v.slug, EXISTS (
+        SELECT 1 FROM pages p JOIN sources s ON s.id=p.source_id JOIN content_chunks cc ON cc.page_id=p.id
+        WHERE p.source_id=v."sourceId" AND p.slug=v.slug AND p.deleted_at IS NULL AND NOT s.archived
+          AND COALESCE(p.chunker_version, 0) >= 0
+          AND (cc.embedding IS NULL OR cc.embedded_at IS NULL)
+      ) AS stale
+      FROM config c
+      CROSS JOIN LATERAL jsonb_to_record(CASE WHEN c.key LIKE $1 THEN c.value::jsonb END) v("ownerId" bigint, "sourceId" text, slug text)
+      LEFT JOIN minion_jobs j ON j.id=v."ownerId"
+      WHERE c.key LIKE $1 AND (j.id IS NULL OR j.status IN ('completed','failed','dead','cancelled','paused'))
+      ORDER BY c.key LIMIT 16 FOR UPDATE OF c SKIP LOCKED`, [deepVectorPattern]);
+    if (!rows.length) return 0;
+    for (const sourceId of new Set(rows.map(row => row.sourceId))) {
+      const slugs = rows.filter(row => row.sourceId === sourceId && row.stale).map(row => row.slug);
+      if (slugs.length) await putPendingSlugs(tx, sourceId, [...new Set(slugs)]);
+    }
+    await tx.executeRaw('DELETE FROM config WHERE key=ANY($1::text[])', [rows.map(row => row.key)]);
+    return rows.length;
   });
 }
 

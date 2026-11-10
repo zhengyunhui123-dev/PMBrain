@@ -24,7 +24,7 @@ const { renderToStaticMarkup } = adminRequire('react-dom/server');
 
 test('深度整理按检查、同步、理解内容、新增实体的顺序组织，试运行和单阶段仍走原流程', () => {
   const ids = DEEP_ORGANIZE_STAGES.map(stage => stage.id);
-  expect(ids).toEqual(['check', 'sync', 'relations', 'knowledge', 'entities', 'concepts', 'index', 'review']);
+  expect(ids).toEqual(['check', 'sync', 'relations', 'knowledge', 'entities', 'concepts', 'review']);
   expect(ids.indexOf('check')).toBeLessThan(ids.indexOf('sync'));
   expect(ids.indexOf('sync')).toBeLessThan(ids.indexOf('relations'));
   expect(ids.indexOf('relations')).toBeLessThan(ids.indexOf('entities'));
@@ -59,12 +59,12 @@ test('同步和实体阶段用真实回执汇总，未完成的阶段不计入�
     scan: { scanned: 48, unchanged: 30, complete: true },
     stages: [{ ...sync, status: 'completed' }, { id: 'check', status: 'skipped', durationMs: 0, result: '跳过', detail: '跳过' }],
   };
-  expect(deepOrganizePercent(round)).toBe(25);
+  expect(deepOrganizePercent(round)).toBe(29);
   expect(deepOrganizePercent({ ...round, stage: 'done', stages: DEEP_ORGANIZE_STAGES.map(stage => ({ id: stage.id, status: stage.id === 'entities' ? 'partial' as const : 'completed' as const, durationMs: 0, result: '', detail: '' })) })).toBe(99);
   expect(deepOrganizeTotals({ ...round, stages: [sync, entities] })).toMatchObject({ files: 18, knowledge: 0, entities: 4, links: 9 });
 });
 
-test('深度整理详情按八个阶段展示同步、知识点和新增实体', () => {
+test('深度整理详情按七个阶段展示，同步失败使用文件队列的实际数', () => {
   const round: DeepRoundProgress = {
     stage: 'entities',
     scan: { scanned: 4, unchanged: 1, incremental: 3, total: 4, complete: true },
@@ -74,7 +74,7 @@ test('深度整理详情按八个阶段展示同步、知识点和新增实体',
       summarizeDeepStage('knowledge', [{ phase: 'extract_atoms', status: 'ok', duration_ms: 1000, details: { atoms_extracted: 5, pages_processed: 2 } }]),
     ],
   };
-  const product = { deep: round, name: 'AI 深度整理', stage: '识别和更新实体', percent: 25, phasePercent: null, completedSteps: 2, steps: [], processed: null, total: null, file: 'notes/first.md', metrics: [], errorReason: null, budget: { capCny: 5, spentCny: 0.2, reservedCny: 0, usdToCny: 7, calls: 1 } };
+  const product = { deep: round, syncFiles: { total: 3, completed: 2, failed: 1, remaining: 0 }, name: 'AI 深度整理', stage: '识别和更新实体', percent: 29, phasePercent: null, completedSteps: 2, steps: [], processed: null, total: null, file: 'notes/first.md', metrics: [], errorReason: null, budget: { capCny: 5, spentCny: 0.2, reservedCny: 0, usdToCny: 7, calls: 1 } };
   expect(TaskProductProgressSchema.parse(product).deep?.stages.find(stage => stage.id === 'sync')?.result).toBe('同步 3，新增 2，更新 1');
   const html = renderToStaticMarkup(createElement(DeepOrganizeProgress, {
     link: false,
@@ -87,6 +87,9 @@ test('深度整理详情按八个阶段展示同步、知识点和新增实体',
   expect(html).toContain('检查知识库');
   expect(html).toContain('识别和更新实体');
   expect(html).toContain('同步 3，新增 2，更新 1');
+  expect(html).toContain('文件队列成功 2，失败 1');
+  expect(html).toContain('2 / 7 个阶段已记录');
+  expect(html).not.toContain('更新搜索索引');
   expect(html).toContain('提炼 5 条知识点');
   expect(html).toContain('notes/first.md');
   expect(html).toContain('¥0.20');
