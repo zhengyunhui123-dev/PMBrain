@@ -488,7 +488,7 @@ export async function runPhaseSynthesize(
         threshold: config.triage.threshold,
         rescue: await engine.getConfig('dream.synthesize.triage_rescue') === 'true' ? undefined : { floor: 0.30, minSegments: 0, contentTypes: [] },
         concurrency: config.triage.concurrency,
-        maxMs: opts.roundWork ? Math.max(1, Math.min(config.triage.maxMs || Infinity, opts.roundWork.deadlineAtMs - Date.now())) : config.triage.maxMs,
+        maxMs: opts.roundWork ? Math.max(1, Math.min(config.triage.maxMs || Infinity, (opts.roundWork.deadlineAtMs ?? Infinity) - Date.now())) : config.triage.maxMs,
         maxJudgments: opts.roundWork ? 12 : undefined,
         judge: makeJudgeClient(config.verdictModel, opts.signal,{timeoutMs:config.triage.requestTimeoutMs}),
       }, opts.yieldDuringPhase);
@@ -598,7 +598,7 @@ export async function runPhaseSynthesize(
     let attempted = 0;
     for (const t of batch) {
       throwIfAborted(opts.signal, '[dream] synthesize submission');
-      if (opts.roundWork && (Date.now() >= opts.roundWork.deadlineAtMs || childIds.length >= 8)) break;
+      if (opts.roundWork && (Date.now() >= (opts.roundWork.deadlineAtMs ?? Infinity) || childIds.length >= 8)) break;
       attempted++;
       const hash16 = t.contentHash.slice(0, 16);
       const hash6 = t.contentHash.slice(0, 6);
@@ -830,7 +830,7 @@ export async function runPhaseSynthesize(
         round_synthesis_remaining: roundRemaining,
         round_synthesis_fresh: newTranscripts,
         round_synthesis_older: completedTranscripts.length - newTranscripts,
-        round_time_reached: Date.now() >= opts.roundWork.deadlineAtMs,
+        round_time_reached: Date.now() >= (opts.roundWork.deadlineAtMs ?? Infinity),
       }),
       pages_written: writtenSlugs.length,
       // v0.29: emit the slug list so the recompute_emotional_weight phase can

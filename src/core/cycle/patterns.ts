@@ -75,7 +75,7 @@ export async function runPhasePatterns(
     // Gather reflections within lookback window.
     let reflections = await gatherReflections(engine, config.lookbackDays, opts.sourceId);
     if (opts.roundWork) {
-      if (Date.now() >= opts.roundWork.deadlineAtMs) {
+      if (Date.now() >= (opts.roundWork.deadlineAtMs ?? Infinity)) {
         return { ...ok('本轮时间已用完，待下轮整理模式', { round_time_reached: true }), status: 'warn' };
       }
       const priority = new Set(opts.roundWork.prioritySlugs);

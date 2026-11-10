@@ -75,7 +75,7 @@ export function DeepOrganizeProgress({ run, link = true }: { run: ConsoleRun; li
       {run.status === 'cancelled' && <p>已完成成果保留，可以继续未完成部分。</p>}
     </section>}
     <section className="mpr-results" aria-label="各阶段结果"><h3>阶段记录</h3>{DEEP_ORGANIZE_STAGES.slice(0, 2).map(row)}
-      <section className="mpr-content-group" aria-label="理解内容与关联"><h4>理解内容与关联</h4><p>新建 {contentTotals.newKnowledge} 个知识成果 · 维护 {contentTotals.maintainedKnowledge} 个 · 新增关联 {contentTotals.links} 条</p><p className="mpr-note">优先整理本轮新增和变更的资料，同时补做历史积压。四个内容阶段共享 30 分钟软预算，剩余候选留到下一轮。</p>{contentStages.map(row)}</section>
+      <section className="mpr-content-group" aria-label="理解内容与关联"><h4>理解内容与关联</h4><p>新建 {contentTotals.newKnowledge} 个知识成果 · 维护 {contentTotals.maintainedKnowledge} 个 · 新增关联 {contentTotals.links} 条</p><p className="mpr-note">优先整理本轮新增和变更的资料，同时补做历史积压。四个内容阶段按批量额度依次执行，剩余候选留到下一轮。</p>{contentStages.map(row)}</section>
       {DEEP_ORGANIZE_STAGES.slice(6).map(row)}
     </section>
     <ModelSetupNotice run={run} />

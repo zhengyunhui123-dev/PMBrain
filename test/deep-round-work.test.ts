@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { mixRoundWork } from '../src/core/pmbrain-adapters/deep-round-work';
-import { deepContentBudgetMs, type DeepStageResult } from '../shared/deep-organize-progress';
+import { maintenanceFailure } from '../src/product/tasks/maintenance-orchestration';
 
 test('先做新资料，给积压保留十份，空余额度可以互补', () => {
   const fresh = Array.from({ length: 65 }, (_, index) => `new-${index}`);
@@ -13,10 +13,10 @@ test('先做新资料，给积压保留十份，空余额度可以互补', () =>
   expect(mixRoundWork(fresh, older.slice(0, 2), 50).filter(value => value.startsWith('new-'))).toHaveLength(48);
 });
 
-test('阶段用时共享三十分钟，前一阶段剩余时间可给后一阶段', () => {
-  const relations: DeepStageResult = { id: 'relations', durationMs: 2 * 60_000, status: 'completed', result: '', detail: '' };
-  expect(deepContentBudgetMs('relations', [])).toBe(5 * 60_000);
-  expect(deepContentBudgetMs('knowledge', [relations])).toBe(18 * 60_000);
-  expect(deepContentBudgetMs('knowledge', [{ ...relations, durationMs: 22 * 60_000 }])).toBe(0);
-  expect(deepContentBudgetMs('sync', [])).toBeUndefined();
+test('局部模型输出失败保留部分完成，数据库和模型故障仍报失败', () => {
+  const details = { isolated_output_failures: true, stop_reason: 'ingest_validation', page_failures: [{ reason: '证据缺失' }] };
+  const phase = { phase: 'capture_entities', status: 'warn', details };
+  expect(maintenanceFailure({ status: 'partial', phases: [phase] })).toBeNull();
+  expect(maintenanceFailure({ status: 'partial', phases: [{ ...phase, error: { message: '数据库不可用' } }] })).toContain('数据库不可用');
+  expect(maintenanceFailure({ status: 'partial', phases: [{ ...phase, details: { ...details, isolated_output_failures: false } }] })).toContain('证据缺失');
 });

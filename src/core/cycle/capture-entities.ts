@@ -168,6 +168,8 @@ ${candidateBlock}
 本段已保存并核验的实体：
 ${acknowledged.length?acknowledged.map(entity=>`${entity.sourceId}:${entity.slug} | ${entity.title}`).join('\n'):'无'}
 
+已有实体列表只用于查重。只有名称或已知别名确实出现在下面的原文中，才可提交该实体。title 使用原文名称，slug 只用于标识。只提交必要的新事实。no_entities 仅在实体、复用、关系和时间线全部为空时为 true。
+
 格式：{"entities":[{"slug":"projects/准确标识","content":"---\\ntitle: 原文名称\\ntype: project\\n---\\n新增事实 [Source: ${page.slug}]"}],"reused_entities":["people/已有标识"],"relations":[{"from":"已有或新实体标识","to":"已有或新实体标识","link_type":"mentions","evidence":"原文中同时包含两端名称的逐字证据"}],"timeline_entries":[{"slug":"实体标识","date":"YYYY-MM-DD","summary":"原文有据的事件"}],"no_entities":false}。
 entities 只填写有新增事实的实体，已有实体使用准确标识，程序合并旧事实与人工内容；无新增事实的已有实体放入 reused_entities。只允许 person、company、organization、project，人物使用 people/，公司和组织都使用 companies/，项目使用 projects/；不得使用 organizations/。无法确认身份时不要猜测合并。每条事实保留本资料出处，关系不能凭共现编造。时间线只用本段原文明确出现的完整日期；没有则返回空数组。没有实体时返回空数组并设置 no_entities:true。不能遗漏本段符合条件的实体和关系；无法完整输出时设置 has_more:true，程序会保留未完成状态。
 
@@ -568,7 +570,7 @@ export async function runPhaseCaptureEntities(
   let afterPageId = 0;
   for (;;) {
     throwIfAborted(opts.signal, '[dream] capture candidate planning');
-    if (opts.roundWork && Date.now() >= opts.roundWork.deadlineAtMs) {
+    if (opts.roundWork && Date.now() >= (opts.roundWork.deadlineAtMs ?? Infinity)) {
       return phaseResult('warn', '本轮时间已用完，待下轮继续识别实体', { round_time_reached: true });
     }
     if(opts.slugs?.length===0)break;
@@ -831,7 +833,7 @@ export async function runPhaseCaptureEntities(
   let failureReason: CaptureStopReason = 'failure';
   let budgetStop: 'cost' | null = null;
   const failedPageSlugs = new Set<string>();
-  const windowReached=()=>Boolean(opts.roundWork && Date.now() >= opts.roundWork.deadlineAtMs)
+  const windowReached=()=>Boolean(opts.roundWork && Date.now() >= (opts.roundWork.deadlineAtMs ?? Infinity))
     || (opts.window!=null&&windowStartedAt>0&&(windowAdmissions>=Math.max(1,opts.window.maxChunks)||Date.now()-windowStartedAt>=Math.max(1,opts.window.maxDurationMs)));
   const verifiedChildIds:number[]=[];
   const duplicateLocks=new Map<string,Promise<void>>();
@@ -1005,7 +1007,7 @@ export async function runPhaseCaptureEntities(
             model_output_limit:modelOutputLimit,
             no_self_fix: true,
             system: singlePass?`${systemContract}\n本次只返回一个完整的实体、事实、关系和时间线 JSON；程序负责查重、校验、持久化和验收，不请求工具或后续模型轮次。`:batchCapture?`${systemContract}\n本次按批量事实增量执行：候选目录已由程序提供，只有实际歧义才 search。优先一次调用 capture_entities 提交本段全部实体及证据关系；每批最多32个实体，仍有实体时 has_more:true 并继续分批，不得遗漏。全部准备好后由程序验收，不再逐个 put_page 或调用模型写总结。有明确日期的时间线使用保留的时间线工具，最后 complete_ingest。`:systemContract,
-            ingest_context: {slug:chunk.slug,sourceId:chunk.sourceId,body:chunk.body,chunkBody:chunk.chunkBody,pageId:chunk.pageId,sourceIncarnation:chunk.sourceIncarnation,compact_contract:true,batch_capture:batchCapture,single_pass:singlePass,quickEntitiesOnly:opts.quickEntitiesOnly,acknowledged:acknowledged.map(entity=>`${entity.sourceId}:${entity.slug}`),turn_entity_refs:[...new Set([...related,...acknowledged].map(entity=>`${entity.sourceId}:${entity.slug}`))]},
+            ingest_context: {slug:chunk.slug,sourceId:chunk.sourceId,body:chunk.body,chunkBody:chunk.chunkBody,pageId:chunk.pageId,sourceIncarnation:chunk.sourceIncarnation,compact_contract:true,batch_capture:batchCapture,single_pass:singlePass,repair_single_pass:singlePass&&!!opts.roundWork,quickEntitiesOnly:opts.quickEntitiesOnly,acknowledged:acknowledged.map(entity=>`${entity.sourceId}:${entity.slug}`),turn_entity_refs:[...new Set([...related,...acknowledged].map(entity=>`${entity.sourceId}:${entity.slug}`))]},
             usage_limits: {
               input: maxDocumentInput,
               output: maxDocumentOutput,
@@ -1232,9 +1234,13 @@ export async function runPhaseCaptureEntities(
     }
     const costCny = ollama ? 0 : (!usageMissing&&sawPricedUsage ? Number(knownCost.toFixed(6)) : null);
     const stopReason = (relationError?'relation_failure':budgetStop??(failureStop?failureReason:windowDeferred&&pagesRemaining>0?'window':'completed')) as CaptureStopReason;
+    const isolatedOutputFailures = !!opts.roundWork && !fatalFailure && !relationError && !opts.signal?.aborted
+      && pageFailures.length > 0 && pageFailures.every(failure => failure.kind === 'truncated'
+        || failure.kind === 'parse' || failure.kind === 'ingest_validation'
+          && /ingest entity evidence missing|ingest no_entities conflicts/.test(failure.reason));
     const degradedOpen = failureStop && captureDegradedReason(failureReason) && !fatalFailure;
     const cleanStatus: PhaseResult['status'] = failureStop
-      ? (writtenSlugs.length > 0 || pagesProcessed > 0 || degradedOpen ? 'warn' : 'fail')
+      ? (writtenSlugs.length > 0 || pagesProcessed > 0 || degradedOpen || isolatedOutputFailures ? 'warn' : 'fail')
       : pagesRemaining>0 ? 'warn' : 'ok';
     const status: PhaseResult['status'] = cleanStatus === 'ok' && (gaps.isolated > 0 || gaps.unlinkedMentions > 0 || unresolvedReferences.length>0 || unresolvedLinks.length>0)
       ? 'warn'
@@ -1270,12 +1276,13 @@ export async function runPhaseCaptureEntities(
       pages_cached:skippedCandidates,
       pages_submitted: pagesSubmitted,
       pages_processed: pagesProcessed,
-      ...(opts.roundWork && { round_fresh_processed: relationError ? 0 : freshProcessed, round_older_processed: pagesProcessed - (relationError ? 0 : freshProcessed), round_remaining: pagesRemaining, round_time_reached: Date.now() >= opts.roundWork.deadlineAtMs }),
+      ...(opts.roundWork && { round_fresh_processed: relationError ? 0 : freshProcessed, round_older_processed: pagesProcessed - (relationError ? 0 : freshProcessed), round_remaining: pagesRemaining, round_time_reached: Date.now() >= (opts.roundWork.deadlineAtMs ?? Infinity) }),
       chunks_submitted: chunksSubmitted,
       chunks_processed: chunksProcessed,
       peak_active_chunks:peakChunks,
       pages_remaining: pagesRemaining,
       pages_failed: failedPages,
+      ...(isolatedOutputFailures && { isolated_output_failures: true }),
       page_failures:pageFailures,
       chunks_failed: failedChunks,
       input_tokens: inputTokens,

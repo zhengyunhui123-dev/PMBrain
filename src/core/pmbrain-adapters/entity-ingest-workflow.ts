@@ -32,6 +32,7 @@ export interface EntityIngestContext {
   compact_contract?:boolean;
   batch_capture?:boolean;
   single_pass?:boolean;
+  repair_single_pass?:boolean;
   quickEntitiesOnly?:boolean;
   pageId?:number|string;
   sourceIncarnation?:string;

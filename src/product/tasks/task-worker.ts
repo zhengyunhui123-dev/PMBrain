@@ -39,7 +39,6 @@ import { performSync } from '../../commands/sync.ts';
 import { readTaskCheckpoint, taskModelFingerprint, syncFileContentFingerprint, syncFileCompatibleFingerprints, retireAutomaticCapture } from './checkpoint.ts';
 import { DeepOutputReceipt } from './deep-output-receipt';
 import { planDeepRelations } from './deep-relation-work';
-import { deferRoundPhase } from '../../core/pmbrain-adapters/deep-round-work.ts';
 import { loadAllowedSlugPrefixes } from '../../core/cycle/allowed-slug-prefixes';
 import { phaseHasPendingWork } from '../../../shared/dream-phase-state.ts';
 import { usesSyncFileQueue } from '../../../shared/task-progress.ts';
@@ -48,7 +47,7 @@ import type { SyncStrategy } from '../../core/sync.ts';
 import { isOfficeFilePath } from '../../core/sync.ts';
 import { isImageFilePath } from '../../core/import-file.ts';
 import { QuickSyncPlan } from './quick-sync-plan';
-import { DEEP_ORGANIZE_STAGES, applyDeepSyncFileCounts, deepContentBudgetMs, deepOrganizePhaseNames, deepStageClosed, deepStageElapsed, isStagedDeepOrganize, pauseDeepStage, summarizeDeepStage, type DeepRoundProgress } from '../../../shared/deep-organize-progress';
+import { DEEP_ORGANIZE_STAGES, applyDeepSyncFileCounts, deepOrganizePhaseNames, deepStageClosed, deepStageElapsed, isStagedDeepOrganize, pauseDeepStage, summarizeDeepStage, type DeepRoundProgress } from '../../../shared/deep-organize-progress';
 import { DEEP_ORGANIZE_PHASE_HORIZON_MS } from './timeout.ts';
 import { classifyQuickScanHash, classifyQuickScanStat } from './quick-scan-index';
 import type { MaintenanceRoundProgress, MaintenanceStageId, MaintenanceStageResult } from '../../../shared/maintenance-progress';
@@ -224,7 +223,7 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
         if(result.deferred)pendingFiles=true;
         return result;
       }
-      options={...options,deferDocumentOcr:true,deferredOcrVectors:input.phase==='sync',deferredOcrMaintenanceOwnerId:input.phase==='sync'?undefined:ownerJobId??undefined};
+      options={...options,desktopDeepSync:stagedFull,deferDocumentOcr:true,deferredOcrVectors:input.phase==='sync',deferredOcrMaintenanceOwnerId:input.phase==='sync'?undefined:ownerJobId??undefined};
       abort.signal.throwIfAborted();
       if(capacityReached)return {slug:'',status:'skipped',chunks:0,deferred:true};
       const sourceId = options.sourceId ?? 'default';
@@ -631,9 +630,7 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
       pauseForDocumentOcr = stage.id !== 'check' && stage.id !== 'sync';
       let waitingForFiles = false;
       try {
-        const budgetMs = deepContentBudgetMs(stage.id, deepRound.stages);
-        const deadlineAtMs = budgetMs === undefined ? undefined
-          : Date.now() + Math.max(0, budgetMs - deepStageElapsed(deepRound.current, Date.now()));
+        const contentStage = stage.id === 'relations' || stage.id === 'knowledge' || stage.id === 'entities' || stage.id === 'concepts';
         if (stage.id === 'sync') {
           syncPlan.preparing = true;
           for (const [index, source] of sources.entries()) {
@@ -706,14 +703,8 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
             abort.signal.throwIfAborted();
             syncPlan.sourceId = source.id;
             send({ type: 'progress', scope: { name: source.name, index, total: sources.length } });
-            if (deadlineAtMs !== undefined && Date.now() >= deadlineAtMs) {
-              const saved = checkpoint.phases[source.id] ?? [];
-              const pending = stage.phases.filter(phase => !saved.some(result => result.phase === phase));
-              checkpoint.phases[source.id] = [...saved, ...pending.map(deferRoundPhase)];
-              continue;
-            }
             const options = await phaseOptions(source.id);
-            const prioritySlugs = deadlineAtMs === undefined ? [] : await roundChanged(source.id);
+            const prioritySlugs = contentStage ? await roundChanged(source.id) : [];
             if (stage.id === 'concepts') {
               for (const phase of checkpoint.phases[source.id] ?? []) {
                 if (!Array.isArray(phase.details.knowledge_created_refs)) continue;
@@ -725,9 +716,9 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
                 }
               }
             }
-            const relations = stage.id === 'relations' && Date.now() < (deadlineAtMs ?? 0)
+            const relations = stage.id === 'relations'
               ? await planDeepRelations(engine, source.id, prioritySlugs) : undefined;
-            if (stage.id === 'entities' && Date.now() < (deadlineAtMs ?? 0)) {
+            if (stage.id === 'entities') {
               const requested = await rpc('task.captureRequest', [source.id]) as string[] | undefined;
               if (requested) checkpoint.captureRequests = { ...checkpoint.captureRequests, [source.id]: requested };
             }
@@ -735,15 +726,15 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
             const report = await runCycle(deepOutput?.observe(engine) ?? engine, {
               ...resolveDreamRelationOptions('full', null),
               ...common, sourceId: source.id, brainDir: await quickBrainDir(source.id), ...options,
-              phases: deepPhases, phaseWindow: [...stage.phases] as CyclePhase[], deferDerivedEmbedding: true,
+              phases: deepPhases, phaseWindow: [...stage.phases] as CyclePhase[], deferDerivedEmbedding: true, lintReadOnly: true,
               quickMaintenance: false, quickEntitiesOnly: true, reuseDuplicateKnowledgeSources: true,
               schemaPack: knowledgePack, includePendingKnowledge: knowledgeEnabled,
               enrichThinWhenUnset: true, enrichThinTypesWhenUnset: ['person', 'company', 'project'],
-              ...(deadlineAtMs !== undefined && {
+              ...(contentStage && {
                 changedSlugs: relations?.slugs,
                 refreshRelationsAfterGeneration: false,
                 roundWork: {
-                  prioritySlugs, deadlineAtMs, relationPending: relations?.pending,
+                  prioritySlugs, relationPending: relations?.pending,
                   ...(stage.id === 'knowledge' && {
                     atomPlan: checkpoint.deepAtomPlans?.[source.id],
                     saveAtomPlan: async (slugs: string[]) => {

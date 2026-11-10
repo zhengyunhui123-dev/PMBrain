@@ -12,16 +12,6 @@ export const DEEP_ORGANIZE_STAGES = [
 
 type CurrentDeepStageId = typeof DEEP_ORGANIZE_STAGES[number]['id'];
 export type DeepStageId = CurrentDeepStageId | 'index';
-const contentBudgetMinutes = { relations: 5, knowledge: 15, entities: 5, concepts: 5 } as const;
-
-export function deepContentBudgetMs(id: DeepStageId, stages: DeepStageResult[]): number | undefined {
-  const keys = Object.keys(contentBudgetMinutes) as (keyof typeof contentBudgetMinutes)[];
-  const index = keys.findIndex(key => key === id);
-  if (index < 0) return undefined;
-  const previous = keys.slice(0, index);
-  const spent = stages.filter(stage => previous.some(key => key === stage.id)).reduce((total, stage) => total + stage.durationMs, 0);
-  return Math.max(0, keys.slice(0, index + 1).reduce((minutes, key) => minutes + contentBudgetMinutes[key], 0) * 60_000 - spent);
-}
 export type DeepPhaseSnapshot = DreamPhaseState & { duration_ms?: number };
 
 export interface DeepRunTiming {
@@ -169,6 +159,8 @@ export function summarizeDeepStage(id: CurrentDeepStageId, phases: DeepPhaseSnap
   const unit = id === 'concepts' ? '个概念' : '份资料';
   const roundDetail = [
     ...(roundWork ? [`本轮新增或变更处理 ${count(relevant, 'round_fresh_processed')} ${unit}，历史积压处理 ${count(relevant, 'round_older_processed')} ${unit}，待处理候选 ${count(relevant, 'round_remaining')}`] : []),
+    ...(id === 'entities' && count(relevant, 'chunks_failed') > 0
+      ? [`${count(relevant, 'pages_failed')} 份资料有未通过的分块，共 ${count(relevant, 'chunks_failed')} 个分块失败`] : []),
     ...(synthesisWork || count(relevant, 'round_synthesis_remaining') ? [`综合本轮对话 ${count(relevant, 'round_synthesis_fresh')} 份，历史对话 ${count(relevant, 'round_synthesis_older')} 份，待综合 ${count(relevant, 'round_synthesis_remaining')} 份`] : []),
     ...(roundTimeReached ? ['本阶段时间额度已用完，剩余留到下一轮'] : []),
   ];

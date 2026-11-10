@@ -2,7 +2,7 @@ import type { CyclePhase, PhaseResult } from '../cycle.ts';
 
 export interface DeepRoundWork {
   prioritySlugs: string[];
-  deadlineAtMs: number;
+  deadlineAtMs?: number;
   relationPending?: number;
   atomPlan?: string[];
   saveAtomPlan?: (slugs: string[]) => Promise<void>;

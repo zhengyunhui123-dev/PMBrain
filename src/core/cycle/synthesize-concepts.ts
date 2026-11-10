@@ -300,8 +300,8 @@ export async function runPhaseSynthesizeConcepts(
 
   for (const group of orderedGroups) {
     throwIfAborted(opts.signal, '[dream] synthesize_concepts');
-    if (opts.roundWork && (attempted >= 10 || Date.now() >= opts.roundWork.deadlineAtMs)) {
-      roundTimeReached = Date.now() >= opts.roundWork.deadlineAtMs;
+    if (opts.roundWork && (attempted >= 10 || Date.now() >= (opts.roundWork.deadlineAtMs ?? Infinity))) {
+      roundTimeReached = Date.now() >= (opts.roundWork.deadlineAtMs ?? Infinity);
       break;
     }
     examined++;

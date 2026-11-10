@@ -705,7 +705,7 @@ function openDeepDemo(t){
     <section class="mp-deep-content" aria-label="理解内容与关联">
       <div class="mp-deep-content-heading"><h4>理解内容与关联</h4><span>${contentState}</span></div>
       <p class="mp-deep-content-counts">新建 ${contentTotal('newKnowledge')} 个知识成果 · 维护 ${contentTotal('maintainedKnowledge')} 个 · 新增关联 ${contentTotal('links')} 条</p>
-      <p class="mp-note">优先整理本轮新增和变更的资料，同时补做历史积压。四个内容阶段共享 30 分钟软预算，剩余候选留到下一轮。</p>
+      <p class="mp-note">优先整理本轮新增和变更的资料，同时补做历史积压。四个内容阶段按批量额度依次执行，剩余候选留到下一轮。</p>
       <ol class="mp-deep-stages" start="${contentStart+1}">${stages.slice(contentStart,contentEnd).join('')}</ol>
     </section>
     <ol class="mp-deep-stages" start="${contentEnd+1}">${stages.slice(contentEnd).join('')}</ol>

@@ -26,13 +26,17 @@ const keys = ['PMBRAIN_HOME', 'GBRAIN_HOME', 'DATABASE_URL', 'PMBRAIN_DATABASE_U
 const saved = keys.map(key => process.env[key]);
 let home: string, engine: BrainEngine;
 let modelServer: ReturnType<typeof Bun.serve>;
+let captureReply: ((messages: string) => string) | undefined;
 
 beforeAll(async () => {
   home = mkdtempSync(join(tmpdir(), 'pmbrain-deep-sync-'));
   keys.forEach(key => delete process.env[key]);
   process.env.PMBRAIN_HOME = home; process.env.GBRAIN_HOME = home;
   mkdirSync(join(home, '.pmbrain'));
-  modelServer = Bun.serve({ port: 0, fetch: () => Response.json({ id: 'isolated-deep', object: 'chat.completion', model: 'isolated-capture', choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: JSON.stringify({ entities: [], relations: [], no_entities: true }) } }], usage: { prompt_tokens: 10, completion_tokens: 10, total_tokens: 20 } }) });
+  modelServer = Bun.serve({ port: 0, fetch: async request => {
+    const content = captureReply?.(await request.text()) ?? JSON.stringify({ entities: [], relations: [], no_entities: true });
+    return Response.json({ id: 'isolated-deep', object: 'chat.completion', model: 'isolated-capture', choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content } }], usage: { prompt_tokens: 10, completion_tokens: 10, total_tokens: 20 } });
+  } });
   writeFileSync(join(home, '.pmbrain', 'config.json'), JSON.stringify({ engine: database ? 'postgres' : 'pglite', custom_openai_api_key: 'isolated-only', provider_base_urls: { 'custom-openai': modelServer.url.origin + '/v1' }, models: { default: 'custom-openai:isolated-capture' }, model_usage: { embedding_enabled: false, generative_enabled: true } }));
   if (database) assertSafeE2eDatabaseUrl(database);
   engine = database ? new PostgresEngine() : new WorkerPgliteEngine() as unknown as BrainEngine;
@@ -116,10 +120,18 @@ test('深度整理冻结新旧提炼清单，时间用完不调用模型，其�
     _chat: async () => { window.deadlineAtMs = 0; return chat(); },
   });
   expect(first.details).toMatchObject({ round_fresh_processed: 1, round_older_processed: 0, round_remaining: 83, round_time_reached: true });
+  let quoteCalls = 0;
   const resumed = await runPhaseExtractAtoms(engine, {
-    sourceId, _transcripts: [], reuseDuplicateSources: true,
-    roundWork: { ...window, deadlineAtMs: Date.now() + 30_000 }, _chat: chat,
+    sourceId, _transcripts: [], reuseDuplicateSources: true, requireSourceQuotes: true,
+    roundWork: { ...window, deadlineAtMs: Date.now() + 30_000 },
+    _chat: async request => {
+      quoteCalls++;
+      if (quoteCalls === 1) return { ...await chat(), text: JSON.stringify([{ title: '无原文引文', atom_type: 'insight', body: '只有在确实能从资料中逐字找到证据时，才可以保存。', source_quote: '不在原文中的句子。' }]) };
+      expect(String(request.messages.at(-1)?.content)).toContain('逐字复制连续片段');
+      return chat();
+    },
   });
+  expect(quoteCalls).toBe(2);
   expect(resumed.details).toMatchObject({ round_fresh_processed: 0, round_older_processed: 1, round_remaining: 82 });
 }, 120000);
 
@@ -145,19 +157,30 @@ test('快速维护后深度整理只处理增量，连续运行不重新排队�
 test('深度整理的同步摘要与文件明细一致，完成检查不等待后台向量', async () => {
   const repo = join(home, 'deep-file-counts'); mkdirSync(repo);
   writeFileSync(join(repo, 'valid.md'), '# 有效资料\n\n文件成功保存。');
-  writeFileSync(join(repo, 'broken.md'), '---\nslug: wrong-path\n---\n# 路径不一致\n\n文件应显示失败。');
+  const declared = '---\nslug: wrong-path\n---\n# 路径不一致\n\n应按实际路径保存。';
+  writeFileSync(join(repo, 'by-path.md'), declared);
+  writeFileSync(join(repo, 'collision.md'), '---\nslug: wrong-path\n---\n# 路径冲突\n\n应保留目标页。');
+  const utf16 = Buffer.from('\ufeff# 编码测试\n\n应保留正确文本。', 'utf16le');
+  writeFileSync(join(repo, 'utf16.md'), utf16);
+  writeFileSync(join(repo, 'broken.md'), '# 损坏资料\n\n含有\x00空字节。');
   await engine.executeRaw("INSERT INTO sources(id,name,local_path,config) VALUES ('deep-counts','同步失败计数',$1,'{}'::jsonb)", [repo]);
+  await engine.putPage('collision', { type: 'note', title: '已有知识', compiled_truth: '已有内容应保留。' }, { sourceId: 'deep-counts' });
   await pauseSearchOptimize(engine, true);
   const runtime = new ProductTaskRuntime(engine, { background: idleBackground }); await runtime.start();
   try {
     const run = await ended(runtime, (await runtime.submitDream({ preset: 'full', sourceId: 'deep-counts' })).id);
     const files = await runtime.files(run.id);
-    expect(files?.rows).toHaveLength(2);
-    expect(run.product?.syncFiles).toMatchObject({ total: 2, completed: 1, failed: 1, remaining: 0 });
-    expect(run.product?.deep?.stages.find(stage => stage.id === 'sync')).toMatchObject({ imported: 1, failed: 1, status: 'partial' });
+    expect(files?.rows).toHaveLength(5);
+    expect(run.product?.syncFiles).toMatchObject({ total: 5, completed: 3, failed: 2, remaining: 0 });
+    expect(run.product?.deep?.stages.find(stage => stage.id === 'sync')).toMatchObject({ imported: 3, failed: 2, status: 'partial' });
+    expect((await engine.getPage('utf16', { sourceId: 'deep-counts' }))?.compiled_truth).toContain('正确文本');
+    expect(await engine.getPage('wrong-path', { sourceId: 'deep-counts' })).toBeNull();
+    expect((await engine.getPage('collision', { sourceId: 'deep-counts' }))?.compiled_truth).toBe('已有内容应保留。');
+    expect(readFileSync(join(repo, 'by-path.md'), 'utf8')).toBe(declared);
+    expect(readFileSync(join(repo, 'utf16.md'))).toEqual(utf16);
     expect(run.product?.deep?.stages.map(stage => stage.id)).toEqual(DEEP_ORGANIZE_STAGES.map(stage => stage.id));
     expect(run.product?.deep?.stage).toBe('done');
-    expect(await pendingVectors('deep-counts')).toEqual(['valid']);
+    expect(await pendingVectors('deep-counts')).toEqual(['by-path', 'utf16', 'valid']);
   } finally { await runtime.close(); await pauseSearchOptimize(engine, false); }
 }, 300000);
 
@@ -285,6 +308,37 @@ test('深度整理同步文件进度持续可见，不只显示完成了一个�
   expect(adapter.view.phasePercent).toBeGreaterThan(0);
 });
 
+test('深度整理让模型纠正矛盾输出，原文无证据的分块隔离后仍完成检查', async () => {
+  const repo = join(home, 'repair-capture-source'); mkdirSync(repo);
+  writeFileSync(join(repo, 'fixable-capture.md'), '# 矛盾回执\n\n这份资料只有工作流程说明，供验证校验后重新输出。');
+  writeFileSync(join(repo, 'bad-evidence-capture.md'), '# 无证据回执\n\n这里没有具体项目名称，只有工作流程和操作说明。');
+  await engine.executeRaw("INSERT INTO sources(id,name,local_path,config) VALUES ('repair-capture','实体修正验收',$1,'{}'::jsonb)", [repo]);
+  const empty = JSON.stringify({ entities: [], relations: [], no_entities: true });
+  let corrected = 0, badRequests = 0;
+  captureReply = messages => {
+    const entity = { slug: 'projects/pstack', content: '---\ntitle: pstack\ntype: project\n---\n模型错误地提出了项目。' };
+    if (messages.includes('资料 slug: fixable-capture')) {
+      if (messages.includes('ingest no_entities conflicts')) { corrected++; return empty; }
+      return JSON.stringify({ entities: [entity], relations: [], no_entities: true });
+    }
+    if (messages.includes('资料 slug: bad-evidence-capture')) {
+      badRequests++;
+      return JSON.stringify({ entities: [entity], relations: [], no_entities: false });
+    }
+    return empty;
+  };
+  const runtime = new ProductTaskRuntime(engine, { background: idleBackground }); await runtime.start();
+  try {
+    const run = await ended(runtime, (await runtime.submitDream({ preset: 'full', sourceId: 'repair-capture' })).id);
+    expect(corrected).toBe(1);
+    expect(badRequests).toBe(2);
+    expect(run.status, run.error ?? '').toBe('completed');
+    expect((run.result as { status?: string }).status).toBe('partial');
+    expect(run.product?.deep?.stage).toBe('done');
+    expect(await engine.getPage('projects/pstack', { sourceId: 'repair-capture' })).toBeNull();
+  } finally { captureReply = undefined; await runtime.close(); }
+}, 180000);
+
 test('旧任务从索引阶段续跑时保留已写成果并进入完成检查', async () => {
   const repo = join(home, 'legacy-index-source'); mkdirSync(repo);
   writeFileSync(join(repo, 'next-round.md'), '# 留给下一轮\n\n已封存同步。');
@@ -318,7 +372,7 @@ test('旧任务从索引阶段续跑时保留已写成果并进入完成检查',
   } finally { await runtime.close(); await pauseSearchOptimize(engine, false); }
 }, 300000);
 
-test('内容阶段用完预算后保留前序回执并正常执行完成检查', async () => {
+test('内容阶段累计超过三十分钟仍执行后续阶段和完成检查', async () => {
   const repo = join(home, 'spent-round-source'); mkdirSync(repo);
   const sourceId = 'spent-round';
   await engine.executeRaw("INSERT INTO sources(id,name,local_path,config) VALUES ($1,'时间验收',$2,'{}'::jsonb)", [sourceId, repo]);
@@ -327,7 +381,7 @@ test('内容阶段用完预算后保留前序回执并正常执行完成检查',
   }));
   const checkpoint = {
     phases: {}, reports: {}, deepVectorHandoff: true,
-    deepProgress: { stage: 'knowledge', stages, scan: { scanned: 0, unchanged: 0, complete: true }, current: { elapsedMs: 15 * 60_000 } },
+    deepProgress: { stage: 'knowledge', stages, scan: { scanned: 0, unchanged: 0, complete: true }, current: { elapsedMs: 35 * 60_000 } },
   };
   const queue = new MinionQueue(engine);
   const job = await queue.add('pmbrain-product-task', { kind: 'dream_full', fileSession: true, task: { type: 'dream', input: { preset: 'full', sourceId, checkpoint } } },
@@ -340,7 +394,9 @@ test('内容阶段用完预算后保留前序回执并正常执行完成检查',
     const run = await ended(runtime, id);
     expect(run.status, run.error ?? '').toBe('completed');
     expect(run.product?.deep?.stages.slice(0, 3)).toEqual(stages);
-    expect(run.product?.deep?.stages.find(stage => stage.id === 'knowledge')).toMatchObject({ status: 'partial', detail: expect.stringContaining('本阶段时间额度已用完') });
+    expect(run.product?.deep?.stages.find(stage => stage.id === 'knowledge')?.durationMs).toBeGreaterThanOrEqual(35 * 60_000);
+    expect(run.product?.deep?.stages.find(stage => stage.id === 'concepts')?.detail).not.toContain('时间额度已用完');
+    expect((run.result as { phases?: Array<{ phase: string; details: Record<string, unknown> }> }).phases?.some(phase => phase.phase === 'synthesize_concepts' && !phase.details.round_time_reached)).toBe(true);
     expect(run.product?.deep?.stages.at(-1)?.id).toBe('review');
     expect(run.product?.deep?.stage).toBe('done');
   } finally { await runtime.close(); }

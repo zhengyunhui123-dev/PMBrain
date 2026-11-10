@@ -424,6 +424,7 @@ export interface CycleOpts {
   knowledgeSince?: string;
   includePendingKnowledge?: boolean;
   deferDerivedEmbedding?: boolean;
+  lintReadOnly?: boolean;
   roundWork?: import('./pmbrain-adapters/deep-round-work.ts').DeepRoundWork;
   /**
    * Brain directory (git repo). Required for filesystem phases. `null` means
@@ -1672,7 +1673,7 @@ export async function runCycle(
   phaseResults.push(...restored);
   const checkpoint = async () => {
     await opts.phaseCheckpoint?.(phaseResults);
-    if (opts.roundWork && Date.now() >= opts.roundWork.deadlineAtMs) {
+    if (opts.roundWork && Date.now() >= (opts.roundWork.deadlineAtMs ?? Infinity)) {
       const pending = phases.filter(phase => !phaseResults.some(result => result.phase === phase));
       if (pending.length) {
         const { deferRoundPhase } = await import('./pmbrain-adapters/deep-round-work.ts');
@@ -1843,7 +1844,7 @@ export async function runCycle(
         phaseResults.push(skipNoBrainDir('lint'));
       } else {
         progress.start('cycle.lint');
-        const { result, duration_ms } = await timePhase(() => runPhaseLint(brainDir, dryRun, engine ?? undefined, opts.signal));
+        const { result, duration_ms } = await timePhase(() => runPhaseLint(brainDir, dryRun || opts.lintReadOnly === true, engine ?? undefined, opts.signal));
         result.duration_ms = duration_ms;
         phaseResults.push(result);
         progress.finish();
@@ -1870,7 +1871,7 @@ export async function runCycle(
     // Track which slugs sync touched so extract can run incrementally,
     // and which slugs synthesize wrote so recompute_emotional_weight can
     // pick up the union of (sync ∪ synthesize) for v0.29 incremental mode.
-    if (opts.roundWork && Date.now() >= opts.roundWork.deadlineAtMs) await checkpoint();
+    if (opts.roundWork && Date.now() >= (opts.roundWork.deadlineAtMs ?? Infinity)) await checkpoint();
     let syncPagesAffected: string[] | undefined = syncPhasePages(restored.find(item => item.phase === 'sync'));
     let syncAttempted = restored.some(item => item.phase === 'sync');
     const restoredSynthesize = restored.find(item => item.phase === 'synthesize');
@@ -2025,7 +2026,7 @@ export async function runCycle(
       }:undefined;
       const noteFailure=(step:string,error:unknown)=>{if(opts.quickMaintenance)recordFailure({sourceId:filesystemSourceId??'default',step,error:error instanceof Error?error.message:String(error)});};
       checkAborted(opts.signal);
-      if (opts.includeHistoricalMarkdownCatchUp && !dryRun && (!opts.roundWork || Date.now() < opts.roundWork.deadlineAtMs)) {
+      if (opts.includeHistoricalMarkdownCatchUp && !dryRun && (!opts.roundWork || Date.now() < (opts.roundWork.deadlineAtMs ?? Infinity))) {
         try {
           const { extractStaleFromDB } = await import('../commands/extract-stale.ts');
           const catchUpStart = performance.now();
@@ -2038,7 +2039,7 @@ export async function runCycle(
             slugs: opts.quickMaintenance || opts.roundWork ? prioritySlugs ?? [] : undefined,
             sourceIdFilter: filesystemSourceId,
             catchUp: !opts.roundWork && !opts.quickMaintenance && opts.markdownCatchUpMaxHistorical == null,
-            timeBudgetMs: opts.roundWork ? Math.max(0, opts.roundWork.deadlineAtMs - Date.now()) : opts.quickMaintenance ? opts.byMentionTimeBudgetMs ?? Infinity : undefined,
+            timeBudgetMs: opts.roundWork ? Math.max(0, (opts.roundWork.deadlineAtMs ?? Infinity) - Date.now()) : opts.quickMaintenance ? opts.byMentionTimeBudgetMs ?? Infinity : undefined,
             quiet: !getCliOptions().progressJson,
             signal: opts.signal,
             yieldDuringPhase: buildYieldDuringPhase(lock, opts.yieldDuringPhase),
@@ -2102,7 +2103,7 @@ export async function runCycle(
       }
 
       if (result.error && isGinRepairAbortText(result.error.message)) return;
-      if (opts.includeByMention && !dryRun && (!opts.roundWork || Date.now() < opts.roundWork.deadlineAtMs)) {
+      if (opts.includeByMention && !dryRun && (!opts.roundWork || Date.now() < (opts.roundWork.deadlineAtMs ?? Infinity))) {
         try {
           const { runByMentionCore } = await import('../commands/extract.ts');
           const mentionStart = performance.now();
@@ -2117,7 +2118,7 @@ export async function runCycle(
             maxHistoricalPages: limits && Object.prototype.hasOwnProperty.call(limits, 'maxHistoricalPages')
               ? limits.maxHistoricalPages
               : opts.byMentionMaxHistorical,
-            historicalTimeBudgetMs: opts.roundWork ? Math.max(0, opts.roundWork.deadlineAtMs - Date.now()) : opts.byMentionTimeBudgetMs,
+            historicalTimeBudgetMs: opts.roundWork ? Math.max(0, (opts.roundWork.deadlineAtMs ?? Infinity) - Date.now()) : opts.byMentionTimeBudgetMs,
             sourceIdFilter: filesystemSourceId,
             quiet: !getCliOptions().progressJson,
             signal: opts.signal,
@@ -2175,7 +2176,7 @@ export async function runCycle(
 
 
       if (result.error && isGinRepairAbortText(result.error.message)) return;
-      if (opts.includeNer && !dryRun && (!opts.roundWork || Date.now() < opts.roundWork.deadlineAtMs && relationNerSlugs.size > 0)
+      if (opts.includeNer && !dryRun && (!opts.roundWork || Date.now() < (opts.roundWork.deadlineAtMs ?? Infinity) && relationNerSlugs.size > 0)
         && (!opts.quickMaintenance || relationNerSlugs.size > 0 && result.details.by_mention_disabled !== true)) {
         const started = performance.now();
         try {
@@ -2475,7 +2476,7 @@ export async function runCycle(
           quickEntitiesOnly:opts.quickEntitiesOnly,
           slugs:captureSlugs,
           budget:opts.captureEntityBudget,
-          window:opts.roundWork ? { maxChunks: 120, maxDurationMs: Math.max(1, opts.roundWork.deadlineAtMs - Date.now()) } : opts.captureEntityWindow,
+          window:opts.roundWork ? { maxChunks: 120, maxDurationMs: Math.max(1, (opts.roundWork.deadlineAtMs ?? Infinity) - Date.now()) } : opts.captureEntityWindow,
           roundWork: opts.roundWork,
           dryRun,
           signal: opts.signal,
