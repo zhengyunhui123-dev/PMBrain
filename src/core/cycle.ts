@@ -423,6 +423,9 @@ export interface CycleOpts {
   schemaPack?: string;
   knowledgeSince?: string;
   includePendingKnowledge?: boolean;
+  deferDerivedEmbedding?: boolean;
+  lintReadOnly?: boolean;
+  roundWork?: import('./pmbrain-adapters/deep-round-work.ts').DeepRoundWork;
   /**
    * Brain directory (git repo). Required for filesystem phases. `null` means
    * the selected Source has no usable checkout, so filesystem phases skip
@@ -1648,6 +1651,7 @@ export async function runCycle(
   const start = performance.now();
   const requestedPhases = opts.phases ?? DEFAULT_PHASES;
   const resolvedPhases = resolveCyclePhases(opts.phases, opts.sourceId);
+  const defersDerivedEmbedding = opts.deferDerivedEmbedding === true || resolvedPhases.includes('embed');
   const restored = (opts.completedPhases ?? []).filter(item => resolvedPhases.includes(item.phase));
   const phases = resolvedPhases.filter(phase => !restored.some(item => item.phase === phase) && (!opts.phaseWindow || opts.phaseWindow.includes(phase)));
   const excludedPhases = requestedPhases.filter(phase => !resolvedPhases.includes(phase));
@@ -1669,6 +1673,15 @@ export async function runCycle(
   phaseResults.push(...restored);
   const checkpoint = async () => {
     await opts.phaseCheckpoint?.(phaseResults);
+    if (opts.roundWork && Date.now() >= (opts.roundWork.deadlineAtMs ?? Infinity)) {
+      const pending = phases.filter(phase => !phaseResults.some(result => result.phase === phase));
+      if (pending.length) {
+        const { deferRoundPhase } = await import('./pmbrain-adapters/deep-round-work.ts');
+        phaseResults.push(...pending.map(deferRoundPhase));
+        phases.length = 0;
+        await opts.phaseCheckpoint?.(phaseResults);
+      }
+    }
     await safeYield(opts.yieldBetweenPhases);
   };
 
@@ -1831,7 +1844,7 @@ export async function runCycle(
         phaseResults.push(skipNoBrainDir('lint'));
       } else {
         progress.start('cycle.lint');
-        const { result, duration_ms } = await timePhase(() => runPhaseLint(brainDir, dryRun, engine ?? undefined, opts.signal));
+        const { result, duration_ms } = await timePhase(() => runPhaseLint(brainDir, dryRun || opts.lintReadOnly === true, engine ?? undefined, opts.signal));
         result.duration_ms = duration_ms;
         phaseResults.push(result);
         progress.finish();
@@ -1858,6 +1871,7 @@ export async function runCycle(
     // Track which slugs sync touched so extract can run incrementally,
     // and which slugs synthesize wrote so recompute_emotional_weight can
     // pick up the union of (sync ∪ synthesize) for v0.29 incremental mode.
+    if (opts.roundWork && Date.now() >= (opts.roundWork.deadlineAtMs ?? Infinity)) await checkpoint();
     let syncPagesAffected: string[] | undefined = syncPhasePages(restored.find(item => item.phase === 'sync'));
     let syncAttempted = restored.some(item => item.phase === 'sync');
     const restoredSynthesize = restored.find(item => item.phase === 'synthesize');
@@ -1923,7 +1937,7 @@ export async function runCycle(
       await checkpoint();
     }
     if (opts.changedSlugs !== undefined) {
-      syncPagesAffected = [...new Set([...(syncPagesAffected ?? []), ...opts.changedSlugs])];
+      syncPagesAffected = opts.roundWork ? opts.changedSlugs : [...new Set([...(syncPagesAffected ?? []), ...opts.changedSlugs])];
     }
 
     for (const repairPhase of ['fence_repair', 'content_repair'] as const) {
@@ -1962,7 +1976,7 @@ export async function runCycle(
         });
       } else if (brainDir === null) {
         phaseResults.push(skipNoBrainDir('synthesize'));
-      } else if (opts.changedSlugs?.length === 0) {
+      } else if (!opts.roundWork && opts.changedSlugs?.length === 0) {
         phaseResults.push({ phase: 'synthesize', status: 'skipped', duration_ms: 0, summary: '跳过', details: { reason: 'round_unchanged', message: '本轮没有新的或变化的资料，已跳过' } });
       } else {
         progress.start('cycle.synthesize');
@@ -1983,6 +1997,7 @@ export async function runCycle(
           deadlineAtMs: opts.deadlineAtMs ?? null,
           privateQueueOwnerJobId: opts.privateQueueOwnerJobId ?? null,
           changedSlugs: opts.changedSlugs,
+          roundWork: opts.roundWork,
         }));
         result.duration_ms = duration_ms;
         phaseResults.push(result);
@@ -2011,7 +2026,7 @@ export async function runCycle(
       }:undefined;
       const noteFailure=(step:string,error:unknown)=>{if(opts.quickMaintenance)recordFailure({sourceId:filesystemSourceId??'default',step,error:error instanceof Error?error.message:String(error)});};
       checkAborted(opts.signal);
-      if (opts.includeHistoricalMarkdownCatchUp && !dryRun) {
+      if (opts.includeHistoricalMarkdownCatchUp && !dryRun && (!opts.roundWork || Date.now() < (opts.roundWork.deadlineAtMs ?? Infinity))) {
         try {
           const { extractStaleFromDB } = await import('../commands/extract-stale.ts');
           const catchUpStart = performance.now();
@@ -2019,12 +2034,12 @@ export async function runCycle(
             dryRun: false,
             jsonMode: false,
             includeFrontmatter: true,
-            catalogAware: !opts.quickMaintenance,
+            catalogAware: !opts.quickMaintenance && !opts.roundWork,
             excludePathPattern: opts.quickMaintenance ? (await import('./pmbrain-adapters/quick-maintenance-policy.ts')).QUICK_MAINTENANCE_EXCLUDED_PATH : undefined,
-            slugs: opts.quickMaintenance ? prioritySlugs ?? [] : undefined,
+            slugs: opts.quickMaintenance || opts.roundWork ? prioritySlugs ?? [] : undefined,
             sourceIdFilter: filesystemSourceId,
-            catchUp: !opts.quickMaintenance && opts.markdownCatchUpMaxHistorical == null,
-            timeBudgetMs: opts.quickMaintenance ? opts.byMentionTimeBudgetMs ?? Infinity : undefined,
+            catchUp: !opts.roundWork && !opts.quickMaintenance && opts.markdownCatchUpMaxHistorical == null,
+            timeBudgetMs: opts.roundWork ? Math.max(0, (opts.roundWork.deadlineAtMs ?? Infinity) - Date.now()) : opts.quickMaintenance ? opts.byMentionTimeBudgetMs ?? Infinity : undefined,
             quiet: !getCliOptions().progressJson,
             signal: opts.signal,
             yieldDuringPhase: buildYieldDuringPhase(lock, opts.yieldDuringPhase),
@@ -2032,6 +2047,16 @@ export async function runCycle(
             onPageError:onPageError('显式关系'),
           });
           for(const ref of catchUp.processedSlugs)relationNerSlugs.add(ref.slug);
+          const roundRelations = opts.roundWork?.relationPending;
+          if (roundRelations !== undefined && opts.roundWork && result.details.round_fresh_processed === undefined) {
+            const fresh = new Set(opts.roundWork.prioritySlugs);
+            const selected = new Set(opts.changedSlugs);
+            const processed = catchUp.processedSlugs.filter(ref => selected.has(ref.slug));
+            const newCount = processed.filter(ref => fresh.has(ref.slug)).length;
+            const remaining = Math.max(0, roundRelations - processed.length);
+            Object.assign(result.details, { round_fresh_processed: newCount, round_older_processed: processed.length - newCount, round_remaining: remaining });
+            if (remaining && result.status !== 'fail') result.status = 'warn';
+          }
           result.details = {
             ...result.details,
             linksCreated: Number(result.details.linksCreated ?? 0) + catchUp.linksCreated,
@@ -2078,14 +2103,14 @@ export async function runCycle(
       }
 
       if (result.error && isGinRepairAbortText(result.error.message)) return;
-      if (opts.includeByMention && !dryRun) {
+      if (opts.includeByMention && !dryRun && (!opts.roundWork || Date.now() < (opts.roundWork.deadlineAtMs ?? Infinity))) {
         try {
           const { runByMentionCore } = await import('../commands/extract.ts');
           const mentionStart = performance.now();
           const mention = await runByMentionCore(engine, {
             prioritySlugs,
             singlePass: opts.quickMaintenance,
-            priorityOnly: opts.quickMaintenance,
+            priorityOnly: opts.quickMaintenance || !!opts.roundWork,
             quickEntityTypes: opts.quickMaintenance,
             onPages: opts.quickMaintenance ? opts.onMaintenancePages : undefined,
             onPageError:onPageError('名称提及'),
@@ -2093,7 +2118,7 @@ export async function runCycle(
             maxHistoricalPages: limits && Object.prototype.hasOwnProperty.call(limits, 'maxHistoricalPages')
               ? limits.maxHistoricalPages
               : opts.byMentionMaxHistorical,
-            historicalTimeBudgetMs: opts.byMentionTimeBudgetMs,
+            historicalTimeBudgetMs: opts.roundWork ? Math.max(0, (opts.roundWork.deadlineAtMs ?? Infinity) - Date.now()) : opts.byMentionTimeBudgetMs,
             sourceIdFilter: filesystemSourceId,
             quiet: !getCliOptions().progressJson,
             signal: opts.signal,
@@ -2151,7 +2176,8 @@ export async function runCycle(
 
 
       if (result.error && isGinRepairAbortText(result.error.message)) return;
-      if (opts.includeNer && !dryRun && (!opts.quickMaintenance || relationNerSlugs.size > 0 && result.details.by_mention_disabled !== true)) {
+      if (opts.includeNer && !dryRun && (!opts.roundWork || Date.now() < (opts.roundWork.deadlineAtMs ?? Infinity) && relationNerSlugs.size > 0)
+        && (!opts.quickMaintenance || relationNerSlugs.size > 0 && result.details.by_mention_disabled !== true)) {
         const started = performance.now();
         try {
           const { extractNerLinks } = await import('./extract-ner.ts');
@@ -2255,7 +2281,7 @@ export async function runCycle(
         // is undefined → extract falls back to full walk (safe default).
         let result: PhaseResult;
         let progressStarted = false;
-        if (opts.quickMaintenance) {
+        if (opts.quickMaintenance || opts.roundWork) {
           progress.start('cycle.extract');
           progressStarted = true;
           result = { phase: 'extract', status: 'ok', duration_ms: 0, summary: '增量检查已有知识关联', details: { incremental: true } };
@@ -2384,8 +2410,9 @@ export async function runCycle(
           schemaPack:opts.schemaPack,
           since:opts.knowledgeSince,
           requireSourceQuotes:opts.includePendingKnowledge,
+          roundWork: opts.roundWork,
           reuseDuplicateSources:opts.reuseDuplicateKnowledgeSources,
-          deferEmbedding:phases.includes('embed'),
+          deferEmbedding: defersDerivedEmbedding,
           // v0.41.19.0 (T3): closure refreshes cycle lock + fires outer hook.
           yieldDuringPhase: buildYieldDuringPhase(lock, opts.yieldDuringPhase),
           // v0.41.19.0 (T4): pass same reporter (not a child — cycle.ts
@@ -2443,13 +2470,14 @@ export async function runCycle(
         progress.start('cycle.capture_entities');
         let captureReportedDone = 0;
         const { runPhaseCaptureEntities } = await import('./cycle/capture-entities.ts');
-        const captureSlugs=opts.prepareEntityCapture?(await opts.prepareEntityCapture())??[]:opts.captureEntitySlugs;
+        const captureSlugs=opts.roundWork ? undefined : opts.prepareEntityCapture?(await opts.prepareEntityCapture())??[]:opts.captureEntitySlugs;
         const { result, duration_ms } = await timePhase(() => runPhaseCaptureEntities(engine, {
           sourceId: cycleSourceId,
           quickEntitiesOnly:opts.quickEntitiesOnly,
           slugs:captureSlugs,
           budget:opts.captureEntityBudget,
-          window:opts.captureEntityWindow,
+          window:opts.roundWork ? { maxChunks: 120, maxDurationMs: Math.max(1, (opts.roundWork.deadlineAtMs ?? Infinity) - Date.now()) } : opts.captureEntityWindow,
+          roundWork: opts.roundWork,
           dryRun,
           signal: opts.signal,
           yieldDuringPhase: opts.yieldDuringPhase,
@@ -2467,6 +2495,7 @@ export async function runCycle(
           },
         }));
         result.duration_ms = duration_ms;
+        if (opts.roundWork && result.details.window_deferred) result.details.window_deferred = false;
         phaseResults.push(result);
         const written = Array.isArray(result.details?.written_slugs) ? result.details.written_slugs as string[] : [];
         const sources = Array.isArray(result.details?.source_slugs) ? result.details.source_slugs as string[] : [];
@@ -2515,6 +2544,7 @@ export async function runCycle(
           privateQueueOwnerJobId: opts.privateQueueOwnerJobId ?? null,
           sourceId: cycleSourceId,
           incremental:opts.reuseDuplicateKnowledgeSources,
+          roundWork: opts.roundWork,
         }));
         result.duration_ms = duration_ms;
         phaseResults.push(result);
@@ -2553,8 +2583,9 @@ export async function runCycle(
           brainDir: brainDir ?? undefined,
           sourceId: cycleSourceId ?? undefined,
           dryRun,
-          deferEmbedding:phases.includes('embed'),
+          deferEmbedding: defersDerivedEmbedding,
           since:opts.knowledgeSince,
+          roundWork: opts.roundWork,
           // v0.41.19.0 (T3): closure refreshes cycle lock + fires outer hook.
           yieldDuringPhase: buildYieldDuringPhase(lock, opts.yieldDuringPhase),
           // v0.41.19.0 (T4): pass same reporter (not a child).
@@ -2899,6 +2930,7 @@ export async function runCycle(
         const { runPhaseEnrichThin } = await import('./cycle/enrich-thin.ts');
         const { result, duration_ms } = await timePhase(() =>
           runPhaseEnrichThin(engine, {
+            sourceId: opts.roundWork ? cycleSourceId : undefined,
             dryRun,
             signal: opts.signal,
             enabledWhenUnset: opts.enrichThinWhenUnset,

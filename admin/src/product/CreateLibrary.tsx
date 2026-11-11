@@ -4,7 +4,7 @@ import { desktopApi } from '../lib/product-fetch';
 import { availableServiceModels, serviceConnection } from '../../../shared/model-services';
 import type { ConsoleRun } from '../../../shared/contracts/common';
 import { waitForConsoleRun } from '../pages/import/import-support';
-import { createIntent, importBuildDetail, importBuildSteps, suggestedChatModel, type CreateIntent } from './home-model';
+import { createFinishMessage, createIntent, displayDatabasePath, importBuildDetail, importBuildSteps, suggestedChatModel, type CreateIntent } from './home-model';
 import type { DesktopSetupState } from '../../../desktop/src/preload';
 import { waitForDesktopService } from './desktop-startup-wait';
 import { importMaterials, type Material } from './import-materials';
@@ -37,7 +37,7 @@ export function CreateLibrary({ onDone, onCreated, onOpenSettings, visible = tru
   const [step, setStep] = useState<StepId>('models');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const [path, setPath] = useState('');
+  const [defaultPath, setDefaultPath] = useState('');
   const [directory, setDirectory] = useState('');
   const [engine, setEngine] = useState<'pglite' | 'postgres'>('pglite');
   const [databaseUrl, setDatabaseUrl] = useState('');
@@ -52,6 +52,7 @@ export function CreateLibrary({ onDone, onCreated, onOpenSettings, visible = tru
   const [testing, setTesting] = useState('');
   const [folder, setFolder] = useState('');
   const [files, setFiles] = useState<File[]>([]);
+  const [skippedImport, setSkippedImport] = useState(false);
   const [run, setRun] = useState<ConsoleRun | null>(null);
   const [detail, setDetail] = useState('');
   const [setupLoaded, setSetupLoaded] = useState(false);
@@ -70,7 +71,7 @@ export function CreateLibrary({ onDone, onCreated, onOpenSettings, visible = tru
       const result: DesktopSetupState = await desktop.getSetup(true);
       if (request !== setupRequest.current || lifecycle.current.signal.aborted) return;
       const setup = result.setup;
-      setPath(setup.current.databasePath || setup.defaults.databasePath);
+      setDefaultPath(setup.defaults.databasePath);
       setDirectory(setup.current.knowledgeDirectory || setup.defaults.knowledgeDirectory);
       setCustomPath(setup.current.databasePath || setup.defaults.databasePath);
       setEngine(setup.current.engine);
@@ -178,13 +179,24 @@ export function CreateLibrary({ onDone, onCreated, onOpenSettings, visible = tru
     } catch (reason) { setModelTest(current => ({ ...current, [kind]: { value, success: false, message: textOf(reason) } })); }
     finally { setTesting(''); }
   };
+  const chooseLocation = async () => {
+    if (!desktop) return;
+    try {
+      const current = customPath.replace(/[\\/]?brain\.pglite$/i, '') || customPath;
+      const selected = await desktop.chooseDirectory(current);
+      if (!selected) return;
+      setEngine('pglite');
+      setCustomPath(displayDatabasePath(selected));
+    } catch (reason) { setError(textOf(reason)); }
+  };
   const openModels = (panel: string) => {
     sessionStorage.setItem('pmbrain.createReturn', `create${intent ? `?intent=${intent}` : ''}`);
     onOpenSettings(panel);
   };
   const startBuild = async () => {
     if (busy || !desktop) return;
-    if (!folder && !files.length) { setStep('done'); return; }
+    if (!folder && !files.length) { setSkippedImport(true); setStep('done'); return; }
+    setSkippedImport(false);
     setStep('build'); setBusy(true); setError(''); setRun(null);
     pendingMaterials.current ??= [...(folder ? [{ id: crypto.randomUUID(), name: folder.split(/[\\/]/).at(-1) || folder, path: folder }] : []), ...files.map(file => ({ id: crypto.randomUUID(), name: file.name, file }))];
     try {
@@ -209,25 +221,25 @@ export function CreateLibrary({ onDone, onCreated, onOpenSettings, visible = tru
   }
   if (!setupLoaded) return <section className="create-page"><div className="create-wrap"><h1>读取知识库配置</h1><p role="status">{setupLoading ? '正在读取已有配置…' : '还不能确认知识库配置，请重试读取。'}</p>{error && <p className="product-error" role="alert">{error}</p>}<div className="create-actions"><button type="button" className="home-primary" disabled={setupLoading} onClick={() => void loadSetup()}>重试读取配置</button><button type="button" onClick={() => onDone('home')}>返回首页</button></div></div></section>;
   return <section className="create-page"><div className="create-wrap">
-    <button type="button" className="home-secondary" onClick={() => onDone('home')}>返回首页</button>
+    <button type="button" className="create-back" onClick={() => onDone('home')}>返回首页</button>
     <ol className="create-steps">{STEPS.map(([id, label], position) => <li key={id}><button type="button" data-state={position === index ? 'current' : position < index ? 'done' : 'pending'} disabled={position > index || (id === 'create' && !needsCreation)} onClick={() => { if (position < index) setStep(id); }}>{label}</button></li>)}</ol>
     <div className="create-panel">
       {error && <p className="wb-error" role="alert">{modelSetupIssue(error)?.title ?? error}</p>}
       {step === 'create' && <>
         <h1>创建知识库</h1>
-        <p>PMBrain 会在这台电脑上准备好你的知识库。之后导入的资料都会放在这里。</p>
-        {path && <p className="create-path">位置：{path}</p>}
-        {directory && <p className="create-path">资料目录：{directory}</p>}
+        <p>选择知识库在这台电脑上的存放位置。</p>
+        {engine === 'pglite' && <div className="create-location"><label htmlFor="createDbPath">知识库位置</label><div className="create-location-row"><input id="createDbPath" value={customPath} readOnly /><button type="button" disabled={busy} onClick={() => void chooseLocation()}>选择文件夹</button></div><small>{customPath === defaultPath ? '已填好默认位置，可以直接创建。' : '已选择自定义位置。'}</small></div>}
         <div className="create-actions"><button type="button" className="home-primary" disabled={busy} onClick={() => void create()}>{busy ? '正在创建…' : '创建并继续'}</button></div>
         <details className="create-advanced"><summary>高级设置</summary><div className="create-form">
           <label>存储方式<select aria-label="存储方式" value={engine} onChange={event => setEngine(event.target.value as 'pglite' | 'postgres')}><option value="pglite">本机自动创建</option><option value="postgres">使用已有 Postgres</option></select></label>
-          {engine === 'pglite' ? <label>知识库位置<input aria-label="知识库位置" value={customPath} onChange={event => setCustomPath(event.target.value)} /></label> : <label>Postgres 地址<input aria-label="Postgres 地址" value={databaseUrl} onChange={event => setDatabaseUrl(event.target.value)} placeholder="postgresql://" /></label>}
+          {engine === 'postgres' && <label>Postgres 地址<input aria-label="Postgres 地址" value={databaseUrl} onChange={event => setDatabaseUrl(event.target.value)} placeholder="postgresql://" /></label>}
+          {directory && <p className="create-path">资料目录仍使用：{directory}</p>}
         </div></details>
       </>}
       {step === 'models' && <>
         <h1>先配置模型</h1>
-        <p>添加一个模型平台、填写 API 密钥，再为下面两种用途选择模型。普通模型和向量模型可以使用不同平台。</p>
-        <button type="button" className="home-secondary" disabled={busy || Boolean(testing)} onClick={() => openModels('models')}>添加平台 / 填写 API 密钥 →</button>
+        <p>添加一个平台，再选择普通模型和向量模型。两种用途可以使用不同平台。</p>
+        <button type="button" className="create-choice" disabled={busy || Boolean(testing)} onClick={() => openModels('models')}>添加平台 / 填写 API 密钥 →</button>
         <div className="create-model-roles">{([
           ['chat', '普通模型', '用来理解资料、整理知识和回答问题', pickedChat, chatChoices, setPickedChat],
           ['embedding', '向量模型', '用来按含义查找资料', pickedEmbedding, embeddingChoices, setPickedEmbedding],
@@ -236,8 +248,8 @@ export function CreateLibrary({ onDone, onCreated, onOpenSettings, visible = tru
           <button type="button" disabled={!value || busy || Boolean(testing)} onClick={() => void testModel(kind)}>{testing === kind ? '正在测试…' : '测试连接'}</button>
           {modelTest[kind]?.value === value && <p role={modelTest[kind]?.success ? 'status' : 'alert'} className={modelTest[kind]?.success ? 'model-test-success' : 'product-error'}>{modelTest[kind]?.message}</p>}
         </section>)}</div>
-        <p className="create-path">模型连接测试会发起少量请求。选择后将在下一步保存并应用；已保存不代表连接测试通过。</p>
-        <p className="create-path">图片和扫描件需要图片识别模型，可以稍后在「知识库模型配置」中开启。</p>
+        <p className="create-path">测试连接会发起少量请求。选择后在下一步保存；测试通过不代表已经保存。</p>
+        <p className="create-path">图片和扫描件需要图片识别模型，可以稍后配置。</p>
         <div className="create-actions">
           <button type="button" className="home-primary" disabled={busy || Boolean(testing) || !pickedChat || !pickedEmbedding} onClick={() => void applyModels()}>{busy ? '正在保存…' : needsCreation ? '继续创建知识库' : '保存并继续'}</button>
           <button type="button" disabled={busy || Boolean(testing)} onClick={() => void applyModels(true)}>仅导入资料，使用关键词搜索</button>
@@ -246,29 +258,28 @@ export function CreateLibrary({ onDone, onCreated, onOpenSettings, visible = tru
       </>}
       {step === 'sources' && <>
         <h1>选择资料来源</h1>
-        <p>可以选择一个文件夹，或几个文件。PMBrain 会读取文档、笔记和常见办公文件。这一步可以跳过，以后在首页的「导入资料」里继续。</p>
-        {keywordOnly && <p className="model-setup-notice">本次仅导入资料，不生成向量。可使用关键词搜索；语义搜索需要配置向量模型并完成向量化。</p>}
+        <p>选择一个存放资料的文件夹。也可以先跳过，以后从首页的「导入资料」添加。</p>
+        {keywordOnly && <p className="model-setup-notice">本次仅导入资料，使用关键词搜索。</p>}
         <div className="create-actions">
           <button type="button" onClick={() => void desktop.chooseDirectory().then((selected: string | null) => { if (selected) setFolder(selected); })}>选择文件夹</button>
-          <label className="create-choice">选择文件<input className="wb-file-input" aria-label="选择文件" type="file" multiple onChange={event => setFiles(Array.from(event.target.files ?? []))} /></label>
+          <label className="create-choice">或选择几个文件<input className="wb-file-input" aria-label="选择文件" type="file" multiple onChange={event => setFiles(Array.from(event.target.files ?? []))} /></label>
         </div>
-        {folder && <p className="create-path">文件夹：{folder}</p>}
-        {files.length > 0 && <ul className="create-list">{files.map(file => <li key={`${file.name}-${file.size}`}>{file.name}</li>)}</ul>}
+        {(folder || files.length > 0) && <ul className="create-selected">{folder && <li><span>{folder}</span><button type="button" onClick={() => setFolder('')}>移除</button></li>}{files.map(file => <li key={`${file.name}-${file.size}`}><span>{file.name}</span><button type="button" aria-label={`移除 ${file.name}`} onClick={() => setFiles(current => current.filter(item => item !== file))}>移除</button></li>)}</ul>}
         <div className="create-actions"><button type="button" className="home-primary" disabled={busy} onClick={() => void startBuild()}>{folder || files.length ? '开始导入' : '先跳过'}</button></div>
       </>}
       {step === 'build' && <>
         <h1>开始构建</h1>
-        <p>{modelSetupIssue(detail || importBuildDetail(run))?.title ?? (detail || importBuildDetail(run))}</p>
+        <p>{busy && detail ? `正在导入 · ${detail.replace(/^正在导入：/, '')}` : modelSetupIssue(detail || importBuildDetail(run))?.title ?? (detail || importBuildDetail(run))}</p>
         {run?.product ? <TaskProgressCard run={run} /> : <div className="build-steps">{importBuildSteps(run).map(item => <div key={item.id} data-state={item.state}><i />{item.label}</div>)}</div>}
         <p className="create-path">{modelSetupIssue(importBuildDetail(run))?.title ?? importBuildDetail(run)}</p>
         {!busy && error && <>{run && <ModelSetupNotice run={run} />}<div className="create-actions"><button type="button" className="home-primary" onClick={() => void startBuild()}>继续未完成项</button><button type="button" onClick={() => setStep('done')}>先完成</button></div></>}
       </>}
       {step === 'done' && <>
         <h1>知识库已经可以使用</h1>
-        <p>{keywordOnly ? '本次选择了仅导入，可先用关键词搜索资料。配置模型后再使用 AI 整理、语义搜索和问答。' : '导入成功，资料已保存。知识向量化将在空闲时自动进行，完成后可进行语义检索。'}</p>
+        <p>{createFinishMessage({ skipped: skippedImport, keywordOnly })}</p>
         <div className="create-actions">
           <button type="button" className="home-primary" onClick={() => onDone(finishTarget)}>{intent === 'organize' ? '去知识整理' : intent === 'ask' ? '去知识助手' : intent === 'import' ? '继续导入' : '进入首页'}</button>
-          <button type="button" onClick={() => onDone('home')}>进入首页</button>
+          {finishTarget !== 'home' && <button type="button" onClick={() => onDone('home')}>进入首页</button>}
           <button type="button" onClick={() => onDone('knowledge-import')}>打开导入</button>
         </div>
       </>}

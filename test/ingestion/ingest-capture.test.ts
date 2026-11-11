@@ -103,6 +103,20 @@ describe('ingest_capture handler — slug resolution', () => {
     expect(result.slug).toBe('inbox/custom-from-meta');
   });
 
+  test('stores mixed-case slugs and returns the canonical page slug', async () => {
+    const handler = makeIngestCaptureHandler(engine);
+    const event = makeEvent({ content: '---\ntitle: AI笔记\n---\n\n测试正文。' });
+    const slug = 'inbox/ai笔记';
+
+    const result = await handler(makeJob({ event, slug: 'inbox/AI笔记' }));
+    expect(result).toMatchObject({ slug, status: 'imported', chunks: 1 });
+    expect((await engine.getPage(slug))?.title).toBe('AI笔记');
+    expect(await engine.getChunks(slug)).toHaveLength(1);
+
+    const repeated = await handler(makeJob({ event, slug }));
+    expect(repeated).toMatchObject({ slug, status: 'skipped' });
+  });
+
   test('falls back to inbox/YYYY-MM-DD-<hash6> when no slug provided', async () => {
     const handler = makeIngestCaptureHandler(engine);
     const ev = makeEvent({ content: 'fallback slug' });

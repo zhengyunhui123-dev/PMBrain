@@ -421,7 +421,7 @@ function buildLaunchLibrary(){
 }
 function startupImportDrawer(reset=false){
   if(!launch.created||startupService()!=='ready')return;
-  if(reset||!launchImport)launchImport={items:[],source:'主知识源',keyword:false,ocr:true,result:0,busy:false};
+  if(reset||!launchImport)launchImport={items:[],source:'主知识源',keyword:false,ocr:false,result:0,busy:false};
   const d=launchImport;
   const hint=launch.embedding?'':`<section class="notice" aria-label="导入前准备"><div><b>还没有配置完整的向量模型</b><p class="caption">配置后可以按含义搜索资料。仅导入不会生成向量。</p>${button('去配置模型','startup-configure','data-target="model-roles"','ghost small')}</div></section>`;
   const unavailable=d.busy||!d.items.length||!d.keyword&&!launch.embedding;
@@ -577,7 +577,7 @@ const graphNodes=[{n:'知识管理',x:310,y:210,c:'',d:5},{n:'AI 知识库',x:47
 const graphEdges=[[0,1],[0,2],[0,3],[0,4],[0,5],[0,6],[1,6],[1,7],[2,7],[2,9],[3,4],[3,5],[3,8],[5,9]];
 function graphPage(){const n=graphNodes[graphSelected];return `<section id="graphPage" class="page">${pageHead('知识图谱','从一条知识出发，看看它和哪些资料、项目与想法相连。',button(ico('fullscreen')+' 全屏查看','graph-fullscreen','id="graphFullscreen" aria-pressed="false"'))}<div class="toolbar"><div class="segmented">${[['local','局部图谱'],['all','全局图谱'],['isolated','孤立页'],['missing','缺失链接']].map(x=>`<button class="${graphMode===x[0]?'active':''}" data-action="graph-mode" data-value="${x[0]}">${x[1]}</button>`).join('')}</div><label class="search-box">${ico('search')}<input id="graphSearch" placeholder="搜索图谱中的知识" aria-label="搜索图谱"></label></div><div class="graph-layout"><div class="graph-canvas"><div class="graph-legend"><span><i></i>概念</span><span><i style="background:#75a896"></i>项目与主题</span><span><i style="background:#b49a71"></i>资料</span></div><svg class="map" viewBox="0 0 650 430" aria-label="知识关系示例"><g id="graphCamera">${graphEdges.filter(e=>graphMode!=='local'||e.includes(0)).map(e=>`<line class="edge" x1="${graphNodes[e[0]].x}" y1="${graphNodes[e[0]].y}" x2="${graphNodes[e[1]].x}" y2="${graphNodes[e[1]].y}"/>`).join('')}${graphNodes.map((v,i)=>(graphMode==='local'&&i!==0&&!graphEdges.some(e=>e.includes(0)&&e.includes(i)))?'':`<g class="node ${v.c} ${i===graphSelected?'selected':''}" data-node="${i}" role="button" tabindex="0" aria-label="查看${v.n}"><circle cx="${v.x}" cy="${v.y}" r="${i===0?22:12}"/><text x="${v.x}" y="${v.y+(i===0?42:31)}" text-anchor="middle">${v.n}</text></g>`).join('')}</g></svg>${['isolated','missing'].includes(graphMode)?`<div class="graph-empty"><div>${ico('check')}<h3>${graphMode==='isolated'?'当前示例没有孤立页':'当前示例没有缺失链接'}</h3><p class="caption">所有展示的知识都能连接到对应内容。</p></div></div>`:''}<div class="graph-controls">${button(ico('plus'),'graph-zoom','data-delta="0.15" aria-label="放大图谱"','small')}${button(ico('minus'),'graph-zoom','data-delta="-0.15" aria-label="缩小图谱"','small')}${button('复位','graph-reset','','small')}</div></div><aside id="graphDetails" class="graph-details">${graphDetails(n)}</aside></div><p class="caption">只读展示已有关系。拖动空白处平移，使用左下角按钮缩放。</p></section>`}
 function graphDetails(n){return `<span class="tag">${n.c==='green'?'项目与主题':n.c==='amber'?'原始资料':'概念'}</span><h2>${n.n}</h2><p>${docs.find(d=>d.id===n.d).desc}</p><dl><dt>数据源</dt><dd>${docs.find(d=>d.id===n.d).source}</dd><dt>关联知识</dt><dd>${graphEdges.filter(e=>e.includes(graphSelected)).map(e=>graphNodes[e.find(i=>i!==graphSelected)].n).join('、')||'暂无'}</dd><dt>查看方式</dt><dd>已有关系 · 只读</dd></dl>${button('打开知识正文 '+ico('right'),'open-document',`data-id="${n.d}"`,'ghost')}`}
-function importPage(){return `<section class="page narrow">${pageHead('添加资料','文件先保存到知识库，图片文字与向量可在后台继续补齐。')}<div class="card"><div class="card-body" style="padding-top:22px"><div class="form-grid">${field('导入到数据源',select(['工作资料','个人笔记'],'importSource'))}<div class="caption" style="padding-top:26px">每份资料保留所属来源，方便查找和管理。</div></div><div class="drop-zone">${ico('upload')}<strong>把文件或文件夹带进知识库</strong><p>支持文档、PDF、图片、Markdown 等资料。</p><div class="actions">${button(ico('document')+' 选择本地文件','preview','data-label="文件导入"','primary-btn')}${button(ico('folder')+' 选择文件夹','preview','data-label="目录导入"')}</div></div><label class="check-row"><input type="checkbox" checked><span><strong>识别文档中的图片文字</strong><small>正文先保存，图片识别进度在任务中心查看。</small></span></label><div class="notice">${ico('book')}<span>未配置向量模型时，仍可以保存资料并使用关键词搜索。</span>${navButton('模型配置','settings-model-roles','ghost small')}</div><p class="caption">这是导入页面的设计预览，不会读取或上传你的文件。</p></div></div><div class="section-title"><h2>最近一次导入</h2>${navButton('前往任务中心','tasks','ghost small')}</div><div class="card">${taskRows(tasks.filter(t=>t.kind==='import'))}</div></section>`}
+function importPage(){return `<section class="page narrow">${pageHead('添加资料','文件先保存到知识库，图片文字与向量可在后台继续补齐。')}<div class="card"><div class="card-body" style="padding-top:22px"><div class="form-grid">${field('导入到数据源',select(['工作资料','个人笔记'],'importSource'))}<div class="caption" style="padding-top:26px">每份资料保留所属来源，方便查找和管理。</div></div><div class="drop-zone">${ico('upload')}<strong>把文件或文件夹带进知识库</strong><p>支持文档、PDF、图片、Markdown 等资料。</p><div class="actions">${button(ico('document')+' 选择本地文件','preview','data-label="文件导入"','primary-btn')}${button(ico('folder')+' 选择文件夹','preview','data-label="目录导入"')}</div></div><label class="check-row"><input type="checkbox"><span><strong>识别文档中的图片文字</strong><small>正文先保存，图片识别进度在任务中心查看。</small></span></label><div class="notice">${ico('book')}<span>未配置向量模型时，仍可以保存资料并使用关键词搜索。</span>${navButton('模型配置','settings-model-roles','ghost small')}</div><p class="caption">这是导入页面的设计预览，不会读取或上传你的文件。</p></div></div><div class="section-title"><h2>最近一次导入</h2>${navButton('前往任务中心','tasks','ghost small')}</div><div class="card">${taskRows(tasks.filter(t=>t.kind==='import'))}</div></section>`}
 function artifactsPage(){return `<section class="page">${pageHead('工作成果','助手生成的文档集中保存在这里，可以预览或接着修改。',navButton('返回知识助手','assistant'))}<div class="artifact-grid">${[['AI 知识库文章提纲','Markdown','写作助手','今天 14:26'],['本周工作周报','Word 文档','周报助手','10 月 23 日'],['报销资料清单','Markdown','报销助手','10 月 22 日']].map((a,i)=>`<article class="card artifact-card"><div class="artifact-paper"><i></i><i></i><i></i><i></i><i></i></div><h2>${a[0]}</h2><p>${a[1]} · ${a[2]} · ${a[3]}</p><div class="actions">${button('预览','artifact',`data-id="${i}"`,'small')}${button('按这份改','revise-artifact',`data-title="${a[0]}"`,'ghost small')}</div></article>`).join('')}</div></section>`}
 function dashboardPage(){return `<div class="original-host"><iframe id="originalOverview" title="${routeNames[route]}：原有界面，使用示例数据" referrerpolicy="no-referrer"></iframe></div>`}
 
@@ -650,10 +650,9 @@ const deepDemoStages=[
   {id:'knowledge',title:'提炼长期知识',label:'提炼长期知识中',seconds:305,cents:152,newKnowledge:36,result:'处理 24 / 24 份资料，新建 36 个知识点',detail:'18 份本轮变更，6 份此前待提炼，每个知识点保留出处',live:{seconds:152,cents:76,newKnowledge:18,count:'12 / 24 份资料',result:'已保存 18 个知识点，剩余 12 份待处理',file:'项目交付复盘.md'}},
   {id:'entities',title:'识别和更新实体',label:'识别和更新实体中',seconds:112,cents:84,entities:12,links:9,result:'新建 4 个实体，更新 8 个，新增 9 条关联',detail:'核对人物、项目、公司和组织的名称、来源与关系',live:{seconds:48,cents:40,entities:5,links:3,count:'8 / 18 份资料',result:'已新建 2 个实体，更新 3 个，新增 3 条关联',file:'客户访谈纪要.md'}},
   {id:'concepts',title:'整理模式与概念',label:'整理模式与概念中',seconds:180,cents:64,newKnowledge:3,maintainedKnowledge:6,result:'新建 1 个模式、2 个概念，维护 1 个模式、2 个概念和 3 个知识页',detail:'按有效证据补充已有内容，只统计实际保存的变更',live:{seconds:87,cents:32,newKnowledge:2,maintainedKnowledge:2,count:'2 / 4 个概念',result:'新建 1 个模式、1 个概念，维护 1 个模式、1 个概念'}},
-  {id:'index',title:'更新搜索索引',label:'更新搜索索引中',seconds:153,cents:18,result:'已保存 180 / 180 个分块的向量',detail:'更新本次待处理的搜索向量',live:{seconds:85,cents:10,count:'108 / 180 个分块',result:'已保存 108 个分块的向量，剩余 72 个',file:'项目交付复盘.md'}},
   {id:'review',title:'完成检查',label:'完成检查中',seconds:30,result:'检查孤立页面和知识结构，发现 2 个页面待补关联',detail:'待补关联保留在本轮结果中',live:{seconds:13,count:'孤立页面检查已完成',result:'发现 2 个页面待补关联，知识结构待检查'}}
 ];
-const deepDemoScenarios=[...deepDemoStages.map(stage=>[stage.id,stage.label]),['stopped','已停止'],['failed','阶段失败'],['no-vector','完成 · 跳过向量'],['done','已完成']];
+const deepDemoScenarios=[...deepDemoStages.map(stage=>[stage.id,stage.label]),['stopped','已停止'],['failed','阶段失败'],['partial','部分完成'],['done','已完成']];
 const deepDemoDuration=seconds=>[Math.floor(seconds/60)?`${Math.floor(seconds/60)} 分`:'',`${seconds%60} 秒`].filter(Boolean).join(' ');
 const deepDemoCost=cents=>`¥${(cents/100).toFixed(2)}`;
 function deepDemoSnapshot(t){
@@ -661,15 +660,14 @@ function deepDemoSnapshot(t){
   const stageIndex=t.state==='done'?deepDemoStages.length:deepDemoStages.findIndex(stage=>stage.id===phase);
   const stage=deepDemoStages[stageIndex];
   const live=stage?.live;
-  const skipped=t.state==='done'&&t.deepSkipVector;
-  const records=deepDemoStages.slice(0,stageIndex).map(item=>skipped&&item.id==='index'?{...item,seconds:0,cents:0,skipped:true,result:'尚未配置向量模型',detail:'本轮跳过向量更新'}:item);
+  const records=deepDemoStages.slice(0,stageIndex).map(item=>t.deepPartial&&item.id==='concepts'?{...item,partial:true,detail:'已有成果已保存，仍有概念待整理'}:item);
   const completed=stageIndex===deepDemoStages.length;
   const failed=t.state==='error';
   const stopped=['stopped','paused'].includes(t.state);
-  const label=completed?'已完成':failed?'阶段失败':stopped?'已停止':'进行中';
-  const percent=stageIndex/deepDemoStages.length*100;
+  const label=completed?(t.deepPartial?'部分完成':'已完成'):failed?'阶段失败':stopped?'已停止':'进行中';
+  const percent=t.deepPartial?99:stageIndex/deepDemoStages.length*100;
   const totals=key=>records.reduce((sum,item)=>sum+(item[key]??0),live?.[key]??0);
-  const scenario=completed?(skipped?'no-vector':'done'):failed?'failed':stopped?'stopped':phase;
+  const scenario=completed?(t.deepPartial?'partial':'done'):failed?'failed':stopped?'stopped':phase;
   return {stage,live,records,completed,failed,stopped,label,percent,totals,scenario};
 }
 function openDeepDemo(t){
@@ -692,22 +690,22 @@ function openDeepDemo(t){
   const stages=deepDemoStages.map((item,index)=>{
     const record=records[index];
     const active=item===stage;
-    const state=record?(record.skipped?'已跳过':'已完成'):active?label:'待执行';
+    const state=record?(record.skipped?'已跳过':record.partial?'部分完成':'已完成'):active?label:'待执行';
     return `<li class="mp-result-row mp-deep-stage ${record?'is-recorded':''} ${record?.skipped?'is-skipped':''}" ${active?'aria-current="step"':''}>
-      <span class="mp-step-dot" aria-hidden="true">${record&&!record.skipped?'✓':index+1}</span><strong>${item.title}<small>${state}</small></strong>
+      <span class="mp-step-dot" aria-hidden="true">${record&&!record.skipped?(record.partial?'!':'✓'):index+1}</span><strong>${item.title}<small>${state}</small></strong>
       <span>${record?`${record.result}<small>${record.detail}</small>`:active?live.count:'—'}</span>
       ${record&&!record.skipped?`<time datetime="PT${record.seconds}S">${deepDemoDuration(record.seconds)}<small>${deepDemoCost(record.cents??0)}</small></time>`:''}</li>`;
   });
   const contentStart=2,contentEnd=6;
   const contentItems=[...records,live].slice(contentStart,contentEnd);
   const contentTotal=key=>contentItems.reduce((sum,item)=>sum+(item?.[key]??0),0);
-  const contentState=records.length>=contentEnd?'已完成':records.length>=contentStart?label:'待执行';
+  const contentState=records.length>=contentEnd?(t.deepPartial?'部分完成':'已完成'):records.length>=contentStart?label:'待执行';
   const results=`<section class="mp-results" aria-label="阶段记录"><h3>阶段记录</h3>
     <ol class="mp-deep-stages">${stages.slice(0,contentStart).join('')}</ol>
     <section class="mp-deep-content" aria-label="理解内容与关联">
       <div class="mp-deep-content-heading"><h4>理解内容与关联</h4><span>${contentState}</span></div>
       <p class="mp-deep-content-counts">新建 ${contentTotal('newKnowledge')} 个知识成果 · 维护 ${contentTotal('maintainedKnowledge')} 个 · 新增关联 ${contentTotal('links')} 条</p>
-      <p class="mp-note">整理符合条件的新增、变更资料，也补做此前待处理的资料。观点生成默认关闭。</p>
+      <p class="mp-note">优先整理本轮新增和变更的资料，同时补做历史积压。四个内容阶段按批量额度依次执行，剩余候选留到下一轮。</p>
       <ol class="mp-deep-stages" start="${contentStart+1}">${stages.slice(contentStart,contentEnd).join('')}</ol>
     </section>
     <ol class="mp-deep-stages" start="${contentEnd+1}">${stages.slice(contentEnd).join('')}</ol>
@@ -729,9 +727,9 @@ document.addEventListener('change',event=>{
   if(event.target.id!=='deepDemoState')return;
   const key=event.target.value;
   const t=tasks.find(item=>item.id===Number(event.target.dataset.id));
-  t.state=key==='failed'?'error':key==='stopped'?'stopped':['done','no-vector'].includes(key)?'done':'active';
+  t.state=key==='failed'?'error':key==='stopped'?'stopped':['done','partial'].includes(key)?'done':'active';
   t.deepStage=t.state==='active'?key:t.state==='error'||t.state==='stopped'?'knowledge':'check';
-  t.deepSkipVector=key==='no-vector';
+  t.deepPartial=key==='partial';
   saveDeepDemo(t);
   const root=$('#pageRoot');
   const scroll=root.scrollTop;

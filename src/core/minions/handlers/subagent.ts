@@ -948,6 +948,7 @@ async function runSubagentViaGateway(args: GatewayRunArgs): Promise<SubagentResu
   // Run the loop.
   let result: Awaited<ReturnType<typeof gatewayToolLoop>>;
   const singlePass=!!data.ingest_context?.single_pass;
+  const repairSinglePass = singlePass && data.ingest_context?.repair_single_pass === true;
   try {
     result = await gatewayToolLoop({
     model,
@@ -958,12 +959,12 @@ async function runSubagentViaGateway(args: GatewayRunArgs): Promise<SubagentResu
     toolHandlers,
     toolConcurrency: data.ingest_context ? 2 : undefined,
     parallelReadOnlyTools: !!data.ingest_context,
-    maxTurns:singlePass?1:maxTurns,
+    maxTurns:singlePass?(repairSinglePass?2:1):maxTurns,
     maxTokens: Math.min(defaultMaxOutputTokens(model),data.usage_limits?.output??Infinity),
     modelOutputLimit:data.model_output_limit,
     turnTimeoutMs:data.ingest_context?data.turn_timeout_ms??300_000:undefined,
     lengthRetryLimit:data.ingest_context?({messages,maxTokens,finalTurn})=>checkIngestCallBudget(engine,ctx.id,data,systemPrompt,messages,finalTurn?[]:chatTools,!!finalTurn,maxTokens,true):undefined,
-    retryLength:!!data.ingest_context&&!singlePass,
+    retryLength:!!data.ingest_context&&(!singlePass||repairSinglePass),
     jsonToolCalls:singlePass||!!data.ingest_context&&(data.ingest_json_tools===true||classifyCapabilities(model)==='unusable:no_tools'),
     ...(singlePass?{jsonDirectTool:'brain_capture_entities',jsonToolPrompt:'只输出一个 JSON 对象，包含 entities、reused_entities、relations 和 timeline_entries；entities 每项包含 slug 与完整 YAML frontmatter 的新增事实 content。已有实体无新增事实放入 reused_entities；没有实体时 entities 和 relations 为空且 no_entities 为 true。不要请求工具、不要输出说明。程序会检查来源、身份和关系并保存。'}:{}),
     disableReasoning:!!data.ingest_context,
@@ -973,7 +974,11 @@ async function runSubagentViaGateway(args: GatewayRunArgs): Promise<SubagentResu
     validateCompletion:data.ingest_context?(text,canContinue)=>validateIngestCompletion(engine,data,text,ctx.id,canContinue):undefined,
     completionFromTools: data.ingest_context?.compact_contract ? singlePass?async blocks=>{
       const failed=blocks.find(block=>block.type==='tool-result'&&block.isError);
-      if(failed&&failed.type==='tool-result')throw new UnrecoverableError(`ingest invalid output: ${typeof failed.output==='string'?failed.output:JSON.stringify(failed.output)}`);
+      if(failed&&failed.type==='tool-result'){
+        const message = typeof failed.output==='string'?failed.output:JSON.stringify(failed.output);
+        if (repairSinglePass && currentTurn === 0 && /ingest entity evidence missing|ingest no_entities conflicts/.test(message)) return null;
+        throw new UnrecoverableError(`ingest invalid output: ${message}`);
+      }
       const completed=await captureToolCompletion(blocks);
       if(completed===null)throw new UnrecoverableError('ingest_output_truncated: entity JSON was incomplete; unfinished chunk is resumable');
       return completed;

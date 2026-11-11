@@ -29,7 +29,8 @@ const pendingPrefix = `${SEARCH_OPTIMIZE_CONFIG}.pending.`;
 const legacyKey = `${SEARCH_OPTIMIZE_CONFIG}.legacy`;
 const migrations = new WeakMap<BrainEngine, Promise<void>>();
 const cleanSlugs = (slugs: string[]) => [...new Set(slugs.filter(slug => slug.length > 0 && !slug.includes(':')))];
-const pageKey = (sourceId: string, slug: string) => `${SEARCH_OPTIMIZE_CONFIG}.page.${createHash('sha256').update(searchOptimizeKey(sourceId, slug)).digest('hex')}`;
+const pageDigest = (sourceId: string, slug: string) => createHash('sha256').update(searchOptimizeKey(sourceId, slug)).digest('hex');
+const pageKey = (sourceId: string, slug: string) => `${SEARCH_OPTIMIZE_CONFIG}.page.${pageDigest(sourceId, slug)}`;
 const decode = <T>(raw: string | null): T | null => { try { return JSON.parse(raw ?? 'null') as T | null; } catch { return null; } };
 
 async function locked<T>(engine: BrainEngine, run: (tx: BrainEngine) => Promise<T>): Promise<T> {
@@ -116,20 +117,80 @@ export async function loadSearchOptimize(engine: BrainEngine): Promise<SearchOpt
   return { paused: meta.paused, done: meta.done, pending: meta.pending, items: item ? [item] : [] };
 }
 
+async function putPendingSlugs(tx: BrainEngine, sourceId: string, slugs: string[]): Promise<void> {
+  const meta = decode<QueueMeta>(await tx.getConfig(SEARCH_OPTIMIZE_CONFIG))!;
+  if (!meta.pending) meta.done = 0;
+  const revisions = await searchOptimizeRevisions(tx, sourceId, slugs);
+  for (const slug of slugs) await putPending(tx, meta, { sourceId, slug, ...(revisions[slug] && { revision: revisions[slug] }) }, true);
+  await tx.setConfig(SEARCH_OPTIMIZE_CONFIG, JSON.stringify(meta));
+}
+
 export async function enqueueSearchOptimize(engine: BrainEngine, sourceId: string, slugs: string[]): Promise<SearchOptimizeView> {
   await ready(engine);
   const clean = cleanSlugs(slugs);
   for (let start = 0; start < clean.length; start += 16) {
     const batch = clean.slice(start, start + 16);
-    await locked(engine, async tx => {
-      const meta = decode<QueueMeta>(await tx.getConfig(SEARCH_OPTIMIZE_CONFIG))!;
-      if (!meta.pending) meta.done = 0;
-      const revisions = await searchOptimizeRevisions(tx, sourceId, batch);
-      for (const slug of batch) await putPending(tx, meta, { sourceId, slug, ...(revisions[slug] && { revision: revisions[slug] }) }, true);
-      await tx.setConfig(SEARCH_OPTIMIZE_CONFIG, JSON.stringify(meta));
-    });
+    await locked(engine, tx => putPendingSlugs(tx, sourceId, batch));
   }
   return loadSearchOptimize(engine);
+}
+
+export async function handoffImportVectorBatch(engine: BrainEngine, batch: {
+  jobId: number; attempt: number; sourceId: string; offset: number; next: number; finished: boolean; slugs: string[];
+}): Promise<boolean> {
+  await ready(engine);
+  return locked(engine, async tx => {
+    const [job] = await tx.executeRaw<{ id: number }>(`SELECT id FROM minion_jobs WHERE id=$1
+      AND status IN ('completed','failed','dead','cancelled','paused') AND data->>'importVectorsPending'='true'
+      AND COALESCE((data->>'importVectorOffset')::int,0)=$2 AND attempts_started=$3 FOR UPDATE`, [batch.jobId, batch.offset, batch.attempt]);
+    if (!job) return false;
+    const slugs = cleanSlugs(batch.slugs);
+    if (slugs.length) await putPendingSlugs(tx, batch.sourceId, slugs);
+    await tx.executeRaw(`UPDATE minion_jobs SET data=data || $2::jsonb WHERE id=$1`,
+      [batch.jobId, { importVectorOffset: batch.next, importVectorsPending: !batch.finished }]);
+    return true;
+  });
+}
+
+const deepVectorPrefix = 'pmbrain.deep.vector-handoff.';
+const deepVectorPattern = `${deepVectorPrefix}%`;
+
+export async function recordDeepVectorPages(tx: Pick<BrainEngine, 'executeRaw'>, ownerId: number, pages: { sourceId: string; slug: string }[]): Promise<void> {
+  const records = pages.filter(({ slug }) => slug && !slug.includes(':')).map(({ sourceId, slug }) => ({
+    key: `${deepVectorPrefix}${ownerId}.${pageDigest(sourceId, slug)}`,
+    value: JSON.stringify({ ownerId, sourceId, slug }),
+  }));
+  if (!records.length) return;
+  await tx.executeRaw(`INSERT INTO config(key, value)
+    SELECT DISTINCT key, value FROM jsonb_to_recordset($1::jsonb) AS records(key text, value text)
+    ON CONFLICT (key) DO UPDATE SET value=excluded.value WHERE config.value IS DISTINCT FROM excluded.value`, [records]);
+}
+
+export async function handoffDeepVectorBatch(engine: BrainEngine): Promise<number> {
+  const pending = await engine.executeRaw(`SELECT 1 FROM config WHERE key LIKE $1 LIMIT 1`, [deepVectorPattern]);
+  if (!pending.length) return 0;
+  await ready(engine);
+  return locked(engine, async tx => {
+    const rows = await tx.executeRaw<{ key: string; sourceId: string; slug: string; stale: boolean }>(`
+      SELECT c.key, v."sourceId", v.slug, EXISTS (
+        SELECT 1 FROM pages p JOIN sources s ON s.id=p.source_id JOIN content_chunks cc ON cc.page_id=p.id
+        WHERE p.source_id=v."sourceId" AND p.slug=v.slug AND p.deleted_at IS NULL AND NOT s.archived
+          AND COALESCE(p.chunker_version, 0) >= 0
+          AND (cc.embedding IS NULL OR cc.embedded_at IS NULL)
+      ) AS stale
+      FROM config c
+      CROSS JOIN LATERAL jsonb_to_record(CASE WHEN c.key LIKE $1 THEN c.value::jsonb END) v("ownerId" bigint, "sourceId" text, slug text)
+      LEFT JOIN minion_jobs j ON j.id=v."ownerId"
+      WHERE c.key LIKE $1 AND (j.id IS NULL OR j.status IN ('completed','failed','dead','cancelled','paused'))
+      ORDER BY c.key LIMIT 16 FOR UPDATE OF c SKIP LOCKED`, [deepVectorPattern]);
+    if (!rows.length) return 0;
+    for (const sourceId of new Set(rows.map(row => row.sourceId))) {
+      const slugs = rows.filter(row => row.sourceId === sourceId && row.stale).map(row => row.slug);
+      if (slugs.length) await putPendingSlugs(tx, sourceId, [...new Set(slugs)]);
+    }
+    await tx.executeRaw('DELETE FROM config WHERE key=ANY($1::text[])', [rows.map(row => row.key)]);
+    return rows.length;
+  });
 }
 
 export async function completeSearchOptimize(engine: BrainEngine, sourceId: string, slug: string, revision?: string): Promise<SearchOptimizeView> {

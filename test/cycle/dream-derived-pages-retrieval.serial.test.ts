@@ -17,6 +17,7 @@ import {
 import type { ChatOpts, ChatResult } from '../../src/core/ai/gateway.ts';
 import { runPhaseExtractAtoms } from '../../src/core/cycle/extract-atoms.ts';
 import { runPhaseSynthesizeConcepts } from '../../src/core/cycle/synthesize-concepts.ts';
+import { runCycle } from '../../src/core/cycle.ts';
 import { PGLiteEngine } from '../../src/core/pglite-engine.ts';
 import { resetPgliteState } from '../helpers/reset-pglite.ts';
 
@@ -158,6 +159,30 @@ describe('Dream-derived pages reach retrieval without Embedding', () => {
 });
 
 describe('Dream-derived pages honor explicit Embedding configuration', () => {
+  test('移除向量阶段后，指定后台补齐的概念阶段仍只保存正文和关联', async () => {
+    configureGateway({ embedding_model: EMBEDDING_MODEL, embedding_dimensions: EMBEDDING_DIMS, env: {} });
+    let calls = 0;
+    __setEmbedTransportForTests(async (args: { values: string[] }) => {
+      calls++;
+      return { embeddings: args.values.map(() => [0.1, 0.2, 0.3]) } as never;
+    });
+    for (const label of ['first','second']) {
+      await engine.putPage(`atoms/${label}`, {
+        title: label, type: 'atom', compiled_truth: `Evidence for staged concept ${label}.`, frontmatter: { concepts: ['staged-embedding'] },
+      });
+    }
+    const report = await runCycle(engine, {
+      brainDir: null, phases: ['synthesize_concepts'], deferDerivedEmbedding: true, forcePackPhases: ['synthesize_concepts'],
+    });
+    expect(report.phases.find(phase => phase.phase === 'synthesize_concepts')?.details.concepts_written).toBe(1);
+    expect(report.phases.some(phase => phase.phase === 'embed')).toBe(false);
+    expect(calls).toBe(0);
+    const chunks = await engine.getChunks('concepts/staged-embedding');
+    expect(chunks.length).toBeGreaterThan(0);
+    expect(chunks.every(chunk => chunk.embedding === null && chunk.model === null)).toBe(true);
+    expect((await engine.getLinks('concepts/staged-embedding')).some(link => link.link_type === 'derives_from')).toBe(true);
+  }, 60_000);
+
   test('atom and concept chunks carry the configured model provenance', async () => {
     configureGateway({
       embedding_model: EMBEDDING_MODEL,

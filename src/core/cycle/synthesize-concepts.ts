@@ -32,6 +32,7 @@ import { upsertExtractRollup } from '../extract/rollup-writer.ts';
 import { chat as gatewayChat, isAvailable } from '../ai/gateway.ts';
 import { importFromContent } from '../import-file.ts';
 import { serializeMarkdown } from '../markdown.ts';
+import { validateSlug } from '../utils.ts';
 import { dreamModelDetails, resolveDreamModel } from './model-routing.ts';
 
 const DEFAULT_BUDGET_USD = 1.5;
@@ -86,6 +87,7 @@ export function collapseConceptLabels(labels: string[], existingTitles: string[]
 }
 
 export interface SynthesizeConceptsOpts {
+  roundWork?: import('../pmbrain-adapters/deep-round-work.ts').DeepRoundWork;
   brainDir?: string;
   /** Explicit cycle Source. When omitted, preserve the legacy global/default behavior. */
   sourceId?: string;
@@ -133,6 +135,8 @@ export async function runPhaseSynthesizeConcepts(
   const modelDetails = dreamModelDetails(resolvedModel, 'single_chat');
   const evidenceSnapshots=new Map<string,string>();
   const touchedConcepts=new Set<string>();
+  const freshAtoms = new Set<string>();
+  const prioritySlugs = new Set(opts.roundWork?.prioritySlugs);
 
   // 1. Get atom pages (test seam OR DB query)
   let atoms = opts._atoms ?? [];
@@ -171,6 +175,10 @@ export async function runPhaseSynthesizeConcepts(
         [opts.sourceId ?? null],
       );
       for(const row of rows)evidenceSnapshots.set(`${row.source_id}:${row.slug}`,JSON.stringify([row.id,row.knowledge_revision,row.title,row.compiled_truth,row.frontmatter]));
+      for (const row of rows) {
+        const origin = (row.frontmatter as { source_slug?: string }).source_slug;
+        if (prioritySlugs.has(row.slug) || (origin && prioritySlugs.has(origin))) freshAtoms.add(`${row.source_id}:${row.slug}`);
+      }
       for(const row of rows)if(!opts.since||new Date(row.updated_at).getTime()>=Date.parse(opts.since))for(const concept of Array.isArray(row.frontmatter.concepts)?row.frontmatter.concepts:[])touchedConcepts.add(concept);
       atoms = rows
         .filter((r) => Array.isArray(r.frontmatter?.concepts) && r.frontmatter.concepts.length > 0)
@@ -264,6 +272,10 @@ export async function runPhaseSynthesizeConcepts(
   const tierCounts = { T1: 0, T2: 0, T3: 0, T4: 0 };
   let cachedConcepts=0;
   let llmConcepts=0,deterministicConcepts=0,deferredConcepts=0;
+  let freshProcessed = 0, attempted = 0, examined = 0;
+  let roundTimeReached = false;
+  const isFresh = (group: AtomGroup) => group.atomRefs.some(ref => freshAtoms.has(`${ref.source_id}:${ref.slug}`));
+  const orderedGroups = opts.roundWork ? (await import('../pmbrain-adapters/deep-round-work.ts')).orderRoundWork(atomGroups, isFresh, atomGroups.length) : atomGroups;
   const budgetTracker=new BudgetTracker({maxCostUsd:budgetCap,label:'cycle.synthesize_concepts',pricingOverrides:await loadPricingOverrides(engine)});
 
   // v0.41.19.0 (T3): throttled yield helper. Fires `opts.yieldDuringPhase`
@@ -286,10 +298,15 @@ export async function runPhaseSynthesizeConcepts(
     }
   }
 
-  for (const group of atomGroups) {
+  for (const group of orderedGroups) {
     throwIfAborted(opts.signal, '[dream] synthesize_concepts');
+    if (opts.roundWork && (attempted >= 10 || Date.now() >= (opts.roundWork.deadlineAtMs ?? Infinity))) {
+      roundTimeReached = Date.now() >= (opts.roundWork.deadlineAtMs ?? Infinity);
+      break;
+    }
+    examined++;
     const title=group.conceptSlug.split('/').pop()??group.conceptSlug;
-    const outputSlug=`concepts/${title}`;
+    const outputSlug = validateSlug(`concepts/${title}`);
     const outputSourceId=opts.sourceId??'default';
     const baseline=await engine.getPage(outputSlug,{sourceId:outputSourceId});
     const membersHash=createHash('sha256').update(JSON.stringify(['dream-concept-v1',group.tier,group.atomRefs.map((ref,i)=>[ref.source_id,ref.slug,group.atomTitles[i],group.atomBodies[i]]).sort((a,b)=>JSON.stringify(a).localeCompare(JSON.stringify(b)))])).digest('hex');
@@ -302,6 +319,7 @@ export async function runPhaseSynthesizeConcepts(
       failures.push({concept:group.conceptSlug,error:'concept_retry_held: unchanged evidence and model failed repeatedly'});
       continue;
     }
+    attempted++;
     tierCounts[group.tier]++;
     let narrative: string;
     let complete=true;
@@ -464,6 +482,7 @@ export async function runPhaseSynthesizeConcepts(
       conceptSlugs.push(outputSlug);
     }
     conceptsWritten++;
+    if (isFresh(group)) freshProcessed++;
     // v0.41.19.0 (T4): one tick per concept group with running count.
     opts.progress?.tick(1, `${conceptsWritten} concepts`);
 
@@ -516,7 +535,8 @@ export async function runPhaseSynthesizeConcepts(
       unlinkedPages = audit.unlinked;
     } catch { /* a link check must not discard concept pages already written */ }
   }
-  const conceptStatus = failures.length > 0 || deferredConcepts > 0 || unresolvedLinks.length > 0 ? 'warn' : 'ok';
+  const unexamined = orderedGroups.length - examined;
+  const conceptStatus = failures.length > 0 || deferredConcepts > 0 || unexamined > 0 || unresolvedLinks.length > 0 ? 'warn' : 'ok';
   return {
     phase: 'synthesize_concepts',
     status: conceptStatus,
@@ -528,6 +548,7 @@ export async function runPhaseSynthesizeConcepts(
     details: {
       ...modelDetails,
       concepts_written: conceptsWritten,
+      ...(opts.roundWork && { round_fresh_processed: freshProcessed, round_older_processed: conceptsWritten - freshProcessed, round_remaining: unexamined + deferredConcepts + failures.length, round_time_reached: roundTimeReached }),
       concepts_cached:cachedConcepts,
       concepts_llm:llmConcepts,
       concepts_deterministic:deterministicConcepts,

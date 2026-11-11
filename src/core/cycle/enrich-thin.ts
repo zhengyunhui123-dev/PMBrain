@@ -43,6 +43,7 @@ import {
 } from '../../commands/enrich.ts';
 
 export interface EnrichThinPhaseOpts {
+  sourceId?: string;
   dryRun?: boolean;
   signal?: AbortSignal;
   enabledWhenUnset?: boolean;
@@ -173,7 +174,7 @@ export async function runPhaseEnrichThin(
   }
 
   const maxTotalWalltimeMs = cfg.maxTotalWalltimeMin * 60_000;
-  const sources = await listSources(engine);
+  const sources = (await listSources(engine)).filter(source => !opts.sourceId || source.id === opts.sourceId);
   if (sources.length === 0) {
     return {
       phase: 'enrich_thin',

@@ -697,7 +697,7 @@
       "path": "src/core/cycle/extract-atoms.ts",
       "upstream_path": "src/core/cycle/extract-atoms.ts",
       "mode": "adapted",
-      "sha256": "f362108b633ed9ca15c35acdb4174602f1d1c2c57b0085ca022d1dd7179194af",
+      "sha256": "8e7b97e29a1435d669734a25edc90894d446378a12e2a8635bb70ec96abaa2d7",
       "upstream_sha256": "d0f3a747b615808b92be26486b7842e7cbc509724f273484d25de78a4c85127a"
     },
     {
@@ -746,14 +746,14 @@
       "path": "src/core/cycle/synthesize.ts",
       "upstream_path": "src/core/cycle/synthesize.ts",
       "mode": "adapted",
-      "sha256": "15e976a12f5ab5e314dbb02e05e4be80308543499ef06681bdecfc2773170a77",
+      "sha256": "70b4cb608831c9287c89fef01fe79e71220b4a9dae4a1860771f0b121e6861db",
       "upstream_sha256": "6ec1e0b7e59714e5f2fe078b1956b20218486c89fdccf9982e8b129ba2c03fda"
     },
     {
       "path": "src/core/cycle/synthesize-concepts.ts",
       "upstream_path": "src/core/cycle/synthesize-concepts.ts",
       "mode": "adapted",
-      "sha256": "da1b9e6e6809bea7652d3cac36d0d5b649535a1d75093ea01c9028e72e8024bd",
+      "sha256": "06989192f49b15b9ed02e82a9751194dbe91ed693a0c18ba71788584ada7a1ce",
       "upstream_sha256": "7146c5c44544059ca135f9df65f39bd1af480eff87c401b4845d0f9fe6df621e"
     },
     {
@@ -781,7 +781,7 @@
       "path": "src/core/cycle/patterns.ts",
       "upstream_path": "src/core/cycle/patterns.ts",
       "mode": "adapted",
-      "sha256": "87222f6b5454f75034dd2c2160de1c47de1a5f5f70aa7e70c160e1e7e763fdb8",
+      "sha256": "275878cd51a0db6efa55dff1a8210c43df204c165200ab3cf886399ca44253c8",
       "upstream_sha256": "3d8808d2795e11354aeec3a3e24d889010c481c2e1e2d557a661730acbee9a0b"
     }
   ],

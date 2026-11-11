@@ -116,7 +116,7 @@ export function makeIngestCaptureHandler(engine: BrainEngine) {
     const result = await importFromContent(engine, slug, event.content, { noEmbed });
 
     return {
-      slug,
+      slug: result.slug,
       status: result.status,
       chunks: result.chunks,
       untrusted_payload: untrustedPayload,

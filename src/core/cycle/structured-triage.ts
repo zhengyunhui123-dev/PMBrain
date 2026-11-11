@@ -166,6 +166,7 @@ export interface TriagePassCfg {
   threshold: number;
   concurrency: number;
   maxMs: number;
+  maxJudgments?: number;
   judge: JudgeClient | null;
   now?: () => number;
 }
@@ -203,6 +204,7 @@ export async function runTriagePass(
   const byPath = new Map<string, DreamVerdict>();
   let cursor = 0;
   let judged = 0;
+  let admitted = 0;
   let cacheHits = 0;
   let unreliable = 0;
   let deferred = 0;
@@ -224,7 +226,7 @@ export async function runTriagePass(
       };
       return;
     }
-    if (cfg.maxMs > 0 && now() - startedAt > cfg.maxMs) {
+    if ((cfg.maxMs > 0 && now() - startedAt > cfg.maxMs) || (cfg.maxJudgments !== undefined && admitted >= cfg.maxJudgments)) {
       deferred++;
       reports[index] = {
         filePath: item.filePath,
@@ -248,6 +250,7 @@ export async function runTriagePass(
       };
       return;
     }
+    admitted++;
     try {
       const result = await judgeSignificance(cfg.judge, item, cfg.model, {
         maxChars: cfg.maxChars,

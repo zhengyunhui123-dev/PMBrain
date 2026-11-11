@@ -29,7 +29,7 @@ export function ImportMaterials({ open, onClose, onConfigureModels }: { open: bo
   const desktop = desktopApi();
   const models = useModelReadiness(open);
   const [keywordOnly, setKeywordOnly] = useState(false);
-  const [documentOcr,setDocumentOcr]=useState(true);
+  const [documentOcr,setDocumentOcr]=useState(false);
   const existingTask = items.some(item => item.runId);
   const needsEmbedding = importNeedsEmbedding(items, !keywordOnly);
   useEffect(() => { if (open && !dialog.current?.open) dialog.current?.showModal(); else if (!open) dialog.current?.close(); }, [open]);

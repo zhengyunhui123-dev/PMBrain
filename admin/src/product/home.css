@@ -27,15 +27,16 @@
 .home-getting-started b { font-size: 14px; }
 .home-getting-started small { margin-top: 4px; color: var(--product-muted); font-size: 12px; line-height: 1.6; }
 .home-getting-started .home-primary { margin-top: 20px; min-width: 200px; font-size: 14px; padding: 12px 18px; }
+.home-guide-note { margin: 12px 0 0; color: var(--product-muted); font-size: 12px; line-height: 1.6; }
 .home-ready .home-getting-started ol { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .product-create-host { display: flex; flex: 1; min-height: 0; overflow: hidden; }
 .product-create-host[hidden] { display: none; }
-.create-model-roles { display: grid; gap: 16px; margin-top: 22px; }
-.create-model-roles section { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 10px; padding: 18px; border: 1px solid var(--product-line); border-radius: 14px; background: var(--product-panel); }
+.create-model-roles { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 22px; }
+.create-model-roles section { display: grid; align-items: start; gap: 0; padding: 16px; border: 1px solid var(--product-line); border-radius: 12px; background: var(--product-panel); }
 .create-model-roles label { display: grid; gap: 8px; min-width: 0; }
 .create-model-roles small { color: var(--product-muted); font-size: 13px; }
 .create-model-roles select { min-width: 0; width: 100%; border: 1px solid var(--product-line); border-radius: 10px; background: var(--product-bg); color: inherit; font: inherit; padding: 10px 12px; }
-.create-model-roles button { height: 40px; border: 1px solid var(--product-line); border-radius: 10px; background: var(--product-panel); color: inherit; font: inherit; padding: 8px 12px; cursor: pointer; }
+.create-model-roles button { justify-self: start; height: 40px; margin-top: 10px; border: 1px solid var(--product-line); border-radius: 10px; background: var(--product-panel); color: inherit; font: inherit; padding: 8px 12px; cursor: pointer; }
 .create-model-roles p { grid-column: 1 / -1; margin: 0; overflow-wrap: anywhere; }
 .create-model-roles .model-test-success { color: #178a49; }
 .model-setup-notice { margin: 14px 0; padding: 16px; border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--product-line)); border-radius: 12px; background: color-mix(in srgb, var(--accent) 5%, var(--product-panel)); font-size: 14px; overflow-wrap: anywhere; }
@@ -89,6 +90,17 @@
 .create-steps button[data-state="current"] { color: var(--product-text); border-color: var(--accent); font-weight: 650; }
 .create-steps button[data-state="done"] { color: var(--product-text); }
 .create-steps button:disabled { cursor: default; }
+.create-back { border: 0; background: transparent; color: var(--product-muted); font: inherit; padding: 4px 0; cursor: pointer; }
+.create-back:hover { color: var(--accent); }
+.create-location { max-width: 620px; margin: 22px 0; }
+.create-location label { display: block; margin-bottom: 8px; font-size: 13px; }
+.create-location-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: stretch; }
+.create-location-row input { min-width: 0; border: 1px solid var(--product-line); border-radius: 10px; background: var(--product-bg); color: inherit; font: inherit; padding: 10px 12px; }
+.create-location-row button { white-space: nowrap; border: 1px solid var(--product-line); border-radius: 10px; background: var(--product-panel); color: inherit; font: inherit; padding: 10px 14px; cursor: pointer; }
+.create-location small, .create-selected { color: var(--product-muted); font-size: 13px; }
+.create-selected { list-style: none; margin: 14px 0 0; padding: 0; }
+.create-selected li { display: flex; gap: 8px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--product-line); overflow-wrap: anywhere; }
+.create-selected button { margin-left: auto; border: 0; background: transparent; color: var(--product-muted); font: inherit; cursor: pointer; }
 .create-panel h1 { margin: 0 0 8px; font-size: 32px; letter-spacing: -0.03em; }
 .create-panel p { color: var(--product-muted); line-height: 1.7; }
 .create-path { color: var(--product-muted); font-size: 13px; overflow-wrap: anywhere; }
@@ -146,7 +158,7 @@
   .home-copy h1, .home-ready h1 { font-size: 32px; }
   .home-ready-side { width: auto; }
   .home-ready-side .home-art { display: none; }
-  .home-cards, .home-actions, .create-steps { grid-template-columns: 1fr; }
+  .home-cards, .home-actions, .create-steps, .create-model-roles { grid-template-columns: 1fr; }
   .create-steps { display: grid; }
   .home-status { top: 12px; right: 12px; }
 }

@@ -13,6 +13,7 @@ import { leaseRenewal } from '../database/lease-renewal.ts';
 import { recordSyncedGitFile } from './synced-git.ts';
 import { isSourceGitRepository } from '../../core/source-git.ts';
 import { withDeadline } from '../deadline.ts';
+import { recordDeepVectorPages } from './search-optimize-store.ts';
 
 type RpcMessage = Extract<TaskWorkerMessage, { type: 'rpc' }>;
 type PageSnapshot = { pages: Map<string, string>; parent?: PageSnapshot };
@@ -56,6 +57,7 @@ export class TaskEngineHost {
     private auditJobId = jobId,
     private operationGate?: (engine:BrainEngine)=>Promise<void>,
     private skipUnchangedGitRecords = false,
+    private deepVectorOwner?: number,
   ) {this.cleanupOwner=owner;this.owner=withSqlCancellation(owner,this.abort.signal);this.syncFileIsGitRepository=Boolean(syncFile?.sourceRoot&&isSourceGitRepository(syncFile.sourceRoot));}
 
   ownsLockedTransaction(): boolean {
@@ -201,6 +203,7 @@ export class TaskEngineHost {
         const rows = await scope.engine.executeRaw(`UPDATE minion_jobs SET result = $3::jsonb, updated_at = now()
           WHERE id = $1 AND status = 'active' AND lock_token = $2 RETURNING id`, [this.jobId, this.token, JSON.stringify(receipt)]);
         if (!rows.length) throw new Error('文件任务已停止或租约失效');
+        if (this.deepVectorOwner !== undefined) await recordDeepVectorPages(scope.engine, this.deepVectorOwner, [receipt]);
       }
       scope.finish(args[0] === true);
       try { return await scope.done; }
@@ -317,6 +320,12 @@ export class TaskEngineHost {
         this.receipts.set(scopeId, { slug: String(args[0]), status: 'imported', pageHash: (result as Page).content_hash ?? '', chunks: 0,sourceId:(result as Page).source_id??'default' });
       }
       if (scopeId !== undefined && this.saveFileReceipt && method === 'upsertChunks' && this.receipts.has(scopeId)) this.receipts.get(scopeId)!.chunks += (args[1] as unknown[]).length;
+      if (this.deepVectorOwner !== undefined && !this.saveFileReceipt && method === 'upsertChunks'
+        && (args[1] as Parameters<BrainEngine['upsertChunks']>[1]).some(chunk => !chunk.embedding)) {
+        const slug = String(args[0]);
+        const sourceId = (args[2] as { sourceId?: string } | undefined)?.sourceId ?? 'default';
+        await recordDeepVectorPages(target, this.deepVectorOwner, [{ sourceId, slug }]);
+      }
       return result;
     };
     if (parent?.transactional) return invoke(engine);

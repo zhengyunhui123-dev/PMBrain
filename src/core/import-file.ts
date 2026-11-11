@@ -43,7 +43,7 @@ import {
 } from './embedding-context.ts';
 import { loadSearchModeConfig, resolveSearchMode } from './search/mode.ts';
 import { normalizeAliasList } from './search/alias-normalize.ts';
-import { isUndefinedTableError, warnOncePerProcess } from './utils.ts';
+import { isUndefinedTableError, validateSlug, warnOncePerProcess } from './utils.ts';
 import { computeCorpusGeneration } from './contextual-retrieval-service.ts';
 import { markdownEmbeddingInputHash, reuseMarkdownEmbeddings } from './document/markdown-embedding-reuse.ts';
 import {
@@ -310,6 +310,8 @@ export async function importFromContent(
   } = {},
   trustedStructuredToken?: symbol,
 ): Promise<ImportResult> {
+  slug = validateSlug(slug);
+
   // v0.18.0+ multi-source: when caller is syncing under a non-default source,
   // every per-page tx call must carry `sourceId` so writes target the right
   // (source_id, slug) row. Pre-fix, putPage relied on the schema DEFAULT and
@@ -1260,6 +1262,7 @@ export async function importFromFile(
     sourceId?: string;
     forceRechunk?: boolean;
     checkOnly?: boolean;
+    desktopDeepSync?: boolean;
     /**
      * v0.39 T1.5: active schema pack threaded through to importFromContent so
      * `parseMarkdown` uses pack-driven type inference. Load ONCE per command;
@@ -1279,7 +1282,18 @@ export async function importFromFile(
     return { slug: relativePath, status: 'skipped', chunks: 0, error: `File too large (${stat.size} bytes)` };
   }
 
-  let content = readFileSync(filePath, 'utf-8');
+  let content: string;
+  if (opts.desktopDeepSync && !isCodeFilePath(relativePath)) {
+    const bytes = readFileSync(filePath);
+    const encoding = bytes[0] === 0xff && bytes[1] === 0xfe ? 'utf-16le'
+      : bytes[0] === 0xfe && bytes[1] === 0xff ? 'utf-16be' : undefined;
+    try {
+      content = encoding ? new TextDecoder(encoding, { fatal: true }).decode(bytes) : bytes.toString('utf-8');
+    } catch {
+      return { slug: '', status: 'skipped', chunks: 0, error: '文件编码无效，未导入原文' };
+    }
+    if (content.includes('\x00')) return { slug: '', status: 'skipped', chunks: 0, error: 'Content contains null bytes，文件含空字节，未导入原文' };
+  } else content = readFileSync(filePath, 'utf-8');
 
   // Route code files through the code import path
   if (isCodeFilePath(relativePath)) {
@@ -1337,9 +1351,10 @@ export async function importFromFile(
       };
     }
   } else if (parsed.slug !== expectedSlug) {
-    // Anti-spoof preserved: path DOES derive a slug, but the frontmatter slug
-    // claims a different one. Reject.
-    return {
+    const existing = opts.desktopDeepSync
+      ? await engine.getPage(expectedSlug, { sourceId: opts.sourceId ?? 'default', includeDeleted: true })
+      : null;
+    if (!opts.desktopDeepSync || (existing && (existing.deleted_at || existing.source_path?.replace(/\\/g, '/') !== relativePath.replace(/\\/g, '/')))) return {
       slug: expectedSlug,
       status: 'skipped',
       chunks: 0,

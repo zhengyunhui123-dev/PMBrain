@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { open, statfs, stat, rename, unlink, opendir } from 'node:fs/promises';
+import { mkdir, open, statfs, stat, rename, unlink, opendir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { gbrainPath, loadConfig } from '../../core/config.ts';
 import { getAccurateRss } from '../../core/minions/worker.ts';
@@ -110,7 +110,15 @@ export async function copyFileSnapshot(source:string,destination:string,expected
   const input=await open(source,'r');
   let output:Awaited<ReturnType<typeof open>>|undefined;
   try{
-    output=await open(temporary,'wx',0o600);const hash=createHash('sha256');const buffer=Buffer.allocUnsafe(64*1024);
+    for (let attempt = 0; ; attempt++) {
+      try { output = await open(temporary, 'wx', 0o600); break; }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || attempt === 2) throw error;
+        await check();
+        await mkdir(dirname(destination), { recursive: true });
+      }
+    }
+    const hash=createHash('sha256');const buffer=Buffer.allocUnsafe(64*1024);
     while(true){
       await check();const {bytesRead}=await input.read(buffer,0,buffer.length,null);if(!bytesRead)break;
       hash.update(buffer.subarray(0,bytesRead));let offset=0;

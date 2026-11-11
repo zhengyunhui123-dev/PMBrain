@@ -9,6 +9,7 @@ export type SyncFileOptions = {
   includeOffice?: boolean;
   includeImages?: boolean;
   documentOcr?: boolean;
+  desktopDeepSync?: boolean;
   deferDocumentOcr?:boolean;
   ocrOriginalPath?:string|null;
   deferredOcrVectors?:boolean;

@@ -85,7 +85,7 @@ test('Admin 无模型时保留已导入资料，仅关键词不排队，默认�
     for (const [query, name] of [['', 'requires-vector-default.md'], ['?autoEmbed=1', 'requires-vector-explicit.md']]) {
       const run = await finish(await upload(query, name));
       expect(run.status).toBe('completed');
-      expect(run.result.searchOptimizeAccepted).toBe(true);
+      expect(run.result.vectorsPending).toBe(true);
       let optimization: any;
       for (let attempt = 0; attempt < 250; attempt++) {
         optimization = (await get('/admin/api/runs')).rows.find((row: any) => row.searchOptimize);

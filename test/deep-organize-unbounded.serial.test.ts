@@ -51,6 +51,45 @@ async function clearJobs() {
   await engine.executeRaw('DELETE FROM minion_jobs');
 }
 
+test('深度整理跨多次续跑只累加执行时间，排队和失败后的间隔不计时', async () => {
+  const runtime = new ProductTaskRuntime(engine);
+  const queue = new MinionQueue(engine);
+  try {
+    const run = await runtime.submitDream({ preset: 'full' });
+    const id = Number(run.id.slice(5));
+    await engine.executeRaw(`UPDATE minion_jobs SET status='failed', data=data-'deepTiming',
+      started_at=now()-interval '6 hours', finished_at=now()-interval '6 hours'+interval '32 minutes' WHERE id=$1`, [id]);
+    const first = (await runtime.getRun(run.id))!;
+    expect(first.durationMs).toBe(32 * 60_000);
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const elapsedMs = (32 + attempt) * 60_000;
+      const queued = await runtime.retry(run.id);
+      expect(queued?.status).toBe('queued');
+      expect(queued?.startedAt).toBe(first.startedAt);
+      expect(queued?.deepTiming).toEqual({ elapsedMs, activeSince: null });
+
+      const claimed = await queue.claim(`deep-clock-${attempt}`, 30_000, PRODUCT_TASK_QUEUE, ['pmbrain-product-task']);
+      expect(claimed?.id).toBe(id);
+      const running = (await runtime.getRun(run.id))!;
+      expect(running.status).toBe('running');
+      expect(running.deepTiming?.elapsedMs).toBe(elapsedMs);
+      expect(running.deepTiming?.activeSince).toBeGreaterThan(Date.now() - 30_000);
+      const endedAt = new Date(running.deepTiming!.activeSince! + 60_000).toISOString();
+      await engine.executeRaw(`UPDATE minion_jobs SET status='failed',finished_at=$2::timestamptz,
+        lock_token=NULL,lock_until=NULL WHERE id=$1`, [id, endedAt]);
+      expect(await runtime.getRun(run.id)).toMatchObject({
+        startedAt: first.startedAt,
+        durationMs: elapsedMs + 60_000,
+        deepTiming: { elapsedMs: elapsedMs + 60_000, activeSince: null },
+      });
+    }
+  } finally {
+    await runtime.close();
+    await clearJobs();
+  }
+}, 60_000);
+
 test('深度整理不保存 6 小时上限，继续旧任务后也不再限时，休眠后可以继续', async () => {
   await engine.setConfig(DREAM_TASK_TIMEOUT_KEY, '420000');
   const runtime = new ProductTaskRuntime(engine);
@@ -129,7 +168,7 @@ test('启动时清掉图片积压，深度整理进行时图片识别让出文�
   }
 }, 60000);
 
-test('没有新文件时跳过内容综合，并续接已提交的实体识别', async () => {
+test('没有新文件时推进历史关联，并续接已提交的实体识别', async () => {
   const repo = join(home, 'quiet-source');
   mkdirSync(repo);
   writeFileSync(join(repo, 'note.md'), '# 安静资料\n\n这份资料已经整理过，再跑一轮不应整库重做。');
@@ -149,20 +188,22 @@ test('没有新文件时跳过内容综合，并续接已提交的实体识别',
     const quick = await ended((await runtime.submitDream({ preset: 'quick', sourceId: 'deep-quiet' })).id);
     expect(quick.status, JSON.stringify(quick)).toBe('completed');
     expect((await engine.getPage('note', { sourceId: 'deep-quiet' }))?.compiled_truth).toContain('已经整理过');
+    await engine.executeRaw("UPDATE pages SET links_extracted_at=NULL WHERE source_id='deep-quiet' AND slug='note'");
     modelCalls = 0;
     const full = await ended((await runtime.submitDream({ preset: 'full', sourceId: 'deep-quiet', maxPages: 1 })).id);
     expect(full.status, JSON.stringify(full)).toBe('completed');
     expect(modelCalls, JSON.stringify(full.product?.deep)).toBe(1);
     const stages = full.product?.deep?.stages ?? [];
     const stage = (id: string) => stages.find(item => item.id === id);
-    expect(stage('relations')?.status).toBe('skipped');
-    expect(stage('relations')?.result).toBe('跳过');
+    expect(stage('relations')?.detail).toContain('历史积压处理 1 份资料');
     expect(stage('entities')?.status).not.toBe('skipped');
     expect(stage('entities')?.result).toContain('写入 0 个实体');
-    for (const id of ['concepts', 'index', 'review']) expect(stage(id)?.status, JSON.stringify(stage(id))).toBe('skipped');
+    expect(stage('concepts')).toBeDefined();
+    expect(stage('index')).toBeUndefined();
+    expect(stage('review')?.status).not.toBe('skipped');
     const log = full.product?.deep?.log ?? [];
     expect(log.some(entry => entry.event === 'start' && entry.stage === 'relations')).toBe(true);
-    expect(log.some(entry => entry.event === 'finish' && entry.stage === 'relations' && entry.result === '跳过' && typeof entry.durationMs === 'number')).toBe(true);
+    expect(log.some(entry => entry.event === 'finish' && entry.stage === 'relations' && typeof entry.durationMs === 'number')).toBe(true);
     expect((await runtime.files(full.id))?.rows ?? []).toHaveLength(0);
   } finally {
     await runtime.close();
