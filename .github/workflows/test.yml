@@ -41,6 +41,7 @@ jobs:
         with:
           bun-version: 1.3.14
       - uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684  # v4.2.3
+        id: bun-cache
         with:
           path: ~/.bun/install/cache
           key: bun-cache-${{ runner.os }}-${{ hashFiles('bun.lock') }}
@@ -54,6 +55,11 @@ jobs:
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
       - run: bun run verify
+      - uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684  # v4.2.3
+        if: steps.bun-cache.outputs.cache-hit != 'true'
+        with:
+          path: ~/.bun/install/cache
+          key: bun-cache-${{ runner.os }}-${{ hashFiles('bun.lock') }}
 
   serial-tests:
     # *.serial.test.ts at --max-concurrency=1. Lives in its own runner so
@@ -85,112 +91,18 @@ jobs:
         env:
           SHARD: ${{ matrix.shard }}/2
 
-  sync-file-scale:
-    runs-on: ubuntu-latest
-    timeout-minutes: 35
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6  # v2
-        with:
-          bun-version: 1.4.2
-      - uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684  # v4.2.3
-        with:
-          path: ~/.bun/install/cache
-          key: bun-cache-${{ runner.os }}-${{ hashFiles('bun.lock') }}
-      - run: bun install --frozen-lockfile
-      - name: Run 1000-file quick maintenance end-to-end test
-        env:
-          PMBRAIN_SYNC_SCALE_TEST: '1'
-        run: bun test --max-concurrency=1 test/sync-file-queue.serial.test.ts --test-name-pattern='一千份资料完成并可检索，第二轮不创建新的文件处理任务' --timeout=1800000
-
-  slow-eval-longmemeval:
-    # Dedicated runner for the LongMemEval end-to-end test file. The file
-    # was originally 359s. TODO #1 (engine-sharing in runEvalLongMemEval
-    # via RunOpts.engine) cut it to ~200s by amortizing PGLite cold-create
-    # across all 13 runEvalLongMemEval calls in one beforeAll-shared brain.
-    # Pulled out of the matrix (see scripts/test-shard.sh) so a single 200s
-    # atom doesn't dominate a shard's wallclock. Companion file
-    # test/eval-longmemeval.slow.test.ts (the pure-bucket half) stays in
-    # the matrix because it's light (~42s).
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6  # v2
-        with:
-          bun-version: 1.3.14
-      - uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684  # v4.2.3
-        with:
-          path: ~/.bun/install/cache
-          key: bun-cache-${{ runner.os }}-${{ hashFiles('bun.lock') }}
-      - run: bun install --frozen-lockfile
-      - run: bun test test/eval-longmemeval-e2e.slow.test.ts --timeout=60000
-
-  slow-entity-resolve-perf:
-    # Dedicated runner for the entity-resolve perf test (~159s, single perf
-    # describe with one test that builds 5000+ pages and asserts the NEW
-    # tryPrefixExpansion shape is 5x faster than the OLD shape — not
-    # subdivisible without weakening the perf guarantee). Pulled out of the
-    # matrix (see scripts/test-shard.sh) so a single 159s atom doesn't
-    # dominate a shard's wallclock. Runs in parallel with the matrix.
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6  # v2
-        with:
-          bun-version: 1.3.14
-      - uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684  # v4.2.3
-        with:
-          path: ~/.bun/install/cache
-          key: bun-cache-${{ runner.os }}-${{ hashFiles('bun.lock') }}
-      - run: bun install --frozen-lockfile
-      - run: bun test test/entity-resolve-perf.slow.test.ts --timeout=300000
-
-  brainbench:
-    # BrainBench memory-conformance gate. Hermetic: in-memory PGLite, zero
-    # API keys. Compares HEAD's run against MAIN's committed baseline via
-    # `git show origin/master:evals/brainbench/baselines/main.json`.
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
-      - name: Fetch origin/master baseline ref (shallow)
-        run: git fetch --no-tags --depth=1 origin +refs/heads/master:refs/remotes/origin/master
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6  # v2
-        with:
-          bun-version: 1.3.14
-      - uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684  # v4.2.3
-        with:
-          path: ~/.bun/install/cache
-          key: bun-cache-${{ runner.os }}-${{ hashFiles('bun.lock') }}
-          restore-keys: bun-cache-${{ runner.os }}-
-      - run: bun install --frozen-lockfile
-      - run: bash scripts/ci-brainbench-gate.sh
-        env:
-          BRAINBENCH_OUT: ${{ runner.temp }}/brainbench-result.json
-      - name: BrainBench delta → step summary
-        if: always()
-        run: |
-          if [ -f "${{ runner.temp }}/brainbench-result.json" ]; then
-            bun scripts/render-brainbench-delta.ts "${{ runner.temp }}/brainbench-result.json" >> "$GITHUB_STEP_SUMMARY"
-          fi
-
   test:
     # Pure matrix shard — no verify, no serial. Each shard runs its slice
     # of the unit test set under one `bun test` invocation.
     #
-    # 10 shards (was 6) drops per-shard total from 532s → 287s. With the two
-    # dedicated jobs (slow-eval-longmemeval, slow-entity-resolve-perf) also
-    # pulled out, the matrix is bounded by ~287s ≈ 4.8 min. Total CI ≈ max
-    # of matrix + slow-eval (~3.3 min after engine-sharing in TODO #1) +
-    # slow-entity-resolve-perf (~2.6 min) ≈ 4.8 min.
+    # 10 shards keep the slowest unit slice near 5 minutes. LongMemEval,
+    # entity-resolve perf, BrainBench and the 1000-file scale test run in
+    # extended-tests.yml on a nightly schedule, not on every pull request.
     #
-    # Concurrency budget: 10 shards + verify + serial + slow-eval +
-    # slow-entity-resolve-perf + gitleaks + cache-check + cache-write +
-    # test-status = ~18 jobs × 2 concurrent PRs = 36. GitHub free-tier
-    # caps at ~20 concurrent jobs, so multi-PR days will see some queue
-    # pressure. Single-PR runs are unaffected.
+    # This workflow is gitleaks + verify + 2 serial shards + 10 unit shards
+    # + Windows desktop runtime + test-status. One pull request stays near
+    # the free-tier concurrency cap once E2E, journeys and heavy tests
+    # start alongside it.
     #
     # Partition policy is weight-aware LPT bin-packing via scripts/sharding.ts
     # (replaces FNV-1a path hash). Weights live in scripts/test-weights.json,
@@ -252,14 +164,14 @@ jobs:
 
   # ──────────────────────────────────────────────────────────────────────
   test-status:
-    needs: [gitleaks, verify, serial-tests, sync-file-scale, slow-eval-longmemeval, slow-entity-resolve-perf, brainbench, test, desktop-runtime]
+    needs: [gitleaks, verify, serial-tests, test, desktop-runtime]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Aggregate result
         run: |
-          for result in "${{ needs.gitleaks.result }}" "${{ needs.verify.result }}" "${{ needs.serial-tests.result }}" "${{ needs.sync-file-scale.result }}" "${{ needs.slow-eval-longmemeval.result }}" "${{ needs.slow-entity-resolve-perf.result }}" "${{ needs.brainbench.result }}" "${{ needs.test.result }}" "${{ needs.desktop-runtime.result }}"; do
+          for result in "${{ needs.gitleaks.result }}" "${{ needs.verify.result }}" "${{ needs.serial-tests.result }}" "${{ needs.test.result }}" "${{ needs.desktop-runtime.result }}"; do
             if [ "$result" != "success" ]; then
               echo "Required execution did not succeed: $result" >&2
               exit 1

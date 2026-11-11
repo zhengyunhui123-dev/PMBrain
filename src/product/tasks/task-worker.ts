@@ -833,6 +833,10 @@ async function runSearchOptimize(engine: BrainEngine): Promise<void> {
       ? state.items.filter((item): item is { sourceId: string; slug: string; revision?: string } => Boolean(item?.sourceId && item.slug && !item.slug.includes(':')))
       : [];
     const done = Number.isFinite(state.done) ? Number(state.done) : 0;
+    if (state.paused) {
+      send({ type: 'deferred', phase: 'search_optimize' });
+      return;
+    }
     if (!items.length) {
       await rpc('task.searchOptimizeRelease', []);
       const total = Math.max(done, Number.isFinite(state.total) ? Number(state.total) : done);
@@ -840,15 +844,18 @@ async function runSearchOptimize(engine: BrainEngine): Promise<void> {
       send({ type: 'result', result: { searchOptimize: true, status: 'ok' } });
       return;
     }
-    if (state.paused || schedule?.mode === 'waiting' || Date.now() >= windowEndsAt) {
+    if (schedule?.mode === 'waiting' || Date.now() >= windowEndsAt) {
       send({ type: 'deferred', phase: 'search_optimize' });
       return;
     }
     const next = items[0]!;
-    const [ocrPending]=await engine.executeRaw(`SELECT 1 FROM pages p JOIN minion_jobs j
-      ON j.id=(CASE WHEN p.frontmatter->>'document_ocr_task_id' ~ '^[0-9]{1,10}$' THEN p.frontmatter->>'document_ocr_task_id' END)::bigint
+    const [ocrPending]=await engine.executeRaw(`SELECT 1 FROM pages p
       WHERE p.slug=$1 AND p.source_id=$2 AND p.deleted_at IS NULL AND p.frontmatter->>'document_ocr_deferred'='true'
-        AND j.status IN ('waiting','active','delayed','waiting-children')`,[next.slug,next.sourceId]);
+        AND NOT EXISTS (
+          SELECT 1 FROM minion_jobs j
+          WHERE j.id=(CASE WHEN p.frontmatter->>'document_ocr_task_id' ~ '^[0-9]{1,10}$' THEN p.frontmatter->>'document_ocr_task_id' END)::bigint
+            AND j.status='completed'
+        )`,[next.slug,next.sourceId]);
     if(ocrPending){send({type:'deferred',phase:'search_optimize'});return;}
     const revision = next.revision;
     const total = Number.isFinite(state.total) ? Number(state.total) : done + items.length;

@@ -68,6 +68,25 @@ describe('整理按本轮成果展示',()=>{
     run.status='failed';expect(taskStatus(run)).toBe('失败');expect(taskRoundCompleted(run)).toBe(false);
     run.status='cancelled';expect(taskStatus(run)).toBe('已停止');expect(taskRoundCompleted(run)).toBe(false);
   });
+  test('排队或执行中的旧说明不能盖住当前状态，结束后仍保留未执行和未提炼',()=>{
+    const run=sample();
+    for (const status of ['running', 'queued'] as const) {
+      run.status = status;
+      run.product!.stage = '任务未执行';
+      expect(taskStatus(run)).toBe(status === 'running' ? '执行中' : '排队中');
+      run.product!.stage = '维护完成，AI 提炼未执行';
+      expect(taskStatus(run)).toBe(status === 'running' ? '执行中' : '排队中');
+      run.error = '正在停止任务…';
+      expect(taskStatus(run)).toBe(status === 'running' ? '正在停止' : '排队中');
+      run.error = null;
+    }
+    run.status = 'completed';
+    run.product!.stage = '维护完成，AI 提炼未执行';
+    expect(taskStatus(run)).toBe('AI 提炼未执行');
+    run.product!.stage = '任务未执行';
+    expect(taskStatus(run)).toBe('未执行');
+    expect(taskRoundCompleted(run)).toBe(false);
+  });
   test('同步队列遗留失败和待处理仍能筛出并提供继续入口',()=>{
     const run=sample();run.kind='dream_quick';run.product!.stage='维护完成';run.product!.steps=[];run.product!.metrics=[];run.product!.errorReason=null;
     run.product!.syncFiles={total:60,completed:58,failed:1,remaining:1};

@@ -19,4 +19,5 @@ test('局部模型输出失败保留部分完成，数据库和模型故障仍�
   expect(maintenanceFailure({ status: 'partial', phases: [phase] })).toBeNull();
   expect(maintenanceFailure({ status: 'partial', phases: [{ ...phase, error: { message: '数据库不可用' } }] })).toContain('数据库不可用');
   expect(maintenanceFailure({ status: 'partial', phases: [{ ...phase, details: { ...details, isolated_output_failures: false } }] })).toContain('证据缺失');
+  expect(maintenanceFailure({ status: 'partial', phases: [{ ...phase, details: { ...details, stop_reason: 'parse', page_failures: [{ reason: 'ingest invalid output' }] } }] })).toContain('ingest invalid output');
 });

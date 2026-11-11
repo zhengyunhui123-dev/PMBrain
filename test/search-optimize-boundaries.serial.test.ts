@@ -102,10 +102,14 @@ test('目录导入中途停止后继续，已经保存的文件也会完成向�
     const imported = await until(() => runtime.getRun(accepted!.id), run => !!run && !['queued', 'running'].includes(run.status), '继续导入未结束');
     expect(imported?.status).toBe('completed');
     expect(imported?.result).toMatchObject({ resumedFiles: 1 });
-    await until(() => runtime.listRuns(), runs => !runs.some(run => run.searchOptimize && ['queued', 'running'].includes(run.status)), '后台优化未结束');
-    const chunks = await engine.getChunks(savedSlug, { sourceId: 'default' });
-    expect(chunks.length).toBeGreaterThan(0);
-    expect(chunks.every(chunk => !!chunk.embedded_at)).toBe(true);
+    const chunks = await until(async () => {
+      const runs = await runtime.listRuns();
+      const live = runs.some(run => run.searchOptimize && ['queued', 'running'].includes(run.status));
+      const rows = await engine.getChunks(savedSlug, { sourceId: 'default' });
+      return { live, rows };
+    }, state => !state.live && state.rows.length > 0 && state.rows.every(chunk => !!chunk.embedded_at), '已保存的文件没有完成向量化');
+    expect(chunks.rows.length).toBeGreaterThan(0);
+    expect(chunks.rows.every(chunk => !!chunk.embedded_at)).toBe(true);
   });
 }, 60000);
 

@@ -51,6 +51,8 @@ async function finish(id:string){const end=Date.now()+120000;while(Date.now()<en
 async function quick(){const run=await runtime.submitDream({preset:'quick',sourceId:'default'},'scheduled');const done=await finish(run.id);expect(done.status,JSON.stringify(done.result)).toBe('completed');return done;}
 async function embeddingEnabled(enabled:boolean){const config=JSON.parse(readFileSync(configPath(),'utf8'));config.embedding_disabled=!enabled;config.model_usage.embedding_enabled=enabled;writeFileSync(configPath(),JSON.stringify(config));await reloadLiveGateway(engine);}
 async function waitUntil(read:()=>Promise<boolean>,label:string){const end=Date.now()+180000;while(Date.now()<end){if(await read())return;await Bun.sleep(100);}throw new Error(label);}
+async function pageEmbedded(slug:string,sourceId='default'){const rows=await engine.getChunks(slug,{sourceId});return rows.length>0&&rows.every(chunk=>!!chunk.embedded_at);}
+async function pendingOptimize(sourceId:string,slug:string){const rows=await engine.executeRaw<{value:string}>("SELECT value FROM config WHERE key LIKE 'pmbrain.search_optimize.pending.%'");return rows.map(row=>JSON.parse(row.value) as {sourceId?:string;slug?:string}).filter(item=>item.sourceId===sourceId&&item.slug===slug);}
 
 test('深度整理无文件增量时先提交新概念，解除向量暂停后再补齐搜索索引', async () => {
   const sourceId = 'deep-concept-vector';
@@ -71,9 +73,9 @@ test('深度整理无文件增量时先提交新概念，解除向量暂停后�
     }
     const before = calls;
     const task = await runtime.submitDream({ preset: 'full', sourceId });
-    await waitUntil(async () => String((await runtime.getRun(task.id))?.product?.stage).includes('知识向量化已暂停'), '概念阶段未释放数据库并进入索引阶段');
-    const waiting = await runtime.getRun(task.id);
-    expect(waiting?.product?.deep?.scan.incremental ?? 0).toBe(0);
+    const completed = await finish(task.id);
+    expect(completed.status, JSON.stringify(completed.result)).toBe('completed');
+    expect(completed.product?.deep?.scan.incremental ?? 0).toBe(0);
     expect(calls).toBe(before);
     const scope = { sourceId };
     const slug = 'concepts/staged-vector';
@@ -83,10 +85,11 @@ test('深度整理无文件增量时先提交新概念，解除向量暂停后�
     expect((await engine.getLinks(slug, scope)).some(link => link.link_type === 'derives_from')).toBe(true);
     cpu = 0.1;
     await pauseSearchOptimize(engine, false);
-    const completed = await finish(task.id);
-    expect(completed.status, JSON.stringify(completed.result)).toBe('completed');
+    await waitUntil(async () => {
+      const rows = await engine.getChunks(slug, scope);
+      return rows.length > 0 && rows.every(chunk => !!chunk.embedded_at);
+    }, '解除暂停后没有补齐概念向量');
     expect(calls).toBeGreaterThan(before);
-    expect((await engine.getChunks(slug, scope)).every(chunk => !!chunk.embedded_at)).toBe(true);
   } finally {
     if (previousKnowledge === null) await engine.unsetConfig('dream.knowledge.enabled');
     else await engine.setConfig('dream.knowledge.enabled', previousKnowledge);
@@ -132,17 +135,19 @@ test('旧维护回执缺少分块指纹时完成一次核验，后续不重复�
 test('深度整理遵守向量暂停和电脑忙闲，后台恢复后只补缺失向量',async()=>{
   cpu=0.95;await pauseSearchOptimize(engine,true);
   await embeddingEnabled(true);
-  writeFileSync(join(directory,'vectors.md'),'# Vector task\n\n'+Array.from({length:12},(_,i)=>`## 第 ${i} 节\n\n`+'独立的测试资料需要保留已有成果并确保后台暂停有效。'.repeat(30)).join('\n\n'));
+  writeFileSync(join(directory,'vectors.md'),'# Vector task\n\n'+'独立的测试资料需要保留已有成果并确保后台暂停有效。'.repeat(20));
   const before=calls;const task=await runtime.submitDream({preset:'full',sourceId:'default'},'scheduled');
-  await waitUntil(async()=>String((await runtime.getRun(task.id))?.product?.stage).includes('知识向量化已暂停'),'维护未等待全局向量暂停');
-  expect(calls).toBe(before);expect((await loadSearchOptimize(engine)).paused).toBe(true);expect((await runtime.getRun(task.id))?.status).toBe('queued');
+  const organized=await finish(task.id);
+  expect(organized.status,JSON.stringify(organized.result)).toBe('completed');
+  expect(calls).toBe(before);expect((await loadSearchOptimize(engine)).paused).toBe(true);
   const [preserved]=await engine.executeRaw<{id:number}>("SELECT id FROM content_chunks WHERE page_id=(SELECT id FROM pages WHERE slug='vectors' AND source_id='default') ORDER BY chunk_index LIMIT 1");
   const vector=JSON.stringify(Array.from({length:dimensions},(_,i)=>i===0?1:0));await engine.executeRaw("UPDATE content_chunks SET embedding=$2::vector,model='custom-openai:audit-test',embedded_at='2026-01-01T00:00:00Z' WHERE id=$1",[preserved.id,vector]);
   await runtime.close();runtime=new ProductTaskRuntime(engine,{background:{sample:()=>({cpuBusyRatio:cpu,bytes:1024**3,availableBytes:12*1024**3,totalBytes:16*1024**3,systemIdleSeconds:0})}});await runtime.start();
   expect((await loadSearchOptimize(engine)).paused).toBe(true);await Bun.sleep(300);expect(calls).toBe(before);
-  await pauseSearchOptimize(engine,false);await Bun.sleep(7000);expect(calls).toBe(before);
-  cpu=0.1;const doneRun=await finish(task.id);expect(doneRun.status,JSON.stringify(doneRun.result)).toBe('completed');expect(calls).toBeGreaterThan(before);
-  expect((doneRun.result as any).budget.calls).toBeGreaterThan(0);
+  const [vectorJob]=await engine.executeRaw<{id:number}>("SELECT id FROM minion_jobs WHERE idempotency_key='search-optimize:active'");
+  expect(vectorJob).toBeDefined();
+  await runtime.continueSearchOptimize('task-'+vectorJob.id);await Bun.sleep(7000);expect(calls).toBe(before);
+  cpu=0.1;await waitUntil(async()=>pageEmbedded('vectors'),'解除暂停后没有补齐缺失向量');expect(calls).toBeGreaterThan(before);
   const page=await engine.getPage('vectors');const [stats]=await engine.executeRaw<{pending:number}>("SELECT count(*)::int AS pending FROM content_chunks WHERE page_id=$1 AND embedding IS NULL",[page!.id]);expect(stats.pending).toBe(0);
   const [kept]=await engine.executeRaw<{model:string;embedded_at:Date}>("SELECT model,embedded_at FROM content_chunks WHERE id=$1",[preserved.id]);expect(kept.model).toBe('custom-openai:audit-test');expect(new Date(kept.embedded_at).getUTCFullYear()).toBe(2026);expect(new Date(kept.embedded_at).getUTCMonth()).toBe(0);
   const done=calls;await quick();await Bun.sleep(200);expect(calls).toBe(done);
@@ -151,39 +156,45 @@ test('深度整理遵守向量暂停和电脑忙闲，后台恢复后只补缺�
 test('深度整理同样等待全局暂停，继续后在原任务完成',async()=>{
   cpu=0.95;await pauseSearchOptimize(engine,true);writeFileSync(join(directory,'deep.md'),'# Deep maintenance\n\n这是独立的深度整理资料，向量应等待后台恢复。');
   const before=calls;const task=await runtime.submitDream({preset:'full',sourceId:'default'},'scheduled');
-  await waitUntil(async()=>String((await runtime.getRun(task.id))?.product?.stage).includes('知识向量化已暂停'),'深度整理未等待全局向量暂停');expect(calls).toBe(before);
-  await pauseSearchOptimize(engine,false);cpu=0.1;const done=await finish(task.id);
-  expect(done.status,JSON.stringify(done.result)).toBe('completed');expect(calls).toBeGreaterThan(before);
-  expect((done.result as any).phases.find((phase:any)=>phase.phase==='embed').details.remainingChunks).toBe(0);
+  const organized=await finish(task.id);
+  expect(organized.status,JSON.stringify(organized.result)).toBe('completed');expect(calls).toBe(before);
+  expect((await engine.getChunks('deep',{sourceId:'default'})).every(chunk=>!chunk.embedded_at)).toBe(true);
+  await pauseSearchOptimize(engine,false);cpu=0.1;
+  await waitUntil(async()=>pageEmbedded('deep'),'继续后没有补齐深度整理向量');
+  expect(calls).toBeGreaterThan(before);
 },180000);
 
-test('维护向量化沿用整次费用上限，提高上限后原任务继续',async()=>{
+test('深度整理完成不受后台向量费用影响，空闲后只补该资料',async()=>{
   await pauseSearchOptimize(engine,false);cpu=0.1;await engine.setConfig('dream.task_budget_cny','0.000000001');
-  writeFileSync(join(directory,'budget.md'),'# Budget\n\n已有维护预算必须约束向量阶段的模型调用。');
-  const before=calls,task=await runtime.submitDream({preset:'full',sourceId:'default'},'scheduled');const stopped=await finish(task.id);
-  expect(stopped.status).toBe('failed');expect((stopped.result as any).reason).toBe('task_budget');expect(calls).toBe(before);
-  await engine.setConfig('dream.task_budget_cny','1');const retried=await runtime.retry(task.id);expect(retried?.id).toBe(task.id);
-  const done=await finish(task.id);expect(done.status,JSON.stringify(done.result)).toBe('completed');expect(calls).toBeGreaterThan(before);expect((done.result as any).budget.spentCny).toBeGreaterThan(0);
+  try {
+    writeFileSync(join(directory,'budget.md'),'# Budget\n\n已有维护预算必须约束向量阶段的模型调用。');
+    const before=calls,task=await runtime.submitDream({preset:'full',sourceId:'default'},'scheduled');const done=await finish(task.id);
+    expect(done.status,JSON.stringify(done.result)).toBe('completed');expect(calls).toBe(before);
+    expect((await engine.getChunks('budget',{sourceId:'default'})).every(chunk=>!chunk.embedded_at)).toBe(true);
+    await waitUntil(async()=>pageEmbedded('budget'),'空闲后没有补齐该资料向量');expect(calls).toBeGreaterThan(before);
+  } finally { await engine.setConfig('dream.task_budget_cny','1'); }
 },180000);
 
 test('向量处理中电脑变忙时保存当前批次，重启及暂停后只补剩余分块并累计原预算',async()=>{
   await embeddingEnabled(true);await pauseSearchOptimize(engine,false);cpu=0.1;
   const windowRoot=join(root,'window');mkdirSync(windowRoot);
   await engine.executeRaw("INSERT INTO sources(id,name,local_path) VALUES('window','分批恢复验收',$1)",[windowRoot]);
-  writeFileSync(join(windowRoot,'window.md'),'# Window\n\n'+Array.from({length:20},(_,i)=>`## 第 ${i} 节\n\n`+'向量批次提交后应当保留成果，电脑资源繁忙时暂停，恢复后不能再次收费处理相同分块。'.repeat(35)).join('\n\n'));
+  writeFileSync(join(windowRoot,'window.md'),'# Window\n\n'+'向量批次提交后应当保留成果，电脑资源繁忙时暂停，恢复后不能再次收费处理相同分块。'.repeat(500));
   onEmbedding=async()=>{cpu=0.95;};const before=calls;
   const task=await runtime.submitDream({preset:'full',sourceId:'window'},'scheduled');
-  await waitUntil(async()=>{const run=await runtime.getRun(task.id);return run?.status==='queued'&&!!run.product?.stage.includes('电脑');},'批次后电脑繁忙未停止');
+  const organized=await finish(task.id);
+  expect(organized.status,JSON.stringify(organized.result)).toBe('completed');
+  await waitUntil(async()=>calls>=before+1,'后台向量没有开始');
+  await Bun.sleep(1500);
   expect(calls).toBe(before+1);
   const kept=await engine.executeRaw<{id:number;model:string;embedded_at:Date}>('SELECT c.id,c.model,c.embedded_at FROM content_chunks c JOIN pages p ON p.id=c.page_id WHERE p.source_id=$1 AND c.embedding IS NOT NULL ORDER BY c.id',['window']);
   expect(kept.length).toBeGreaterThan(0);expect(await engine.countStaleChunks({sourceId:'window'})).toBeGreaterThan(0);
-  await pauseSearchOptimize(engine,true);await runtime.close();runtime=new ProductTaskRuntime(engine,{background:{sample:()=>({cpuBusyRatio:cpu,bytes:1024**3,availableBytes:12*1024**3,totalBytes:16*1024**3,systemIdleSeconds:0})}});await runtime.start();cpu=0.1;
-  await waitUntil(async()=>!!(await runtime.getRun(task.id))?.product?.stage.includes('知识向量化已暂停'),'重启丢失全局向量暂停');expect(calls).toBe(before+1);
-  await pauseSearchOptimize(engine,false);const done=await finish(task.id);expect(done.status,JSON.stringify(done.result)).toBe('completed');
+  await pauseSearchOptimize(engine,true);await runtime.close();runtime=new ProductTaskRuntime(engine,{background:{sample:()=>({cpuBusyRatio:cpu,bytes:1024**3,availableBytes:12*1024**3,totalBytes:16*1024**3,systemIdleSeconds:0})}});await runtime.start();
+  await Bun.sleep(300);expect((await loadSearchOptimize(engine)).paused).toBe(true);expect(calls).toBe(before+1);
+  const [windowJob]=await engine.executeRaw<{id:number}>("SELECT id FROM minion_jobs WHERE idempotency_key='search-optimize:active'");
+  expect(windowJob).toBeDefined();cpu=0.1;await runtime.continueSearchOptimize('task-'+windowJob.id);
+  await waitUntil(async()=>await engine.countStaleChunks({sourceId:'window'})===0,'恢复后没有补齐剩余分块');
   expect(await engine.executeRaw('SELECT id,model,embedded_at FROM content_chunks WHERE id=ANY($1::bigint[]) ORDER BY id',[kept.map(row=>row.id)])).toEqual(kept);
-  expect(await engine.countStaleChunks({sourceId:'window'})).toBe(0);expect((done.result as any).budget.calls).toBe(calls-before);
-  const [total]=await engine.executeRaw<{n:number}>('SELECT count(*)::int AS n FROM content_chunks c JOIN pages p ON p.id=c.page_id WHERE p.source_id=$1',['window']);
-  expect((done.result as any).phases.find((phase:any)=>phase.phase==='embed').details.embedded).toBe(total.n);
 },300000);
 
 test('独立同步先保存资料再排队，暂停与电脑繁忙时零向量请求且不处理停用来源',async()=>{
@@ -194,8 +205,8 @@ test('独立同步先保存资料再排队，暂停与电脑繁忙时零向量�
   await engine.upsertChunks('outside-sync',[{chunk_index:0,chunk_text:'未授权本次同步的来源内容必须保留未向量状态。',chunk_source:'compiled_truth'}],{sourceId:'sync-disabled'});
   const before=calls,task=await runtime.submitSync(),done=await finish(task.id);
   expect(done.status,JSON.stringify(done.result)).toBe('completed');expect((await engine.getPage('sync-pending'))!.compiled_truth).toContain('同步先保存');expect(calls).toBe(before);
-  const queued=await loadSearchOptimize(engine);expect(queued.items.some(item=>item.sourceId==='default'&&item.slug==='sync-pending')).toBe(true);expect(queued.items.some(item=>item.sourceId==='sync-disabled')).toBe(false);
+  const queued=await loadSearchOptimize(engine);expect(await pendingOptimize('default','sync-pending')).toHaveLength(1);expect(queued.items.some(item=>item.sourceId==='sync-disabled')).toBe(false);expect((await pendingOptimize('sync-disabled','outside-sync'))).toHaveLength(0);
   expect(await engine.countStaleChunks({sourceId:'sync-disabled'})).toBe(1);
-  const second=await finish((await runtime.submitSync()).id);expect(second.status,JSON.stringify(second.result)).toBe('completed');expect(calls).toBe(before);expect((await loadSearchOptimize(engine)).items.filter(item=>item.sourceId==='default'&&item.slug==='sync-pending')).toHaveLength(1);
-  const [background]=await engine.executeRaw<{id:number}>("SELECT id FROM minion_jobs WHERE idempotency_key='search-optimize:active'");expect(background).toBeDefined();cpu=0.1;await runtime.continueSearchOptimize('task-'+background.id);await waitUntil(async()=>await engine.countStaleChunks({sourceId:'default'})===0,'同步资料未在后台补向量');expect(calls).toBeGreaterThan(before);expect(await engine.countStaleChunks({sourceId:'sync-disabled'})).toBe(1);
+  const second=await finish((await runtime.submitSync()).id);expect(second.status,JSON.stringify(second.result)).toBe('completed');expect(calls).toBe(before);expect(await pendingOptimize('default','sync-pending')).toHaveLength(1);
+  const [background]=await engine.executeRaw<{id:number}>("SELECT id FROM minion_jobs WHERE idempotency_key='search-optimize:active'");expect(background).toBeDefined();cpu=0.1;await runtime.continueSearchOptimize('task-'+background.id);await waitUntil(async()=>pageEmbedded('sync-pending'),'同步资料未在后台补向量');expect(calls).toBeGreaterThan(before);expect(await engine.countStaleChunks({sourceId:'sync-disabled'})).toBe(1);
 },180000);

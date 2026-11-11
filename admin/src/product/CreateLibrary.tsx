@@ -4,7 +4,7 @@ import { desktopApi } from '../lib/product-fetch';
 import { availableServiceModels, serviceConnection } from '../../../shared/model-services';
 import type { ConsoleRun } from '../../../shared/contracts/common';
 import { waitForConsoleRun } from '../pages/import/import-support';
-import { createFinishMessage, createIntent, displayDatabasePath, importBuildDetail, importBuildSteps, suggestedChatModel, type CreateIntent } from './home-model';
+import { createFinishMessage, createIntent, displayDatabasePath, importBuildDetail, importBuildSteps, keywordOnlyChoice, suggestedChatModel, type CreateIntent } from './home-model';
 import type { DesktopSetupState } from '../../../desktop/src/preload';
 import { waitForDesktopService } from './desktop-startup-wait';
 import { importMaterials, type Material } from './import-materials';
@@ -149,11 +149,12 @@ export function CreateLibrary({ onDone, onCreated, onOpenSettings, visible = tru
     try {
       const snapshot = (await desktop.getSetup()).setup;
       const current = snapshot.current;
-      setKeywordOnly(onlyImport);
+      const embeddingChanged = !snapshot.needsSetup && Boolean(current.embeddingModel && pickedEmbedding && current.embeddingModel !== pickedEmbedding);
+      const changeConfirmed = !embeddingChanged || window.confirm('更换向量模型需要重新生成已有资料的向量。原始资料会保留，是否继续？');
+      if (!changeConfirmed) return;
+      setKeywordOnly(keywordOnlyChoice(keywordOnly, { onlyImport, needsSetup: snapshot.needsSetup, embeddingChanged, changeConfirmed }));
       if (snapshot.needsSetup) { setStep('create'); return; }
       const config = selectedModelConfig(current);
-      const embeddingChanged = Boolean(current.embeddingModel && pickedEmbedding && current.embeddingModel !== pickedEmbedding);
-      if (embeddingChanged && !window.confirm('更换向量模型需要重新生成已有资料的向量。原始资料会保留，是否继续？')) return;
       if ((pickedChat && current.chatModel !== pickedChat) || (pickedEmbedding && (current.embeddingModel !== pickedEmbedding || !modelReadiness(current).embedding))) {
         await desktop.saveSetup({ expectedModelRevision: snapshot.modelRevision, engine: current.engine, databasePath: current.databasePath, databaseUrl: current.databaseUrl, resetAdvancedModelRouting: false, confirmEmbeddingRebuild: embeddingChanged, modelConfig: config });
         await waitForDesktopService({ getState: () => desktop.getState(), onState: listener => desktop.onState(listener) }, { signal: lifecycle.current.signal });

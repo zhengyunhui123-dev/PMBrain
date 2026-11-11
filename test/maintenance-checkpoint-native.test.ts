@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import {maintenanceFailure} from '../src/product/tasks/maintenance-orchestration.ts';
-import { retireAutomaticCapture, resumeMaintenanceCheckpoint } from '../src/product/tasks/checkpoint.ts';
+import { resumeDeepOrganizeCheckpoint, retireAutomaticCapture, resumeMaintenanceCheckpoint } from '../src/product/tasks/checkpoint.ts';
 import type { MaintenanceCheckpoint } from '../src/product/tasks/types.ts';
 import type { PhaseResult } from '../src/core/cycle.ts';
 import { parseTaskTimeout } from '../src/product/tasks/timeout.ts';
@@ -21,6 +21,37 @@ test('legacy capture failure is archived while native completed phases survive r
   expect(saved).toEqual(checkpoint);
   saved.phases.one.push(phase('embed','fail'));resumeMaintenanceCheckpoint(saved,true,true);
   expect(saved.phases.one).toEqual([lint,sync]);
+});
+
+test('a finished deep organize reopens the earliest stage that still has pending knowledge',()=>{
+  const sync:PhaseResult={phase:'sync',status:'ok',summary:'已同步',duration_ms:1,details:{}};
+  const extract:PhaseResult={phase:'extract_atoms',status:'warn',summary:'引用无法核对',duration_ms:1,details:{pages_remaining:1,failures:[{error:'atom_evidence_unverified'}]}};
+  const review:PhaseResult={phase:'orphans',status:'ok',summary:'完成',duration_ms:1,details:{}};
+  const checkpoint:MaintenanceCheckpoint={
+    phases:{default:[sync,extract,review]},reports:{default:{status:'partial'}},deepAtomPlans:{default:['notes/invalid-evidence']},
+    deepProgress:{stage:'done',stages:[
+      {id:'check',status:'completed',durationMs:1,result:'',detail:''},
+      {id:'knowledge',status:'partial',durationMs:1,result:'',detail:''},
+      {id:'review',status:'completed',durationMs:1,result:'',detail:''},
+    ],scan:{scanned:1,unchanged:0,complete:true}},
+  };
+  resumeDeepOrganizeCheckpoint(checkpoint,Date.now());
+  expect(checkpoint.deepProgress?.stage).toBe('knowledge');
+  expect(checkpoint.deepProgress?.stages.map(stage=>stage.id)).toEqual(['check']);
+  expect(checkpoint.phases.default).toEqual([sync]);
+  expect(checkpoint.deepAtomPlans).toBeUndefined();
+  expect(checkpoint.reports.default).toBeUndefined();
+});
+
+test('an interrupted deep organize keeps earlier pending knowledge closed',()=>{
+  const extract:PhaseResult={phase:'extract_atoms',status:'warn',summary:'额度已用完',duration_ms:1,details:{pages_remaining:1218}};
+  const checkpoint:MaintenanceCheckpoint={
+    phases:{default:[extract]},reports:{},
+    deepProgress:{stage:'review',stages:[{id:'knowledge',status:'partial',durationMs:1,result:'保留原回执',detail:''}],scan:{scanned:1,unchanged:0,complete:true},current:{elapsedMs:120_000,startedAt:new Date().toISOString()}},
+  };
+  resumeDeepOrganizeCheckpoint(checkpoint,Date.now());
+  expect(checkpoint.deepProgress?.stage).toBe('review');
+  expect(checkpoint.phases.default).toEqual([extract]);
 });
 
 test('task timeout rejects invalid and overflowing timer values',()=>{

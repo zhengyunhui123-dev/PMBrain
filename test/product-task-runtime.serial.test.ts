@@ -86,19 +86,27 @@ function release() { for (const finish of releases) finish(); releases.clear(); 
 
 async function settleOptimize() {
   release();
-  for (let attempt = 0; attempt < 40; attempt++) {
+  for (let attempt = 0; attempt < 20; attempt++) {
     const runs = await runtime.listRuns().catch(() => [] as ConsoleRun[]);
     const live = runs.filter(row => row.searchOptimize && ['queued', 'running'].includes(row.status));
-    if (!live.length) break;
-    release();
-    await Promise.all(live.map(run => runtime.cancel(run.id).catch(() => undefined)));
-    release();
-    await Bun.sleep(50);
+    if (live.length) {
+      release();
+      await Promise.all(live.map(run => runtime.cancel(run.id).catch(() => undefined)));
+      release();
+    }
+    await engine.transaction(async tx => {
+      await tx.executeRaw('SELECT pg_advisory_xact_lock(hashtext($1))', ['pmbrain.search_optimize']);
+      await tx.executeRaw(`UPDATE minion_jobs SET data=jsonb_set(COALESCE(data,'{}'::jsonb),'{importVectorsPending}','false'::jsonb) WHERE data->>'importVectorsPending'='true'`);
+      await tx.executeRaw(`DELETE FROM config WHERE key LIKE 'pmbrain.search_optimize%'`);
+    });
+    await engine.executeRaw(`UPDATE minion_jobs SET status='cancelled', idempotency_key=NULL, lock_token=NULL, lock_until=NULL,
+      finished_at=COALESCE(finished_at, now()), updated_at=now()
+      WHERE idempotency_key=$1 AND status NOT IN ('active','waiting','delayed','waiting-children')`, ['search-optimize:active']);
+    await Bun.sleep(40);
+    const pending = await engine.executeRaw(`SELECT 1 FROM config WHERE key LIKE 'pmbrain.search_optimize%' LIMIT 1`);
+    const again = (await runtime.listRuns().catch(() => [] as ConsoleRun[])).filter(row => row.searchOptimize && ['queued', 'running'].includes(row.status));
+    if (!pending.length && !again.length) return;
   }
-  await engine.executeRaw('DELETE FROM config WHERE key LIKE $1', ['pmbrain.search_optimize%']);
-  await engine.executeRaw(`UPDATE minion_jobs SET status='cancelled', idempotency_key=NULL, lock_token=NULL, lock_until=NULL,
-    finished_at=COALESCE(finished_at, now()), updated_at=now()
-    WHERE idempotency_key=$1 AND status NOT IN ('active','waiting','delayed','waiting-children')`, ['search-optimize:active']);
 }
 
 async function finished(id: string, timeoutMs = 25_000): Promise<ConsoleRun> {
@@ -331,6 +339,7 @@ describe('软件后台任务共用 owner 数据库', () => {
   });
 
   test('导入直接执行核心，原始文件保留，结果持久化并可由新运行时读取', async () => {
+    await settleOptimize();
     const path = join(root, 'background.md');
     const content = '# 后台导入\n\n软件直接导入这份合成资料，并在任务中心保存结果。';
     writeFileSync(path, content);

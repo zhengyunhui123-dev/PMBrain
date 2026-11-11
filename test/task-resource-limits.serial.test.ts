@@ -519,6 +519,8 @@ test('分批同步中主动停止后保持停止，重启后继续原任务完�
 test('正常 2GB 工作集可以继续，软压力回收闲置线程并降并发，恢复后继续领取任务',async()=>{
   let memory=0;
   const runtime=new ProductTaskRuntime(engine,{memoryBytes:()=>memory,totalMemoryBytes:()=>32*1024**3,availableMemoryBytes:()=>14*1024**3,rssCheckIntervalMs:10});
+  await engine.executeRaw(`DELETE FROM config WHERE key LIKE 'pmbrain.search_optimize%'`);
+  await engine.executeRaw(`UPDATE minion_jobs SET status='cancelled', lock_token=NULL, lock_until=NULL, finished_at=COALESCE(finished_at, now()), updated_at=now() WHERE status IN ('waiting','active','delayed','waiting-children','paused') AND data->'task'->>'type'='embed'`);
   await runtime.start();
   try{
     memory=3*1024*1024*1024;

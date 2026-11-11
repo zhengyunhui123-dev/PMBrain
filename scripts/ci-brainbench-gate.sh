@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # BrainBench CI gate (Cathedral 2, decision 4) — local parity with the
-# .github/workflows/test.yml `brainbench` job.
+# .github/workflows/extended-tests.yml `brainbench` job.
 #
 # Governance: the gate compares HEAD's run against MAIN's copy of the
 # committed baseline (git show origin/master:...), NEVER the working tree's —
