@@ -716,7 +716,10 @@ export async function runPhaseCaptureEntities(
   const maxDocumentOutput=readTokenCap(await engine.getConfig('dream.entity_capture.document_max_output_tokens'),isThinkingModel(chosen.model)?defaultMaxOutputTokens(chosen.model)*4:20_000);
   const maxDocumentTurns=Math.min(20,readTokenCap(await engine.getConfig('dream.entity_capture.document_max_turns'),20));
   const turnTimeoutMs=readTokenCap(await engine.getConfig('dream.entity_capture.turn_timeout_ms'),300_000);
-  const configuredJobTimeout=readTokenCap(await engine.getConfig('dream.entity_capture.job_timeout_ms'),maxDocumentTurns*(turnTimeoutMs*2+30_000));
+  const batchCapture=opts.batchCapture??opts.handler==null;
+  const singlePass=batchCapture&&!!opts.quickEntitiesOnly;
+  const jobTurns=singlePass?(opts.roundWork?2:1):maxDocumentTurns;
+  const configuredJobTimeout=readTokenCap(await engine.getConfig('dream.entity_capture.job_timeout_ms'),jobTurns*(turnTimeoutMs*2+30_000));
   const declaredOutputLimit=await engine.getConfig('dream.entity_capture.model_max_output_tokens');
   const modelOutputLimit=declaredOutputLimit?readTokenCap(declaredOutputLimit,defaultMaxOutputTokens(chosen.model)):undefined;
   const nonce = Date.now();
@@ -995,8 +998,6 @@ export async function runPhaseCaptureEntities(
           const baseKey = captureChunkKey(item.scopeKey,chunk.chunkBody);
           const idempotencyKey = planned.force?`${baseKey}:retry:${nonce}`:await retryableKey(engine, baseKey, nonce);
           const acknowledged=(await acknowledgedIngestEntities(engine,chunk,entityIndex)).filter(entity=>!opts.quickEntitiesOnly||['person','company','organization','project'].includes(entity.type));
-          const batchCapture=opts.batchCapture??opts.handler==null;
-          const singlePass=batchCapture&&!!opts.quickEntitiesOnly;
           const remainingCost=costCapCny==null?null:Math.max(0,costCapCny-knownCost-uncertainCost);
           const chunkCostLimit=remainingCost==null?null:Math.min(maximumChunkCost,remainingCost);
           const data: SubagentHandlerData = {
@@ -1023,12 +1024,12 @@ export async function runPhaseCaptureEntities(
           };
           const pageQueueName=`${childQueueName}-${slot}-${chunkSlot}`;
           captureQueues.add(pageQueueName);
-          const child = await queue.add(
+          const submit = (key: string) => queue.add(
             'subagent',
             {...data,capture_cost_ceiling_cny:chunkCostLimit} as unknown as Record<string, unknown>,
             {
               max_stalled: 0,
-              idempotency_key: idempotencyKey,
+              idempotency_key: key,
               timeout_ms: Math.max(1,Math.min(configuredJobTimeout,opts.deadlineAtMs==null?Infinity:opts.deadlineAtMs-Date.now())),
               queue: pageQueueName,
               private_queue_owner_job_id: opts.privateQueueOwnerJobId ?? null,
@@ -1037,6 +1038,10 @@ export async function runPhaseCaptureEntities(
             },
             { allowProtectedSubmit: true },
           );
+          let child = await submit(idempotencyKey);
+          if (child.queue !== pageQueueName && child.status !== 'completed' && await queue.expirePrivateJob(child.id)) {
+            child = await submit(`${baseKey}:retry:${nonce}`);
+          }
           sourceSlugs.add(chunk.slug);
           submittedForPage += 1;
           chunksSubmitted += 1;
@@ -1045,7 +1050,7 @@ export async function runPhaseCaptureEntities(
           if(!reused){activeChunks++;peakChunks=Math.max(peakChunks,activeChunks);}
           reportProgress(activeChunks, chunk.slug, '处理当前分块');
           if(!reused)executedChildIds.push(child.id);
-           if(child.status!=='completed')try{await runSubagentsInline(
+           if(child.status!=='completed' && child.queue===pageQueueName)try{await runSubagentsInline(
             engine,
             queue,
             pageQueueName,
@@ -1059,10 +1064,17 @@ export async function runPhaseCaptureEntities(
           let job;
           try {
              job = executionSignal.aborted?await queue.getJob(child.id):await waitForCompletion(queue, child.id, {
-              timeoutMs: child.timeout_ms??configuredJobTimeout,
-              pollMs: 200,
+              timeoutMs: Math.min(child.timeout_ms??configuredJobTimeout, configuredJobTimeout),
+              pollMs: child.queue===pageQueueName ? 200 : 1000,
               signal: executionSignal,
-              onPoll: opts.yieldDuringPhase,
+              onPoll: async current => {
+                if (current.queue !== pageQueueName && (
+                  current.status === 'active' && (current.lock_until?.getTime() ?? 0) <= Date.now()
+                  || ['waiting', 'delayed'].includes(current.status) && current.private_queue_lease_until
+                    && current.private_queue_lease_until.getTime() <= Date.now()
+                )) await queue.expirePrivateJob(current.id);
+                await opts.yieldDuringPhase?.();
+              },
             });
           } catch (error) {
             if (error instanceof TimeoutError) {
@@ -1235,7 +1247,7 @@ export async function runPhaseCaptureEntities(
     const costCny = ollama ? 0 : (!usageMissing&&sawPricedUsage ? Number(knownCost.toFixed(6)) : null);
     const stopReason = (relationError?'relation_failure':budgetStop??(failureStop?failureReason:windowDeferred&&pagesRemaining>0?'window':'completed')) as CaptureStopReason;
     const isolatedOutputFailures = !!opts.roundWork && !fatalFailure && !relationError && !opts.signal?.aborted
-      && pageFailures.length > 0 && pageFailures.every(failure => failure.kind === 'truncated'
+      && pageFailures.length > 0 && pageFailures.every(failure => failure.kind === 'truncated' || failure.kind === 'lease_lost'
         || failure.kind === 'parse' || failure.kind === 'ingest_validation'
           && /ingest entity evidence missing|ingest no_entities conflicts/.test(failure.reason));
     const degradedOpen = failureStop && captureDegradedReason(failureReason) && !fatalFailure;

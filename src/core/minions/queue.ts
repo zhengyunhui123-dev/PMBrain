@@ -33,6 +33,15 @@ const DEFAULT_MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024; // 5 MiB
 export const DREAM_INLINE_PRIVATE_QUEUE_PREFIX = 'dream-inline-';
 export const DEFAULT_PRIVATE_QUEUE_LEASE_MS = 10 * 60 * 1000;
 export const PRIVATE_QUEUE_RECONCILE_REASON_PREFIX = 'private_queue_reconciled';
+export const RENEW_OWNED_INLINE_JOB_LOCK = `UPDATE minion_jobs
+   SET lock_until = clock_timestamp() + ($1::double precision * interval '1 millisecond'),
+       private_queue_lease_until = GREATEST(private_queue_lease_until, clock_timestamp() + ($5::double precision * interval '1 millisecond')),
+       updated_at = clock_timestamp()
+   WHERE id = $2 AND lock_token = $3 AND status = 'active'
+     AND private_queue_owner_job_id = $4 AND queue LIKE 'dream-inline-%'
+     AND EXISTS (SELECT 1 FROM minion_jobs owner WHERE owner.id = $4 AND owner.status = 'active'
+       AND ($6::text IS NULL OR owner.lock_token = $6))
+   RETURNING id`;
 
 export function isDreamInlinePrivateQueue(queueName: string): boolean {
   return queueName.startsWith(DREAM_INLINE_PRIVATE_QUEUE_PREFIX);
@@ -1292,6 +1301,23 @@ export class MinionQueue {
        RETURNING id`,
       [lockDurationMs, id, lockToken]
     );
+    return rows.length > 0;
+  }
+
+  async renewOwnedInlineJobLock(id: number, lockToken: string, lockDurationMs: number, ownerId: number, ownerToken?: string): Promise<boolean> {
+    const rows = await this.engine.executeRaw<{ id: number }>(RENEW_OWNED_INLINE_JOB_LOCK,
+      [lockDurationMs, id, lockToken, ownerId, DEFAULT_PRIVATE_QUEUE_LEASE_MS, ownerToken ?? null]);
+    return rows.length > 0;
+  }
+
+  async expirePrivateJob(id: number): Promise<boolean> {
+    const rows = await this.engine.executeRaw<{ id: number }>(
+      `UPDATE minion_jobs SET status = 'dead', lock_token = NULL, lock_until = NULL,
+         error_text = 'ingest_lease_lost: entity subtask lease expired', finished_at = now(), updated_at = now()
+       WHERE id = $1 AND name = 'subagent' AND queue LIKE 'dream-inline-%' AND data ? 'ingest_context'
+         AND ((status = 'active' AND (lock_until IS NULL OR lock_until <= clock_timestamp()))
+           OR (status IN ('waiting', 'delayed') AND private_queue_lease_until <= clock_timestamp()))
+       RETURNING id`, [id]);
     return rows.length > 0;
   }
 

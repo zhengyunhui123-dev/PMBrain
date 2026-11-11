@@ -14,6 +14,8 @@ import { recordSyncedGitFile } from './synced-git.ts';
 import { isSourceGitRepository } from '../../core/source-git.ts';
 import { withDeadline } from '../deadline.ts';
 import { recordDeepVectorPages } from './search-optimize-store.ts';
+import { RENEW_OWNED_INLINE_JOB_LOCK } from '../../core/minions/queue.ts';
+import { withDatabasePriority } from '../database/priority.ts';
 
 type RpcMessage = Extract<TaskWorkerMessage, { type: 'rpc' }>;
 type PageSnapshot = { pages: Map<string, string>; parent?: PageSnapshot };
@@ -115,6 +117,11 @@ export class TaskEngineHost {
   private async perform(message: RpcMessage): Promise<unknown> {
     const { method, args, scope: scopeId } = message;
     const renewal = leaseRenewal(method, args);
+    if (scopeId === undefined && this.owner.kind === 'pglite' && renewal?.table === 'minion_jobs'
+      && args[0] === RENEW_OWNED_INLINE_JOB_LOCK && Array.isArray(args[1]) && args[1][3] === this.jobId) {
+      const parameters = [...args[1].slice(0, 5), this.token];
+      return withDatabasePriority(0, () => this.owner.executeRaw(RENEW_OWNED_INLINE_JOB_LOCK, parameters));
+    }
     if (scopeId === undefined && this.owner.kind === 'pglite' && renewal?.table === 'gbrain_cycle_locks' && this.cycleLocks.has(String(renewal.id))) {
       return this.owner.executeRaw(String(args[0]), args[1] as unknown[]);
     }
