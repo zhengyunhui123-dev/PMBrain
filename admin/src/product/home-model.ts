@@ -192,6 +192,12 @@ export function displayDatabasePath(value: string): string {
   return `${trimmed}${separator}brain.pglite`;
 }
 
+export function keywordOnlyChoice(previous: boolean, input: { onlyImport: boolean; needsSetup: boolean; embeddingChanged: boolean; changeConfirmed: boolean }): boolean {
+  if (input.needsSetup) return input.onlyImport;
+  if (input.embeddingChanged && !input.changeConfirmed) return previous;
+  return input.onlyImport;
+}
+
 export function createFinishMessage(input: { skipped: boolean; keywordOnly: boolean }): string {
   if (input.skipped) return '知识库已创建，可以稍后从首页导入资料。';
   if (input.keywordOnly) return '资料已保存，可用关键词搜索。配置模型后可使用 AI 整理、语义搜索和问答。';

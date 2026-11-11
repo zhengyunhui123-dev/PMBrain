@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { createFinishMessage, displayDatabasePath } from '../admin/src/product/home-model';
+import { createFinishMessage, displayDatabasePath, keywordOnlyChoice } from '../admin/src/product/home-model';
 import { initialCreateStep, modelReadiness, modelSetupIssue, onboardingAction, onboardingTitle } from '../admin/src/product/model-readiness';
 
 describe('首次使用按真实模型配置继续', () => {
@@ -41,6 +41,12 @@ describe('首次使用按真实模型配置继续', () => {
     const ready = modelReadiness({ chatModel: 'old:chat', embeddingModel: 'old:embed', embeddingDimensions: 768 });
     expect(initialCreateStep(false, ready)).toBe('sources');
     expect(onboardingAction(false, ready)).toBe('import');
+  });
+
+  test('取消更换向量模型时保留原来的导入方式，新建库仍按本次选择', () => {
+    expect(keywordOnlyChoice(true, { onlyImport: false, needsSetup: false, embeddingChanged: true, changeConfirmed: false })).toBe(true);
+    expect(keywordOnlyChoice(false, { onlyImport: true, needsSetup: false, embeddingChanged: true, changeConfirmed: true })).toBe(true);
+    expect(keywordOnlyChoice(false, { onlyImport: true, needsSetup: true, embeddingChanged: false, changeConfirmed: true })).toBe(true);
   });
 
   test('只解释已知缺配置错误，连接失败等原生错误保留', () => {

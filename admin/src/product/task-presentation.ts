@@ -1,7 +1,7 @@
 import type { ConsoleRun } from '../lib/shared';
-import { importOutcome } from '../../../shared/import-outcome';
 import { deepOrganizePercent, deepOrganizeTotals, deepStageElapsed, deepStageTitle } from '../../../shared/deep-organize-progress';
 import {maintenancePercent} from '../../../shared/maintenance-progress';
+import { taskIsPartial, taskStatusLabel, taskWasSkipped } from '../../../shared/task-view-state';
 
 export function taskPhaseSummary(run: ConsoleRun, now = Date.now()) {
   const view=run.product,phase=view?.phaseProgress;
@@ -33,9 +33,6 @@ export function taskPhaseSummary(run: ConsoleRun, now = Date.now()) {
 }
 
 export const taskStopping = (run: ConsoleRun) => run.status === 'running' && run.error === '正在停止任务…';
-const taskWasSkipped = (run: ConsoleRun) => (run.result as {status?:string}|undefined)?.status === 'skipped' || run.product?.stage === '任务未执行';
-const taskIsPartial=(run:ConsoleRun)=>(run.result as {status?:string}|undefined)?.status==='partial'||run.product?.stage.startsWith('部分完成')===true
-  || (run.kind==='import_path' && !['running','queued','cancelled'].includes(run.status) && importOutcome(run.result)?.outcome==='partial');
 export const taskCanRetry=(run:ConsoleRun)=>run.id.startsWith('task-')&&(['failed','cancelled'].includes(run.status)||(run.searchOptimize===true&&run.status==='paused')||(run.status==='completed'&&['import_path','dream_capture_entities','dream_quick','dream_cycle','dream_sync'].includes(run.kind)&&taskIsPartial(run)));
 export const taskRoundCompleted = (run: ConsoleRun) => run.kind.startsWith('dream_') && run.status === 'completed' && !taskWasSkipped(run);
 export const taskLiveStage = (run: ConsoleRun) => run.product?.deep ? deepStageTitle(run.product.deep) : run.product?.stage;
@@ -44,7 +41,7 @@ export const taskPercent = (run: ConsoleRun) => run.product?.deep?deepOrganizePe
   :run.product?.importCounts&&run.product.total!=null?run.product.total?Math.min(100,Math.round((run.product.importCounts.imported+run.product.importCounts.unchanged)/run.product.total*1000)/10):100
   :run.product?.vectorTotals?run.product.vectorTotals.total?Math.min(100,Math.round(run.product.vectorTotals.completed/run.product.vectorTotals.total*1000)/10):run.status==='completed'?100:null
   :taskRoundCompleted(run) ? null : run.status==='running'&&run.kind.startsWith('dream_')&&run.product?.phaseProgress ? run.product.phasePercent : run.product?.percent ?? null;
-export const taskStatus = (run: ConsoleRun) => taskStopping(run) ? '正在停止' : run.searchOptimize&&run.status==='paused' ? '已暂停' : run.searchOptimize&&run.status==='queued'&&run.product?.background?.mode==='waiting' ? run.product.stage.includes('自动重试')?'等待重试':'等待空闲' : run.kind==='embed_stale'&&run.status==='cancelled' ? '已暂停' : taskWasSkipped(run) ? '未执行' : run.product?.stage.includes('AI 提炼未执行')?'AI 提炼未执行':run.kind!=='import_path'&&run.status==='completed'&&taskIsPartial(run)?'部分完成':taskRoundCompleted(run) ? '本轮已完成':run.kind==='import_path'&&taskIsPartial(run)?'部分完成':run.kind==='import_path'&&run.status==='completed'?'导入成功':({ queued:'排队中',running:'执行中',completed:'已完成',failed:'失败',cancelled:'已停止',paused:'已暂停' })[run.status];
+export const taskStatus = taskStatusLabel;
 
 export function quickVectorSummary(run: ConsoleRun, runs: ConsoleRun[]): string | null {
   if (!run.kind.includes('quick')) return null;
