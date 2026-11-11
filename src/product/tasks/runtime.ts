@@ -886,8 +886,7 @@ export class ProductTaskRuntime {
     await this.stoppingSessions.get(resumedId);
     await this.executions.get(resumedId)?.done;
     if(task.type==='dream'&&task.input.preset==='full'){
-      const sourceId=task.input.sourceId?await resolveSourceId(this.engine,task.input.sourceId):'default';
-      await (await import('./dream-knowledge.ts')).resetHeldDreamKnowledge(this.engine,sourceId);
+      await (await import('./dream-knowledge.ts')).resetHeldDreamKnowledge(this.engine,task.input.sourceId||'default');
     }
     if (task.type === 'dream' && usesSyncFileQueue(task.input)) {
       const jobId = Number(id.slice(5));
