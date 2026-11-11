@@ -15,8 +15,11 @@ import type { MinionHandler, MinionJobContext } from '../minions/types.ts';
 import { UnrecoverableError } from '../minions/types.ts';
 import { combineAbortSignals, throwIfAborted } from '../abort-check.ts';
 import {BudgetExhausted} from '../budget/budget-tracker.ts';
+import { lockRenewalAudit } from '../audit/lock-renewal-audit.ts';
+import { resolveLockRenewalKnobs, runLockRenewalTick } from '../minions/lock-renewal-tick.ts';
 
 export const INLINE_LOCK_MS = 30_000;
+const INLINE_ABORT_GRACE_MS = 30_000;
 
 export async function runSubagentsInline(
   engine: BrainEngine,
@@ -94,17 +97,44 @@ export async function runSubagentsInline(
     const timeout = timeoutMs != null
       ? setTimeout(() => abort.abort(new Error('timeout')), timeoutMs)
       : null;
+    let finished = false;
+    let renewing = false;
+    const ownerId = job.data.ingest_context ? job.private_queue_owner_job_id : null;
+    const renewal = {
+      jobId: job.id, jobName: job.name, lockToken, lockDurationMs: lockMs,
+      knobs: resolveLockRenewalKnobs(process.env, lockMs),
+      lastSuccessfulRenewalAt: Date.now(), consecutiveFailures: 0,
+      cancelled: () => finished || context.signal.aborted,
+    };
     const renew = setInterval(() => {
-      void queue.renewLock(job.id, lockToken, lockMs).then(ok => {
-        if (!ok && !abort.signal.aborted) abort.abort(new Error('lock-renewal-failed'));
-      }).catch(() => { /* best-effort; the next tick retries */ });
+      if (renewing || renewal.cancelled()) return;
+      renewing = true;
+      void runLockRenewalTick({
+        renewLock: (id, token, duration) => ownerId === null
+          ? queue.renewLock(id, token, duration)
+          : queue.renewOwnedInlineJobLock(id, token, duration, ownerId),
+        audit: lockRenewalAudit, now: Date.now, setTimeout,
+      }, renewal).then(result => {
+        if (result.kind === 'lock_lost' || result.kind === 'should_abort') {
+          abort.abort(new Error('lock-renewal-failed'));
+        }
+      }).catch(() => abort.abort(new Error('lock-renewal-failed')))
+        .finally(() => { renewing = false; });
     }, Math.max(1000, Math.floor(lockMs / 3)));
     const keepalive = yieldDuringPhase
       ? setInterval(() => { void yieldDuringPhase().catch(() => { /* best-effort */ }); }, 60_000)
       : null;
 
+    let abortGrace: ReturnType<typeof setTimeout> | undefined;
+    let onAbort: (() => void) | undefined;
     try {
-      const result = await handler(context);
+      context.signal.throwIfAborted();
+      const stopped = job.data.ingest_context ? new Promise<never>((_, reject) => {
+        onAbort = () => { abortGrace = setTimeout(() => reject(context.signal.reason), INLINE_ABORT_GRACE_MS); };
+        context.signal.addEventListener('abort', onAbort, { once: true });
+      }) : undefined;
+      const result = await (stopped ? Promise.race([handler(context), stopped]) : handler(context));
+      context.signal.throwIfAborted();
       await queue.completeJob(
         job.id,
         lockToken,
@@ -114,7 +144,9 @@ export async function runSubagentsInline(
       );
     } catch (error) {
       if(error instanceof BudgetExhausted)throw error;
-      if (error instanceof RateLeaseUnavailableError) {
+      if (abort.signal.reason?.message === 'lock-renewal-failed') {
+        await queue.failJob(job.id, lockToken, 'ingest_lease_lost: execution lock renewal failed', 'dead', 0);
+      } else if (error instanceof RateLeaseUnavailableError) {
         await queue.releaseLeaseFullJob(
           job.id,
           lockToken,
@@ -133,6 +165,9 @@ export async function runSubagentsInline(
         );
       }
     } finally {
+      finished = true;
+      if (onAbort) context.signal.removeEventListener('abort', onAbort);
+      if (abortGrace) clearTimeout(abortGrace);
       if (timeout) clearTimeout(timeout);
       clearInterval(renew);
       if (keepalive) clearInterval(keepalive);

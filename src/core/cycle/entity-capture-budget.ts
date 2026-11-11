@@ -7,7 +7,7 @@ import type {ServiceModel} from '../../../shared/model-services.ts';
 export const DEFAULT_ENTITY_CAPTURE_COST_CAP_CNY = 5;
 export const ENTITY_CAPTURE_CANDIDATE_LIMIT = 60;
 
-export type CaptureStopReason = 'completed' | 'window' | 'tokens' | 'document_tokens' | 'document_turns' | 'cost' | 'failure' | 'ingest_validation' | 'relation_failure' | 'aborted' | 'user_stop' | 'service_shutdown' | 'model_unavailable'|'truncated'|'parse'|'timeout'|'network'|'rate_limit'|'provider_5xx'|'no_tool';
+export type CaptureStopReason = 'completed' | 'window' | 'tokens' | 'document_tokens' | 'document_turns' | 'cost' | 'failure' | 'ingest_validation' | 'relation_failure' | 'aborted' | 'user_stop' | 'service_shutdown' | 'model_unavailable'|'truncated'|'parse'|'timeout'|'network'|'rate_limit'|'provider_5xx'|'no_tool'|'lease_lost';
 
 import { CJK_PLAIN_MENTION_BLOCKLIST } from '../pmbrain-adapters/mention-policy.ts';
 export { CJK_PLAIN_MENTION_BLOCKLIST };
@@ -167,6 +167,7 @@ const STOP_REASON_TEXT: Record<CaptureStopReason, string> = {
   parse:'模型输出解析失败，失败页面可继续',
   no_tool:'模型没有返回可保存的实体结果，失败页面可继续',
   timeout:'模型请求超时',
+  lease_lost:'实体子任务失联，未完成分块可继续',
   network:'模型网络请求失败',
   rate_limit:'模型服务限流',
   provider_5xx:'模型服务端故障',
@@ -395,7 +396,7 @@ export function rewriteCapturedIdentity(content: string, existingTitle: string, 
 }
 
 export function captureDegradedReason(reason: CaptureStopReason): boolean {
-  return reason === 'truncated' || reason === 'parse' || reason === 'timeout' || reason === 'no_tool'
+  return reason === 'truncated' || reason === 'parse' || reason === 'timeout' || reason === 'no_tool' || reason === 'lease_lost'
     || reason === 'document_turns' || reason === 'document_tokens' || reason === 'network'
     || reason === 'rate_limit' || reason === 'provider_5xx';
 }
@@ -435,6 +436,10 @@ export function captureFailureDisposition(input: {
   } else if (/ingest_output_truncated/.test(message)) {
     reason = 'truncated';
     fatal = false;
+  } else if (/ingest_lease_lost|max stalled count exceeded/.test(message)) {
+    reason = 'lease_lost';
+    fatal = false;
+    pageStopped = false;
   } else if (/ingest receipt (?:missing|requires)|ingest invalid JSON|ingest_provider_parse/.test(message)) {
     reason = 'parse';
     fatal = false;

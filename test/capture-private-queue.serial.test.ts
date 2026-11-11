@@ -2,8 +2,10 @@ import { afterAll, beforeAll, beforeEach, expect, test } from 'bun:test';
 import type { BrainEngine } from '../src/core/engine.ts';
 import { PGLiteEngine } from '../src/core/pglite-engine.ts';
 import { PostgresEngine } from '../src/core/postgres-engine.ts';
-import { MinionQueue } from '../src/core/minions/queue.ts';
+import { MinionQueue, RENEW_OWNED_INLINE_JOB_LOCK } from '../src/core/minions/queue.ts';
 import { runSubagentsInline } from '../src/core/cycle/inline-drain.ts';
+import { TaskEngineHost } from '../src/product/tasks/engine-host.ts';
+import { databasePriority } from '../src/product/database/priority.ts';
 import { assertSafeE2eDatabaseUrl } from './helpers/db-guard.ts';
 import { resetPgliteState } from './helpers/reset-pglite.ts';
 
@@ -43,3 +45,67 @@ test('私有队列恢复只处理自己的延迟和超时任务，其他队列�
   await queue.promoteDelayed();
   expect((await queue.getJob(otherDelayed.id))?.status).toBe('waiting');
 }, 60_000);
+
+test('实体子任务续租同时延长执行和队列租约，父任务换锁后拒绝旧续租', async () => {
+  const queue = new MinionQueue(engine);
+  const owner = await queue.add('maintenance', {}, { queue: 'renewal-parent' });
+  await queue.claim('parent-token', 30_000, 'renewal-parent', ['maintenance']);
+  const child = await queue.add('subagent', { ingest_context: {} }, {
+    queue: 'dream-inline-renewal', private_queue_owner_job_id: owner.id,
+    private_queue_owner_token: 'queue-token', private_queue_lease_ms: 60_000,
+  }, { allowProtectedSubmit: true });
+  await queue.claim('child-token', 10_000, child.queue, ['subagent']);
+  await engine.executeRaw("UPDATE minion_jobs SET private_queue_lease_until=now()-interval '1 second' WHERE id=$1", [child.id]);
+  expect(await queue.renewOwnedInlineJobLock(child.id, 'child-token', 30_000, owner.id, 'parent-token')).toBe(true);
+  const renewed = await queue.getJob(child.id);
+  expect(renewed!.lock_until!.getTime()).toBeGreaterThan(Date.now() + 20_000);
+  expect(renewed!.private_queue_lease_until!.getTime()).toBeGreaterThan(Date.now() + 60_000);
+  expect(await queue.expirePrivateJob(child.id)).toBe(false);
+  expect(await queue.renewOwnedInlineJobLock(child.id, 'child-token', 30_000, owner.id, 'stale-parent-token')).toBe(false);
+  if (engine.kind !== 'pglite') return;
+  const calls: number[] = [];
+  const ownerEngine = new Proxy(engine, {
+    get(target, key) {
+      if (key === 'transaction') throw new Error('续租不应另开写事务');
+      if (key === 'executeRaw') return (sql: string, params: unknown[]) => {
+        calls.push(databasePriority());
+        return target.executeRaw(sql, params);
+      };
+      const value = Reflect.get(target, key);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+  const host = new TaskEngineHost(ownerEngine, owner.id, 'parent-token', async () => {});
+  const message = {
+    type: 'rpc' as const, id: 1, method: 'executeRaw',
+    args: [RENEW_OWNED_INLINE_JOB_LOCK, [30_000, child.id, 'child-token', owner.id, 60_000, 'ignored']],
+  };
+  try {
+    expect(await host.dispatch(message)).toEqual([{ id: child.id }]);
+    expect(calls).toEqual([0]);
+    await engine.executeRaw("UPDATE minion_jobs SET lock_token='replacement' WHERE id=$1", [owner.id]);
+    expect(await host.dispatch(message)).toEqual([]);
+  } finally {
+    await host.close();
+  }
+});
+
+test('子任务的执行锁被替换后会中止正在运行的处理', async () => {
+  const queue = new MinionQueue(engine);
+  const owner = await queue.add('maintenance', {}, { queue: 'renewal-parent' });
+  await queue.claim('parent-token', 30_000, 'renewal-parent', ['maintenance']);
+  const child = await queue.add('subagent', { ingest_context: {} }, {
+    queue: 'dream-inline-revoked', private_queue_owner_job_id: owner.id,
+    private_queue_owner_token: 'queue-token', private_queue_lease_ms: 60_000,
+  }, { allowProtectedSubmit: true });
+  let abortReason: string | undefined;
+  await runSubagentsInline(engine, queue, child.queue, undefined, async context => {
+    await engine.executeRaw("UPDATE minion_jobs SET lock_token='replacement', status='cancelled' WHERE id=$1", [child.id]);
+    await new Promise<void>(resolve => context.signal.addEventListener('abort', () => resolve(), { once: true }));
+    abortReason = context.signal.reason.message;
+    return { success: true };
+  }, 3000);
+  expect(abortReason).toBe('lock-renewal-failed');
+  expect((await queue.getJob(child.id))?.status).toBe('cancelled');
+  expect((await queue.getJob(child.id))?.result).toBeNull();
+}, 10_000);

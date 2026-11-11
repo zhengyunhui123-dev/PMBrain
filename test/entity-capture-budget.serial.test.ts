@@ -16,6 +16,7 @@ import {annotateIngestContent,activeIngestContent} from '../src/core/pmbrain-ada
 import {parseMarkdown} from '../src/core/markdown.ts';
 import {entityIngestTools} from '../src/core/pmbrain-adapters/entity-ingest-workflow.ts';
 import type {ToolDef} from '../src/core/minions/types.ts';
+import { MinionQueue } from '../src/core/minions/queue.ts';
 
 process.env.PMBRAIN_HOME = mkdtempSync(join(tmpdir(), 'pmbrain-capture-home-'));
 
@@ -45,6 +46,34 @@ async function note(slug: string, body: string): Promise<void> {
     type: 'note', title: slug, compiled_truth: body, timeline: '', frontmatter: {},
   }, { sourceId: 'vault' });
 }
+
+test('续跑回收失联实体分块并复用已经验收的分块', async () => {
+  await note('notes/verified', '这份资料已经有验收记录。');
+  await note('notes/interrupted', '这份资料的实体分块曾中断。');
+  const calls: string[] = [];
+  let interrupted = true;
+  const options = {
+    sourceId: 'vault',
+    handler: async (ctx: MinionJobContext) => {
+      const slug = (ctx.data.ingest_context as { slug: string }).slug;
+      calls.push(slug);
+      if (slug === 'notes/interrupted' && interrupted) throw new UnrecoverableError('ingest invalid JSON');
+      return { ingest_verified: true, stop_reason: 'end_turn', tokens: { in: 1, out: 1 } };
+    },
+  };
+  await runPhaseCaptureEntities(engine, options);
+  expect(calls.toSorted()).toEqual(['notes/interrupted', 'notes/verified']);
+  const [old] = await engine.executeRaw<{ id: number }>(
+    `UPDATE minion_jobs SET status='active', lock_token='old-worker', lock_until=now()-interval '1 minute', finished_at=NULL
+     WHERE data->'ingest_context'->>'slug'='notes/interrupted' RETURNING id`,
+  );
+  interrupted = false;
+  calls.length = 0;
+  const result = await runPhaseCaptureEntities(engine, options);
+  expect(calls).toEqual(['notes/interrupted']);
+  expect(result.details.pages_remaining).toBe(0);
+  expect((await new MinionQueue(engine).getJob(old.id))?.status).toBe('dead');
+}, 15_000);
 
 test('同页前插和局部变更只请求变化分块，不变资料继续时零请求',async()=>{
   const original=Array.from({length:2400},(_,index)=>`${index}号资料记录。`).join('');
@@ -396,16 +425,18 @@ for(const [errorText,reason] of [
  ['ingest receipt missing or invalid JSON','parse'],
  ['ingest repeated failed write: brain_put_page','ingest_validation'],
  ['ingest_provider_parse: invalid response JSON','parse'],
+ ['ingest_lease_lost: execution lock renewal failed','lease_lost'],
 ] as const)test(`${reason} 坏页留待重试，后续正常页完成；再次继续只领取坏页`,async()=>{
  await note('notes/a-bad','这份资料包含三纪早会体系，模拟思考输出持续被截断。');
  await note('notes/z-good','这份正常资料包含团队例会和风险核对，模拟完成实体识别。');
  let calls=0;
- const first=await runPhaseCaptureEntities(engine,{sourceId:'vault',handler:async ctx=>{
+ const first=await runPhaseCaptureEntities(engine,{sourceId:'vault',...(reason==='lease_lost'&&{roundWork:{prioritySlugs:[]}}),handler:async ctx=>{
   calls++;if(promptOf(ctx).includes('notes/a-bad'))throw new UnrecoverableError(errorText);
   return {ingest_verified:true,stop_reason:'end_turn',tokens:{in:10,out:5}};
  }});
  expect(calls).toBe(2);expect(first.details.pages_processed).toBe(1);expect(first.details.pages_failed).toBe(1);
  expect(first.details.stop_reason).toBe(reason);if(reason==='truncated')expect(first.summary).toContain('输出被截断');
+ if(reason==='lease_lost')expect(first.details.isolated_output_failures).toBe(true);
  calls=0;
  const next=await runPhaseCaptureEntities(engine,{sourceId:'vault',handler:async()=>{calls++;return {ingest_verified:true,stop_reason:'end_turn',tokens:{in:10,out:5}};}});
  expect(calls).toBe(1);expect(next.status).toBe('ok');
