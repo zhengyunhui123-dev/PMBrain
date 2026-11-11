@@ -1710,7 +1710,8 @@ export class ProductTaskRuntime {
 
   private applyResourcePressure():void{
     const constrained=this.localPressure||this.externalPressure;
-    this.worker.setConcurrency(constrained ? 1 : 2);
+    const backgroundActive=[...this.executions.values()].some(execution=>execution.background);
+    this.worker.setConcurrency(constrained && !backgroundActive ? 1 : 2);
     const ocrActive=[...this.executions.values()].some(execution=>execution.run().kind==='document_ocr');
     this.fileWorker.setConcurrency(ocrActive?2:constrained||this.engine.kind==='pglite'?1:documentResourcePlan(this.background.resourceSample()).concurrency);
     for(const execution of this.executions.values())execution.adjust(constrained);
