@@ -127,6 +127,7 @@ export class ProductTaskRuntime {
   private sessionRefresh = new Map<number, { timer: ReturnType<typeof setTimeout>; file?: string; dirty: boolean }>();
   private pendingImportVectors = new Set<number>();
   private importVectorHandoff: Promise<void> | null = null;
+  private importVectorHandoffRequested = false;
   private searchOptimizeResume: Promise<void> | null = null;
   private quickProgressPersistedAt = new Map<number,number>();
   private loop: Promise<void> | null = null;
@@ -431,10 +432,18 @@ export class ProductTaskRuntime {
   }
 
   private scheduleImportVectorHandoff(): void {
-    if (this.stopped || this.paused || this.failure || this.recoveringOwner || this.importVectorHandoff || !this.pendingImportVectors.size) return;
+    if (this.stopped || this.paused || this.failure || this.recoveringOwner || !this.pendingImportVectors.size) return;
+    if (this.importVectorHandoff) {
+      this.importVectorHandoffRequested = true;
+      return;
+    }
+    this.importVectorHandoffRequested = false;
     this.importVectorHandoff = withDatabasePriority(3, () => this.handoffImportedVectors())
       .catch(error => console.error('[tasks] import vector handoff:', error))
-      .finally(() => { this.importVectorHandoff = null; });
+      .finally(() => {
+        this.importVectorHandoff = null;
+        if (this.importVectorHandoffRequested && !this.stopped && !this.paused) this.scheduleImportVectorHandoff();
+      });
   }
 
   private async handoffImportedVectors(): Promise<void> {
