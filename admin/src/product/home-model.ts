@@ -185,6 +185,19 @@ export function importBuildDetail(run: ImportRunSnapshot | null): string {
   return '正在保存资料。保存后即导入成功，知识向量化将在空闲时自动进行。';
 }
 
+export function displayDatabasePath(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed || /[\\/]?brain\.pglite$/i.test(trimmed)) return trimmed;
+  const separator = trimmed.endsWith('\\') || trimmed.endsWith('/') ? '' : '\\';
+  return `${trimmed}${separator}brain.pglite`;
+}
+
+export function createFinishMessage(input: { skipped: boolean; keywordOnly: boolean }): string {
+  if (input.skipped) return '知识库已创建，可以稍后从首页导入资料。';
+  if (input.keywordOnly) return '资料已保存，可用关键词搜索。配置模型后可使用 AI 整理、语义搜索和问答。';
+  return '导入成功，资料已保存。知识向量化将在空闲时自动进行。';
+}
+
 export function suggestedChatModel(current: string | undefined, choices: Array<{ value: string }>): string | null {
   if (current?.trim()) return null;
   return choices.length === 1 ? choices[0].value : null;

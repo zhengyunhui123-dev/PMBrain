@@ -14,6 +14,11 @@ export function onboardingAction(needsSetup: boolean, readiness: ReturnType<type
   return !readiness.complete ? 'models' : needsSetup ? 'create' : 'import';
 }
 
+export function onboardingTitle(needsSetup: boolean, readiness: ReturnType<typeof modelReadiness>) {
+  if (!readiness.complete) return needsSetup ? '先配置模型，开始使用 PMBrain' : '补齐模型配置，开始整理和提问';
+  return needsSetup ? '模型已配置，接下来创建知识库' : '知识库已创建，接下来导入资料';
+}
+
 export function initialCreateStep(needsSetup: boolean, readiness: ReturnType<typeof modelReadiness>) {
   return !readiness.complete ? 'models' : needsSetup ? 'create' : 'sources';
 }

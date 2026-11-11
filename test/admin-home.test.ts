@@ -81,6 +81,10 @@ describe('首页按有没有知识库区分，并接上现有能力', () => {
     expect(app).toContain("[ListTodo, '任务中心', 'tasks']");
     expect(app).not.toContain('知识工作台');
     expect(app).toContain('aria-label={collapsed ? \'展开菜单\' : \'收起菜单\'}');
+    expect(read('admin/src/product/model-readiness.ts')).toContain('先配置模型，开始使用 PMBrain');
+    expect(home).toContain('onboardingTitle');
+    expect(home).toContain('导入第一份资料');
+    expect(home).toContain('首页会显示下一项，三项都完成后会收起这份引导。');
     expect(home).toContain('创建我的知识库');
     expect(home).toContain('已有知识库？');
     expect(home).toContain("'wb-composer'");
@@ -100,6 +104,10 @@ describe('首页按有没有知识库区分，并接上现有能力', () => {
     const imports = read('admin/src/product/import-materials.ts');
     expect(imports).toContain('dependencies.api.startImportRun');
     expect(imports).toContain('dependencies.api.startImportUploadRun');
+    expect(create).toContain('选择知识库在这台电脑上的存放位置。');
+    expect(create).toContain('已填好默认位置，可以直接创建。');
+    expect(create).toContain('选择一个存放资料的文件夹。也可以先跳过，以后从首页的「导入资料」添加。');
+    expect(create).toContain('createFinishMessage');
     expect(create).toContain('选择文件夹');
     expect(read('admin/src/workbench/Workbench.tsx')).toContain('pmbrain:open-conversation');
   });
