@@ -11,7 +11,8 @@ export function maintenanceFailure(result: unknown): string | null {
   const failed = report.phases?.find(phase => {
     if (phase.status === 'fail' || errorKeys.some(key => !!phase.details?.[key])) return true;
     if (report.status === 'partial' && phase.phase === 'capture_entities' && phase.status === 'warn'
-      && phase.details?.isolated_output_failures === true && !phase.error) return false;
+      && phase.details?.isolated_output_failures === true && !phase.error
+      && phase.details?.stop_reason !== 'parse') return false;
     return (phase.error?.message && !['tokens', 'cost'].includes(phase.details?.stop_reason ?? ''))
       || ['failure', 'ingest_validation', 'relation_failure', 'model_unavailable', 'parse'].includes(phase.details?.stop_reason ?? '')
       || (phase.details?.page_failures?.length ?? 0) > 0;

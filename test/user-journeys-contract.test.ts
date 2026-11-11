@@ -57,7 +57,7 @@ describe('core user journeys cover packaged Desktop openability', () => {
     expect(journeys).toContain('runs-on: windows-latest');
     expect(journeys).toContain('bun-version: 1.3.14');
     const testWorkflow = read('test.yml');
-    expect(testWorkflow.match(/bun-version: 1\.4\.2/g)).toHaveLength(2);
+    expect(testWorkflow.match(/bun-version: 1\.4\.2/g)).toHaveLength(1);
     expect(testWorkflow).toContain('serial-tests');
     for (const name of ['e2e.yml', 'heavy-tests.yml', 'core-user-journeys.yml', 'release.yml']) {
       const body = read(name);

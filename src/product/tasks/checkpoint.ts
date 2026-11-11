@@ -54,6 +54,28 @@ export function resumeDeepOrganizeCheckpoint(checkpoint: MaintenanceCheckpoint, 
     return;
   }
   pauseDeepStage(round, stoppedAt);
+  if (round.stage === 'done') {
+    const pendingIndex = DEEP_ORGANIZE_STAGES.findIndex(stage => {
+      const names = new Set<string>(stage.phases);
+      return Object.values(checkpoint.phases).some(phases => phases.some(phase => names.has(phase.phase)
+        && (phase.status === 'fail' || (phase.status === 'warn' && phaseHasPendingWork(phase)))));
+    });
+    if (pendingIndex >= 0) {
+      const reopenNames = new Set<string>(DEEP_ORGANIZE_STAGES.slice(pendingIndex).flatMap(stage => [...stage.phases]));
+      round.stage = DEEP_ORGANIZE_STAGES[pendingIndex].id;
+      round.stages = round.stages.filter(saved => {
+        const index = DEEP_ORGANIZE_STAGES.findIndex(stage => stage.id === saved.id);
+        return index >= 0 && index < pendingIndex;
+      });
+      delete round.current;
+      for (const [source, phases] of Object.entries(checkpoint.phases)) {
+        checkpoint.phases[source] = phases.filter(phase => !reopenNames.has(phase.phase));
+        delete checkpoint.reports[source];
+      }
+      if (reopenNames.has('extract_atoms')) delete checkpoint.deepAtomPlans;
+      return;
+    }
+  }
   const current = DEEP_ORGANIZE_STAGES.find(stage => stage.id === round.stage);
   if (!current) return;
   const phaseNames = new Set<string>(current.phases);

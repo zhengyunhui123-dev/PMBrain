@@ -150,6 +150,8 @@ export class SyncFileQueue {
       if(!isSyncCapacityError(error))throw error;
       await this.cleanupCompletedSnapshots();
       await this.cleanupStoppedSnapshots();
+      await this.cleanupFinishedSessionSnapshots();
+      this.resources.forgetSnapshotMeasurement();
       return this.resources.reserveSnapshot(size);
     });
     let queued=false;
@@ -342,6 +344,26 @@ export class SyncFileQueue {
     if(job.status==='completed' && ['imported','skipped'].includes(String(job.result?.status))){
       const input=(job.data.task as {input:SyncFileInput}).input;
       await this.removeSnapshot(Number(job.data.sessionId),input.path);
+    }
+  }
+
+  async cleanupFinishedSessionSnapshots() {
+    const snapshots = await this.existingSnapshots();
+    if (!snapshots.size) return;
+    let after = 0;
+    while (true) {
+      const rows = await this.engine.executeRaw<{ id: number; session_id: string; path: string }>(`SELECT child.id, child.data->>'sessionId' AS session_id, child.data->'task'->'input'->>'path' AS path
+        FROM minion_jobs child JOIN minion_jobs parent ON parent.id=child.parent_job_id
+        WHERE child.queue=$1 AND child.id>$2 AND parent.queue='pmbrain-product' AND parent.data->'task'->>'type'='dream'
+          AND parent.status IN ('completed','failed','dead','cancelled')
+          AND child.status IN ('completed','failed','dead','cancelled','paused','delayed','waiting')
+          AND child.data->>'sessionId'=ANY($3::text[]) AND child.data->'task'->'input'->>'path' IS NOT NULL
+        ORDER BY child.id LIMIT 200`, [SYNC_FILE_QUEUE, after, [...snapshots.keys()]]);
+      for (const row of rows) {
+        if (snapshots.get(row.session_id)?.has(resolve(row.path))) await this.removeSnapshot(Number(row.session_id), row.path);
+      }
+      if (rows.length < 200) return;
+      after = rows.at(-1)!.id;
     }
   }
 

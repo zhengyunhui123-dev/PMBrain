@@ -58,8 +58,10 @@ beforeAll(async()=>{
     const body=await request.json() as {input?:unknown[];messages?:unknown[];tools?:Array<{function:{name:string}}>};
     if(new URL(request.url).pathname.endsWith('/embeddings')){embeddingCalls++;return Response.json({object:'list',data:(Array.isArray(body.input)?body.input:[body.input]).map((_,index)=>({object:'embedding',index,embedding:Array.from({length:dimensions},(_,i)=>i===0?1:0)})),model:'isolated-embedding',usage:{prompt_tokens:2,total_tokens:2}});}
     calls++;
-    const prompt=JSON.stringify(body.messages),source=prompt.match(/Source: ([a-z0-9-]+)/)?.[1]??'knowledge-auto';
-    const slug=prompt.match(/资料 slug: ([^\\\s]+)/)?.[1]??'first';
+    const prompt=JSON.stringify(body.messages);
+    const header=prompt.match(/资料 slug: ([^\\\s]+)\\nSource: ([a-z0-9-]+)/);
+    const slug=header?.[1]??'first';
+    const source=header?.[2]??'knowledge-auto';
     const fact=prompt.includes('刘慈欣参与了科幻讨论')?'刘慈欣参与了科幻讨论。':'刘慈欣创作了三体。';
     const content=`---\ntitle: 刘慈欣\ntype: person\n---\n${fact} [Source: ${slug}] [[${source}:${slug}]]`;
     return Response.json({id:`capture-${calls}`,object:'chat.completion',created:1,model:'isolated-capture',choices:[{index:0,finish_reason:'stop',message:{role:'assistant',content:JSON.stringify(invalid?{entities:[],relations:[]}:{entities:[{slug:'people/liu',content}],relations:[]})}}],usage:{prompt_tokens:20,completion_tokens:10,total_tokens:30}});

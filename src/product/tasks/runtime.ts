@@ -387,8 +387,36 @@ export class ProductTaskRuntime {
     return { taskId: run.id, pages: eligible.length, paused: state.paused };
   }
 
-  private async queueDeferredImportVectors(task: ProductTask, payload: Record<string, unknown> | undefined, cancelled: boolean): Promise<void> {
-    if (cancelled || task.type !== 'import' || !task.input.ocrOnly || task.input.noEmbed === true || !payload || payload.searchOptimizeAccepted === true) return;
+  private async queueDeferredImportVectors(task: ProductTask, payload: Record<string, unknown> | undefined, cancelled: boolean, jobId?: number): Promise<void> {
+    if (cancelled || task.type !== 'import' || task.input.noEmbed === true || !payload) return;
+    if (!task.input.ocrOnly) {
+      if (payload.vectorsPending === true && (await loadSearchOptimize(this.engine)).paused) {
+        const sourceId = task.input.sourceId ?? 'default';
+        let slugs = Array.isArray(payload.importedSlugs) ? payload.importedSlugs.filter((slug): slug is string => typeof slug === 'string' && slug.length > 0 && !slug.includes(':')) : [];
+        if (!slugs.length && jobId) {
+          const records = await readTaskCheckpoint(jobId).catch(() => []);
+          slugs = records.flatMap(file => file.vectorize === true && typeof file.slug === 'string' && file.slug && !String(file.slug).includes(':') ? [String(file.slug)] : []);
+        }
+        if (slugs.length) {
+          try {
+            assignSearchOptimizeAcceptance(payload, await this.acceptSearchOptimize(sourceId, slugs));
+            if (jobId) {
+              await this.engine.executeRaw(`UPDATE minion_jobs SET data=data || $2::jsonb WHERE id=$1 AND status='active'`, [jobId, { importVectorsPending: false, importVectorOffset: slugs.length }]);
+              this.pendingImportVectors.delete(jobId);
+            }
+            return;
+          } catch (error) {
+            console.error('[tasks] deferred embed:', error);
+          }
+        }
+        payload.searchOptimizePaused = true;
+        payload.searchOptimizeAccepted = true;
+        delete payload.vectorsPending;
+        delete payload.searchOptimizeNotice;
+      }
+      return;
+    }
+    if (payload.searchOptimizeAccepted === true) return;
     const slugs = Array.isArray(payload.embedSlugs) ? payload.embedSlugs.filter((slug): slug is string => typeof slug === 'string' && slug.length > 0 && !slug.includes(':')) : [];
     if (!slugs.length) return;
     const sourceId = typeof payload.embedSourceId === 'string' ? payload.embedSourceId : task.input.sourceId ?? 'default';
@@ -857,7 +885,7 @@ export class ProductTaskRuntime {
     const resumedId = Number(id.slice(5));
     await this.stoppingSessions.get(resumedId);
     await this.executions.get(resumedId)?.done;
-    if(task.type==='dream'&&task.input.preset==='full'&&(run.result as {status?:string}|undefined)?.status==='partial'){
+    if(task.type==='dream'&&task.input.preset==='full'){
       const sourceId=task.input.sourceId?await resolveSourceId(this.engine,task.input.sourceId):'default';
       await (await import('./dream-knowledge.ts')).resetHeldDreamKnowledge(this.engine,sourceId);
     }
@@ -1500,7 +1528,7 @@ export class ProductTaskRuntime {
     const queueImportVectors = async () => {
       if (importVectorsQueued) return;
       importVectorsQueued = true;
-      await this.queueDeferredImportVectors(structuredTask, progress.result, cancelRequested);
+      await this.queueDeferredImportVectors(structuredTask, progress.result, cancelRequested, context.id);
     };
     try {
       let outcome = await finished;
@@ -1682,8 +1710,7 @@ export class ProductTaskRuntime {
 
   private applyResourcePressure():void{
     const constrained=this.localPressure||this.externalPressure;
-    const backgroundActive = [...this.executions.values()].some(execution => execution.background);
-    this.worker.setConcurrency(constrained && !backgroundActive ? 1 : 2);
+    this.worker.setConcurrency(constrained ? 1 : 2);
     const ocrActive=[...this.executions.values()].some(execution=>execution.run().kind==='document_ocr');
     this.fileWorker.setConcurrency(ocrActive?2:constrained||this.engine.kind==='pglite'?1:documentResourcePlan(this.background.resourceSample()).concurrency);
     for(const execution of this.executions.values())execution.adjust(constrained);

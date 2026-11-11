@@ -81,6 +81,10 @@ export class TaskResourceGuard {
     }
     return total;
   }
+  forgetSnapshotMeasurement(){
+    this.measuringSnapshots=null;
+    this.snapshotBytes=0;
+  }
   async reserveSnapshot(additionalBytes:number):Promise<()=>void>{
     if(!this.measuringSnapshots)this.measuringSnapshots=this.measureSnapshots().then(total=>{this.snapshotBytes=total;});
     await this.measuringSnapshots;
