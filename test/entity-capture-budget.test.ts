@@ -14,6 +14,7 @@ import {
   deltaCaptureNeedles,
   parseEntityCaptureCostCapInput,
   captureFailureDisposition,
+  entityCaptureJobTimeoutMs,
   legalCoreVariants,
   rankCaptureCandidates,
   readEntityCaptureCostCap,
@@ -167,6 +168,12 @@ test('只有一家公司时，简称记成别名并指向原来的页', () => {
   expect(uniqueCaptureAliases('彩讯股份发布财报。', [named, caixun])).toEqual([]);
 });
 
+test('单次实体调用的任务时限只覆盖模型轮次和保存，不再放大到二十多分钟', () => {
+  expect(entityCaptureJobTimeoutMs(300_000, 2, true)).toBe(660_000);
+  expect(entityCaptureJobTimeoutMs(300_000, 1, true)).toBe(360_000);
+  expect(entityCaptureJobTimeoutMs(750_000, 3, false)).toBe(4_590_000);
+});
+
 test('模型没返回可保存结果时这一页失败，其他资料继续；普通报错仍然中断', () => {
   expect(captureFailureDisposition({
     status: 'completed', errorText: null, stopReason: 'end_turn', ingestVerified: false, jobId: 7,
@@ -176,6 +183,9 @@ test('模型没返回可保存结果时这一页失败，其他资料继续；�
   })).toMatchObject({ fatal: true, pageStopped: true, reason: 'failure' });
   expect(captureFailureDisposition({
     status: 'dead', errorText: 'ingest_provider_timeout: isolated timeout', stopReason: null, ingestVerified: false,
+  })).toMatchObject({ fatal: false, pageStopped: false, reason: 'timeout' });
+  expect(captureFailureDisposition({
+    status: 'dead', errorText: 'timeout exceeded', stopReason: null, ingestVerified: false,
   })).toMatchObject({ fatal: false, pageStopped: false, reason: 'timeout' });
   expect(captureFailureDisposition({
     status: 'dead', errorText: 'ingest_output_truncated: output truncated after bounded retry', stopReason: null, ingestVerified: false,

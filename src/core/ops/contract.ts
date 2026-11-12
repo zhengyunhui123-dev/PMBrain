@@ -76,6 +76,7 @@ export interface AuthInfo {
 export interface OperationContext {
   preparePageCommit?: NonNullable<Parameters<typeof import('../import-file.ts').importFromContent>[3]>['prepareCommit'];
   preparedPageImport?: (engine: BrainEngine) => Promise<import('../import-file.ts').ImportResult>;
+  deferPageEmbedding?: boolean;
   engine: BrainEngine;
   config: GBrainConfig;
   logger: Logger;

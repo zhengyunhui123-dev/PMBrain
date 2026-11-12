@@ -147,3 +147,40 @@ test('无工具协议以受限 JSON 调用复用原工具执行，最终回执�
   const result=await toolLoop({initialMessages:[{role:'user',content:'原文'}],tools:[{name:'write',description:'write',inputSchema:{type:'object'}}],toolHandlers:new Map([['write',{idempotent:true,execute:async input=>{writes.push((input as any).value);return {saved:true};}}]]),jsonToolCalls:true,maxTurns:3});
   expect(result.stopReason).toBe('end');expect(writes).toEqual(['saved']);expect(requests.every(body=>body.tools===undefined)).toBe(true);
 });
+
+test('DeepSeek 官方接口保留 max_tokens，关闭思考，思考通道里的 JSON 仍可保存',async()=>{
+  const requests:any[]=[];
+  const body='{"entities":[],"relations":[],"no_entities":true}';
+  server=Bun.serve({port:0,async fetch(req){
+    requests.push(await req.json());
+    return new Response([
+      `data: ${JSON.stringify({choices:[{index:0,delta:{reasoning_content:body}}]})}`,
+      `data: ${JSON.stringify({choices:[{index:0,delta:{},finish_reason:'stop'}],usage:{prompt_tokens:20,completion_tokens:8,total_tokens:28}})}`,
+      'data: [DONE]',
+      '',
+    ].join('\n\n'),{headers:{'content-type':'text/event-stream'}});
+  }});
+  configureGateway({generative_enabled:true,chat_model:'deepseek:deepseek-v4-flash',base_urls:{deepseek:server.url.origin+'/v1'},env:{DEEPSEEK_API_KEY:'isolated-test-only'}});
+  const result=await toolLoop({model:'deepseek:deepseek-v4-flash',system:'只返回 JSON',initialMessages:[{role:'user',content:'原文'}],tools:[],toolHandlers:new Map(),maxTurns:1,disableReasoning:true,turnTimeoutMs:5_000});
+  expect(requests[0].thinking).toEqual({type:'disabled'});
+  expect(requests[0].max_tokens).toBe(32000);
+  expect(requests[0].max_completion_tokens).toBeUndefined();
+  expect(result.finalText).toContain('no_entities');
+});
+
+test('兼容端点上的 DeepSeek 同样关闭思考',async()=>{
+  const requests=setup(()=>answer('{"ok":true}'));
+  configureGateway({generative_enabled:true,chat_model:'custom-openai:deepseek-v4-pro',base_urls:{'custom-openai':server!.url.origin+'/v1'},env:{CUSTOM_OPENAI_API_KEY:'isolated-test-only'}});
+  await chat({model:'custom-openai:deepseek-v4-pro',messages:[{role:'user',content:'JSON'}],disableReasoning:true});
+  expect(requests[0].thinking).toEqual({type:'disabled'});
+  expect(requests[0].max_tokens).toBe(32000);
+  expect(requests[0].chat_template_kwargs).toBeUndefined();
+});
+
+test('千问 Plus 在本地兼容端点关闭思考并保留 max_tokens',async()=>{
+  const requests=setup(()=>answer('{"ok":true}'));
+  await chat({model:'custom-openai:qwen-plus',messages:[{role:'user',content:'JSON'}],disableReasoning:true});
+  expect(requests[0].chat_template_kwargs).toEqual({enable_thinking:false});
+  expect(requests[0].max_tokens).toBe(32000);
+  expect(requests[0].enable_thinking).toBeUndefined();
+});

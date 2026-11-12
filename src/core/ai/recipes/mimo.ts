@@ -1,6 +1,33 @@
 import type { Recipe } from '../types.ts';
 import { AIConfigError } from '../errors.ts';
 
+export function applyMimoChatCompletionBody(body: Record<string, unknown>): boolean {
+  let changed = false;
+  if (body.max_completion_tokens == null && body.max_tokens != null) {
+    body.max_completion_tokens = body.max_tokens;
+    changed = true;
+  }
+  if ('max_tokens' in body) {
+    delete body.max_tokens;
+    changed = true;
+  }
+  return changed;
+}
+
+const mimoChatFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+  if (init?.body && typeof init.body === 'string') {
+    try {
+      const parsed = JSON.parse(init.body);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && applyMimoChatCompletionBody(parsed)) {
+        const headers = new Headers(init.headers ?? {});
+        headers.delete('content-length');
+        init = { ...init, body: JSON.stringify(parsed), headers };
+      }
+    } catch { /* 非 JSON 请求保持原样 */ }
+  }
+  return fetch(input, init);
+}) as unknown as typeof fetch;
+
 /**
  * MIMO (小米开放平台). OpenAI-compatible API endpoint.
  * Supports chat and embedding via OpenAI-compatible format.
@@ -42,6 +69,7 @@ export const mimo: Recipe = {
     },
     chat: {
       models: ['mimo-v2.6-pro', 'mimo-v2.6-flash', 'mimo-v2.5-pro', 'mimo-v2.5'],
+      thinking_by_default: model => /^mimo-v2\.(?:5|6)(?:-|$)/.test(model),
       supports_vision: true,
       vision_models: ['mimo-v2.6-pro', 'mimo-v2.6-flash'],
       supports_tools: true,
@@ -53,4 +81,5 @@ export const mimo: Recipe = {
     },
   },
   setup_hint: 'Get an API key at https://platform.xiaomimimo.com, then add `mimo_api_key` to ~/.gbrain/config.json or set MIMO_API_KEY.',
+  compat: { fetch: mimoChatFetch },
 };

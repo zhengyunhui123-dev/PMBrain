@@ -1,4 +1,5 @@
 import type { Recipe } from '../types.ts';
+import { officialCompletionTokenFetch } from '../provider-chat-body.ts';
 
 /**
  * Alibaba DashScope (灵积). OpenAI-compatible /embeddings endpoint at
@@ -54,4 +55,5 @@ export const dashscope: Recipe = {
   },
   setup_hint:
     'Get an API key at https://help.aliyun.com/zh/model-studio/getting-started/, then `export DASHSCOPE_API_KEY=...`',
+  compat: { fetch: officialCompletionTokenFetch },
 };

@@ -251,6 +251,7 @@ export function makeSubagentHandler(deps: SubagentDeps) {
       sourceId: data.source_id,
       skillsDir: data.skills_dir,
       allowEntityLinks: !!data.ingest_context,
+      deferPageEmbedding: data.ingest_context?.defer_embedding === true,
     });
     const scopedRegistry = data.ingest_context ? entityIngestTools(baseRegistry,data.ingest_context) : baseRegistry;
     const registry = data.discovery_profile === 'entity_capture'

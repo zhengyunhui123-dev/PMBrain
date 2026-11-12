@@ -35,6 +35,7 @@ import {
   captureDegradedReason,
   captureFailureDisposition,
   captureReportLine,
+  entityCaptureJobTimeoutMs,
   deltaCaptureNeedles,
   isOllamaModel,
   rankCaptureCandidates,
@@ -98,6 +99,7 @@ export interface CaptureEntitiesOpts {
   signal?: AbortSignal;
   yieldDuringPhase?: () => Promise<void>;
   deadlineAtMs?: number | null;
+  deferEmbedding?: boolean;
   privateQueueOwnerJobId?: number | null;
   maxPages?: number;
   slugs?: string[];
@@ -719,7 +721,7 @@ export async function runPhaseCaptureEntities(
   const batchCapture=opts.batchCapture??opts.handler==null;
   const singlePass=batchCapture&&!!opts.quickEntitiesOnly;
   const jobTurns=singlePass?(opts.roundWork?2:1):maxDocumentTurns;
-  const configuredJobTimeout=readTokenCap(await engine.getConfig('dream.entity_capture.job_timeout_ms'),jobTurns*(turnTimeoutMs*2+30_000));
+  const configuredJobTimeout=readTokenCap(await engine.getConfig('dream.entity_capture.job_timeout_ms'),entityCaptureJobTimeoutMs(turnTimeoutMs,jobTurns,singlePass));
   const declaredOutputLimit=await engine.getConfig('dream.entity_capture.model_max_output_tokens');
   const modelOutputLimit=declaredOutputLimit?readTokenCap(declaredOutputLimit,defaultMaxOutputTokens(chosen.model)):undefined;
   const nonce = Date.now();
@@ -1008,7 +1010,7 @@ export async function runPhaseCaptureEntities(
             model_output_limit:modelOutputLimit,
             no_self_fix: true,
             system: singlePass?`${systemContract}\n本次只返回一个完整的实体、事实、关系和时间线 JSON；程序负责查重、校验、持久化和验收，不请求工具或后续模型轮次。`:batchCapture?`${systemContract}\n本次按批量事实增量执行：候选目录已由程序提供，只有实际歧义才 search。优先一次调用 capture_entities 提交本段全部实体及证据关系；每批最多32个实体，仍有实体时 has_more:true 并继续分批，不得遗漏。全部准备好后由程序验收，不再逐个 put_page 或调用模型写总结。有明确日期的时间线使用保留的时间线工具，最后 complete_ingest。`:systemContract,
-            ingest_context: {slug:chunk.slug,sourceId:chunk.sourceId,body:chunk.body,chunkBody:chunk.chunkBody,pageId:chunk.pageId,sourceIncarnation:chunk.sourceIncarnation,compact_contract:true,batch_capture:batchCapture,single_pass:singlePass,repair_single_pass:singlePass&&!!opts.roundWork,quickEntitiesOnly:opts.quickEntitiesOnly,acknowledged:acknowledged.map(entity=>`${entity.sourceId}:${entity.slug}`),turn_entity_refs:[...new Set([...related,...acknowledged].map(entity=>`${entity.sourceId}:${entity.slug}`))]},
+            ingest_context: {slug:chunk.slug,sourceId:chunk.sourceId,body:chunk.body,chunkBody:chunk.chunkBody,pageId:chunk.pageId,sourceIncarnation:chunk.sourceIncarnation,compact_contract:true,batch_capture:batchCapture,single_pass:singlePass,repair_single_pass:singlePass&&!!opts.roundWork,quickEntitiesOnly:opts.quickEntitiesOnly,defer_embedding:opts.deferEmbedding===true,acknowledged:acknowledged.map(entity=>`${entity.sourceId}:${entity.slug}`),turn_entity_refs:[...new Set([...related,...acknowledged].map(entity=>`${entity.sourceId}:${entity.slug}`))]},
             usage_limits: {
               input: maxDocumentInput,
               output: maxDocumentOutput,

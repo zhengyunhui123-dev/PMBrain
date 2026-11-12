@@ -70,13 +70,15 @@ function deepRunTiming(job: MinionJob, endedAt: Date | null): DeepRunTiming {
 
 function toRun(job: MinionJob, stopping = false): ConsoleRun {
   const progress = (job.progress ?? {}) as Progress;
-  const failure = job.status === 'completed' && String(job.data.kind).startsWith('dream_') ? maintenanceFailure(job.result ?? progress.result) : null;
+  const savedResult = job.result ?? progress.result;
+  const failure = String(job.data.kind).startsWith('dream_') ? maintenanceFailure(savedResult) : null;
+  const heldPartial = failure === null && !!savedResult && typeof savedResult === 'object' && (savedResult as { status?: string }).status === 'partial';
   const adapter = new TaskProgressAdapter(String(job.data.kind), progress.product);
   if (!progress.product) adapter.write(progress.output ?? '');
   const task = job.data.task as ProductTask;
   if(task?.type==='embed'&&task.input.quickVector&&!adapter.view.vectorTotals&&job.data.initialVectorTotals)adapter.view.vectorTotals=job.data.initialVectorTotals as TaskProductProgress['vectorTotals'];
   const searchOptimize = task?.type === 'embed' && (task.input.searchOptimize === true || task.input.quickVector === true);
-  const status: ConsoleRun['status'] = stopping ? 'running' : failure ? 'failed' : job.status === 'completed' ? 'completed'
+  const status: ConsoleRun['status'] = stopping ? 'running' : failure ? 'failed' : job.status === 'completed' || (heldPartial && ['failed', 'dead'].includes(job.status)) ? 'completed'
     : job.status === 'cancelled' ? 'cancelled' : searchOptimize && job.status === 'paused' ? 'paused'
     : ['dead', 'failed', 'paused'].includes(job.status) ? 'failed'
     : ['active', 'waiting-children'].includes(job.status) ? 'running' : 'queued';

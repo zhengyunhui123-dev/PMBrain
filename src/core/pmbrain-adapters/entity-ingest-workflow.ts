@@ -34,6 +34,7 @@ export interface EntityIngestContext {
   single_pass?:boolean;
   repair_single_pass?:boolean;
   quickEntitiesOnly?:boolean;
+  defer_embedding?:boolean;
   pageId?:number|string;
   sourceIncarnation?:string;
 }

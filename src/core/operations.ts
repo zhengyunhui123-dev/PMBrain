@@ -551,7 +551,7 @@ const put_page: Operation = {
     // Checks all auth env vars for the resolved provider, not just OPENAI_API_KEY,
     // so Gemini / Ollama / Voyage brains don't silently drop embeddings (Codex C2).
     const { isAvailable } = await import('./ai/gateway.ts');
-    const noEmbed = !isAvailable('embedding');
+    const noEmbed = ctx.deferPageEmbedding === true || !isAvailable('embedding');
     if (!noEmbed) {
       const { assertNoEmbeddingEnvConfigDrift } = await import('./config.ts');
       assertNoEmbeddingEnvConfigDrift();

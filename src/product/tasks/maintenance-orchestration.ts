@@ -10,9 +10,15 @@ export function maintenanceFailure(result: unknown): string | null {
   const errorKeys=['ner_error','by_mention_error','relation_backfill_error'];
   const failed = report.phases?.find(phase => {
     if (phase.status === 'fail' || errorKeys.some(key => !!phase.details?.[key])) return true;
-    if (report.status === 'partial' && phase.phase === 'capture_entities' && phase.status === 'warn'
-      && phase.details?.isolated_output_failures === true && !phase.error
-      && phase.details?.stop_reason !== 'parse') return false;
+    if (report.status === 'partial' && phase.phase === 'capture_entities' && phase.status === 'warn') {
+      const reason = phase.details?.stop_reason ?? '';
+      const pageText = (phase.details?.page_failures ?? []).map(item => item.reason ?? '').join('\n');
+      const text = `${phase.error?.message ?? ''}\n${pageText}`;
+      const timeoutHeld = reason === 'timeout' || /(?:wall-clock )?timeout exceeded|ingest_provider_timeout/i.test(text);
+      const processed = Number(phase.details?.pages_processed ?? 0) > 0;
+      if ((timeoutHeld || processed) && !['model_unavailable', 'relation_failure', 'parse'].includes(reason) && !/数据库/.test(phase.error?.message ?? '')) return false;
+      if (phase.details?.isolated_output_failures === true && !phase.error && reason !== 'parse') return false;
+    }
     return (phase.error?.message && !['tokens', 'cost'].includes(phase.details?.stop_reason ?? ''))
       || ['failure', 'ingest_validation', 'relation_failure', 'model_unavailable', 'parse'].includes(phase.details?.stop_reason ?? '')
       || (phase.details?.page_failures?.length ?? 0) > 0;

@@ -3,6 +3,10 @@ import {classifyChatError} from './errors.ts';
 import type {ChatOpts,ChatResult} from './gateway.ts';
 
 export interface ChatRequestPolicy { firstResponseMs?:number; idleMs?:number; totalMs?:number; maxRetries?:number; retryDelayMs?:number }
+export function modelTurnRequestPolicy(model:string|undefined,totalMs:number):ChatRequestPolicy{
+  const local=/^ollama:/i.test(model??'');
+  return {firstResponseMs:Math.min(local?180_000:90_000,totalMs),idleMs:Math.min(local?120_000:45_000,totalMs),totalMs,maxRetries:1,retryDelayMs:1000};
+}
 export interface ChatRequestEvent {
   phase:'waiting'|'receiving'|'reasoning'|'answering'|'calling_tools'|'retrying'|'complete'|'failed';
   model:string;

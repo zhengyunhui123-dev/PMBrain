@@ -31,7 +31,7 @@ import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { z } from 'zod';
 import { streamOllamaNativeChat, unwrapOllamaQwenResult, type OllamaNativeMessage } from './ollama-native.ts';
-import {chatRequestFetch,IncompleteChatStream,withChatRequest,type ChatRequestPolicy,type ChatRequestEvent} from './chat-request-runtime.ts';
+import {chatRequestFetch,IncompleteChatStream,modelTurnRequestPolicy,withChatRequest,type ChatRequestPolicy,type ChatRequestEvent} from './chat-request-runtime.ts';
 
 import {
   BudgetTracker,
@@ -2878,7 +2878,7 @@ async function chatOnce(opts: ChatOpts): Promise<ChatResult> {
       }
       return messages;
     })();
-    const emitHostedDeltas = Boolean(opts.onTextDelta) && !nativeMessages;
+    const emitHostedDeltas = (Boolean(opts.onTextDelta) || !!opts.requestPolicy) && !nativeMessages;
     const result = await (async()=>{
       for(let attempt=0;;attempt++){
         generationOptions.abortSignal=chatAbortSignal(opts);
@@ -2971,15 +2971,17 @@ async function chatOnce(opts: ChatOpts): Promise<ChatResult> {
             return { content, text, toolCalls, finishReason, usage, providerMetadata };
           }
           let streamedText = '';
+          let reasoningText = '';
           let finishReason: string | undefined;
           let usage: unknown;
           let providerMetadata: Record<string, any> | undefined;
           const toolCalls: unknown[] = [];
-          for await (const part of streamed.fullStream as AsyncIterable<{ type?: string; text?: string; finishReason?: string; usage?: unknown; providerMetadata?: Record<string, any>; error?: unknown; toolCallId?: string; toolName?: string; input?: unknown }>) {
+          for await (const part of streamed.fullStream as AsyncIterable<{ type?: string; text?: string; delta?: string; finishReason?: string; usage?: unknown; providerMetadata?: Record<string, any>; error?: unknown; toolCallId?: string; toolName?: string; input?: unknown }>) {
             if (part.type === 'text-delta' && part.text) {
               streamedText += part.text;
               opts.onTextDelta?.(part.text);
-            } else if (part.type === 'tool-call') toolCalls.push(part);
+            } else if (part.type === 'reasoning-delta') reasoningText += part.delta ?? part.text ?? '';
+            else if (part.type === 'tool-call') toolCalls.push(part);
             else if (part.type === 'finish-step') {
               finishReason = part.finishReason ?? finishReason;
               usage = part.usage ?? usage;
@@ -2988,6 +2990,7 @@ async function chatOnce(opts: ChatOpts): Promise<ChatResult> {
             else if (part.type === 'error') throw part.error;
           }
           if(opts.requestPolicy&&(!finishReason||finishReason==='unknown'))throw streamError??new IncompleteChatStream();
+          if (!streamedText.trim() && reasoningText.trim()) streamedText = reasoningText;
           return { content: [...(streamedText ? [{ type: 'text', text: streamedText }] : []), ...toolCalls], text: streamedText, toolCalls, finishReason, usage, providerMetadata };
         })()
         : await generateText(generationOptions);
@@ -3010,9 +3013,11 @@ async function chatOnce(opts: ChatOpts): Promise<ChatResult> {
     // parts) for v6+; fall back to text + toolCalls for older shapes.
     const blocks: ChatBlock[] = [];
     const rawContent: any[] = (result as any).content ?? [];
+    let reasoningText = '';
     if (Array.isArray(rawContent) && rawContent.length > 0) {
       for (const part of rawContent) {
         if (part.type === 'text' && typeof part.text === 'string') blocks.push({ type: 'text', text: part.text });
+        else if (part.type === 'reasoning' && typeof part.text === 'string') reasoningText += part.text;
         else if (part.type === 'tool-call') {
           blocks.push({
             type: 'tool-call',
@@ -3022,6 +3027,7 @@ async function chatOnce(opts: ChatOpts): Promise<ChatResult> {
           });
         }
       }
+      if (!blocks.some(block => block.type === 'text' && block.text.trim()) && reasoningText.trim()) blocks.unshift({ type: 'text', text: reasoningText });
     } else {
       // Fallback shape for SDK versions exposing flat .text and .toolCalls.
       if (typeof (result as any).text === 'string' && (result as any).text.length > 0) {
@@ -3413,7 +3419,7 @@ export async function toolLoop(opts: ToolLoopOpts): Promise<ToolLoopResult> {
         contextWindow:callContextWindow,
         fitRequest:opts.fitRequest,
         timeoutMs:opts.turnTimeoutMs,
-        requestPolicy:opts.requestPolicy,
+        requestPolicy:opts.requestPolicy??(opts.turnTimeoutMs?modelTurnRequestPolicy(model,opts.turnTimeoutMs):undefined),
         onRequestEvent:opts.onRequestEvent,
         disableReasoning:opts.disableReasoning,
         abortSignal: opts.abortSignal,
