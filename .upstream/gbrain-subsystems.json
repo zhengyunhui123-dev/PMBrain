@@ -93,7 +93,8 @@
     "Completion from persisted tools retains source evidence, required-write validation and final graph reconciliation; output truncation recovery remains budget bounded",
     "Product entity capture returns its existing task lease after at most 32 admitted chunks or a cooperative five-minute window; checkpoints retain completed phases, receipts and cumulative token/cost accounting",
     "Postgres connection-loss scopes are revoked and native pool shutdown has a finite five-second grace period; native cancellation, rollback, locks and server-side disconnection are tested separately",
-    "PMBrain 1.5.5 atomically marks changed original materials, claims bounded ingestion after sync within the original product task, excludes generated backups, and reuses native receipts and affected-page embeddings. Failed/incomplete warn phases rerun; informational warnings remain. Saved execution timeout and existing cost controls apply. No new schema, core agent, implicit production backfill or upstream phase is introduced."
+    "PMBrain 1.5.5 atomically marks changed original materials, claims bounded ingestion after sync within the original product task, excludes generated backups, and reuses native receipts and affected-page embeddings. Failed/incomplete warn phases rerun; informational warnings remain. Saved execution timeout and existing cost controls apply. No new schema, core agent, implicit production backfill or upstream phase is introduced.",
+    "PMBrain 1.6.4 (2026-11-13) bounds each Dream model request through the existing gateway, disables unnecessary reasoning for atom/concept extraction, reduces single-pass entity prompt overhead while retaining existing receipt keys, and prevents request retries from multiplying at the queue layer. Partial progress cannot hide fatal database/provider errors; synthesis counts only completed children and leaves failed work resumable. The prior 1.6.1-1.6.2 gateway stream/reasoning adaptation is rechecked against HTTP and model-compatibility tests. No upstream source hash, schema or production data is changed."
   ],
   "deferred": [
     "whole-repository GBrain upgrade",
@@ -676,14 +677,14 @@
       "path": "src/core/ai/gateway.ts",
       "upstream_path": "src/core/ai/gateway.ts",
       "mode": "adapted",
-      "sha256": "45844a05431e76fd09d12779c559f6e69ea06c2e3f3fb425d6247e648cdb65d1",
+      "sha256": "28d3c8af95730a8b0f236cacf0fb32bf37f7bbe572d6c3a719c100d5eab15c78",
       "upstream_sha256": "622b81db5282117c6e2b32b566e2e35c36117400d416051011dbcc0e8e9c565f"
     },
     {
       "path": "src/core/ai/errors.ts",
       "upstream_path": "src/core/ai/errors.ts",
       "mode": "adapted",
-      "sha256": "f2647a4b2badad19ab488fca5f6e6a013525a7b4bc9c92fc08789c089d5a0814",
+      "sha256": "f11462b8500502f57aac20b2ad4accd44999d3e1455f1f5c387934204eac1d85",
       "upstream_sha256": "3418cebc6a10174cf252e130855fc529b4b0a89a67ed4da68113f56fb772c701"
     },
     {
@@ -697,7 +698,7 @@
       "path": "src/core/cycle/extract-atoms.ts",
       "upstream_path": "src/core/cycle/extract-atoms.ts",
       "mode": "adapted",
-      "sha256": "8e7b97e29a1435d669734a25edc90894d446378a12e2a8635bb70ec96abaa2d7",
+      "sha256": "53037623b0756270c7b94721d73375cfb43ba494bf877e0adb58b039128c2e23",
       "upstream_sha256": "d0f3a747b615808b92be26486b7842e7cbc509724f273484d25de78a4c85127a"
     },
     {
@@ -746,14 +747,14 @@
       "path": "src/core/cycle/synthesize.ts",
       "upstream_path": "src/core/cycle/synthesize.ts",
       "mode": "adapted",
-      "sha256": "70b4cb608831c9287c89fef01fe79e71220b4a9dae4a1860771f0b121e6861db",
+      "sha256": "9ebd80fba5dcfbfc7e85365a8501c747a1b8ba4df73bb5a10e0fc40de10ab220",
       "upstream_sha256": "6ec1e0b7e59714e5f2fe078b1956b20218486c89fdccf9982e8b129ba2c03fda"
     },
     {
       "path": "src/core/cycle/synthesize-concepts.ts",
       "upstream_path": "src/core/cycle/synthesize-concepts.ts",
       "mode": "adapted",
-      "sha256": "06989192f49b15b9ed02e82a9751194dbe91ed693a0c18ba71788584ada7a1ce",
+      "sha256": "9e4aeb9a9f2084951e2ff4033f796e57707503419cd5e72bfaf19e7e7a53e891",
       "upstream_sha256": "7146c5c44544059ca135f9df65f39bd1af480eff87c401b4845d0f9fe6df621e"
     },
     {
@@ -781,7 +782,7 @@
       "path": "src/core/cycle/patterns.ts",
       "upstream_path": "src/core/cycle/patterns.ts",
       "mode": "adapted",
-      "sha256": "275878cd51a0db6efa55dff1a8210c43df204c165200ab3cf886399ca44253c8",
+      "sha256": "7987b93a6dd2998523ab69596682625526b19a48a06e2b184efa6be30c0efb89",
       "upstream_sha256": "3d8808d2795e11354aeec3a3e24d889010c481c2e1e2d557a661730acbee9a0b"
     }
   ],

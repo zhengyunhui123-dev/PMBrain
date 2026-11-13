@@ -234,7 +234,7 @@ export function makeSubagentHandler(deps: SubagentDeps) {
     // embedders). Never bypass it because the host's ambient model config
     // happens to name a non-Anthropic provider.
     const useGatewayLoop = !deps.client && !deps.makeAnthropic
-      && (gatewayLoopExplicit || !isAnthropicProvider(model)||!!data.ingest_context);
+      && (gatewayLoopExplicit || !isAnthropicProvider(model)||!!data.ingest_context||data.turn_timeout_ms!==undefined);
 
     // Build the tool registry bound to THIS job as the owning subagent.
     // brain_id (per-call brain override; children inherit parent's unless
@@ -963,7 +963,7 @@ async function runSubagentViaGateway(args: GatewayRunArgs): Promise<SubagentResu
     maxTurns:singlePass?(repairSinglePass?2:1):maxTurns,
     maxTokens: Math.min(defaultMaxOutputTokens(model),data.usage_limits?.output??Infinity),
     modelOutputLimit:data.model_output_limit,
-    turnTimeoutMs:data.ingest_context?data.turn_timeout_ms??300_000:undefined,
+    turnTimeoutMs:data.turn_timeout_ms??(data.ingest_context?300_000:undefined),
     lengthRetryLimit:data.ingest_context?({messages,maxTokens,finalTurn})=>checkIngestCallBudget(engine,ctx.id,data,systemPrompt,messages,finalTurn?[]:chatTools,!!finalTurn,maxTokens,true):undefined,
     retryLength:!!data.ingest_context&&(!singlePass||repairSinglePass),
     jsonToolCalls:singlePass||!!data.ingest_context&&(data.ingest_json_tools===true||classifyCapabilities(model)==='unusable:no_tools'),
@@ -1090,7 +1090,7 @@ async function runSubagentViaGateway(args: GatewayRunArgs): Promise<SubagentResu
     if(data.ingest_context&&!ctx.signal.aborted){
       const kind=classifyChatError(error);
       if(kind==='parse')throw new UnrecoverableError(`ingest_provider_parse: ${error instanceof Error?error.message:String(error)}`);
-      if(kind!=='failure')throw new Error(`ingest_provider_${kind}: ${error instanceof Error?error.message:String(error)}`);
+      if(kind!=='failure')throw new UnrecoverableError(`ingest_provider_${kind}: ${error instanceof Error?error.message:String(error)}`);
     }
     throw error;
   }finally{

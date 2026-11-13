@@ -1,5 +1,5 @@
 import {AsyncLocalStorage} from 'node:async_hooks';
-import {classifyChatError} from './errors.ts';
+import {classifyChatError,isChatCertificateError} from './errors.ts';
 import type {ChatOpts,ChatResult} from './gateway.ts';
 
 export interface ChatRequestPolicy { firstResponseMs?:number; idleMs?:number; totalMs?:number; maxRetries?:number; retryDelayMs?:number }
@@ -122,7 +122,7 @@ export async function withChatRequest(opts:ChatOpts,invoke:(opts:ChatOpts)=>Prom
       const kind=classifyChatError(failure);
       event('failed',{errorKind:opts.abortSignal?.aborted&&!(failure instanceof ChatRequestTimeout)?'cancelled':kind,usageUnknown:true});
       controller.abort(failure);
-      const retryable=['network','provider_5xx'].includes(kind)||(failure instanceof ChatRequestTimeout&&failure.stage!=='total');
+      const retryable=!isChatCertificateError(failure)&&(['network','provider_5xx'].includes(kind)||(failure instanceof ChatRequestTimeout&&failure.stage!=='total'));
       if(opts.abortSignal?.aborted||attempt>retries||!retryable||(emitted&&!opts.onTextReset))throw failure;
       opts.onTextReset?.(opts.model??'');event('retrying',{errorKind:kind,usageUnknown:true});
       const delay=Math.max(0,Math.min(10000,policy.retryDelayMs??1000))*attempt;

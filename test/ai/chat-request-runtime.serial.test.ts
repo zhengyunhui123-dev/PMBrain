@@ -39,6 +39,14 @@ test('HTTP authentication and model context errors are not retried',async()=>{
   let requests=0;__setChatTransportForTests(async()=>{requests++;throw Object.assign(new Error('HTTP 400 maximum context length exceeded'),{statusCode:400});});
   await expect(chat({messages:[],requestPolicy:{maxRetries:1,retryDelayMs:1,totalMs:100}})).rejects.toThrow('maximum context');expect(requests).toBe(1);
 });
+
+test('certificate configuration failures retain the original error and do not retry', async () => {
+  configureGateway({ generative_enabled: true, chat_model: 'service-test:chat', env: {} });
+  let requests = 0;
+  __setChatTransportForTests(async () => { requests++; throw Object.assign(new Error('certificate verify failed'), { code: 'UNABLE_TO_VERIFY_LEAF_SIGNATURE' }); });
+  await expect(chat({ messages: [], requestPolicy: { maxRetries: 1, retryDelayMs: 1, totalMs: 1000 } })).rejects.toThrow('certificate verify failed');
+  expect(requests).toBe(1);
+});
 test('first-response timeout can recover once within the same total deadline',async()=>{
   configureGateway({generative_enabled:true,chat_model:'service-test:chat',env:{}});
   let attempts=0;__setChatTransportForTests(async()=>{attempts++;if(attempts===1)await new Promise(()=>{});return result;});

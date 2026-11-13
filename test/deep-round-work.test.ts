@@ -24,3 +24,16 @@ test('局部模型输出失败保留部分完成，数据库和模型故障仍�
   expect(maintenanceFailure({ status: 'partial', phases: [{ phase: 'capture_entities', status: 'warn', details: { stop_reason: 'timeout', pages_processed: 2, pages_remaining: 1833, page_failures: [{ reason: 'timeout exceeded' }] } }] })).toBeNull();
   expect(maintenanceFailure({ status: 'partial', phases: [{ phase: 'capture_entities', status: 'warn', details: { stop_reason: 'ingest_validation', pages_processed: 62, pages_remaining: 1779, page_failures: [{ reason: 'ingest invalid output: ingest ambiguous existing entity: default:projects/gbrain, default:projects/pmbrain' }] } }] })).toBeNull();
 });
+
+test('先前有成果不能掩盖后续数据库故障或网络故障', () => {
+  for (const [reason, message] of [
+    ['failure', 'column "missing_column" does not exist'],
+    ['failure', 'connection terminated unexpectedly'],
+    ['network', 'ingest_provider_network: socket disconnected'],
+  ]) {
+    const phase = { phase: 'capture_entities', status: 'warn', error: { message }, details: { stop_reason: reason, pages_processed: 1, pages_remaining: 2, page_failures: [{ reason: message }] } };
+    expect(maintenanceFailure({ status: 'partial', phases: [phase] })).toContain(message);
+  }
+  const phase = { phase: 'capture_entities', status: 'warn', details: { stop_reason: 'failure', pages_processed: 1, page_failures: [{ reason: 'timeout exceeded' }, { reason: 'connection terminated unexpectedly' }] } };
+  expect(maintenanceFailure({ status: 'partial', phases: [phase] })).not.toBeNull();
+});

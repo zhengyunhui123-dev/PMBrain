@@ -9,16 +9,15 @@ export function maintenanceFailure(result: unknown): string | null {
   if (report.status === 'skipped') return report.reason === 'cycle_already_running' ? '未执行：其他整理任务占用数据库，请排队后继续。' : `未执行：${report.reason ?? '整理被跳过'}`;
   const errorKeys=['ner_error','by_mention_error','relation_backfill_error'];
   const failed = report.phases?.find(phase => {
-    if (phase.status === 'fail' || errorKeys.some(key => !!phase.details?.[key])) return true;
+    if (phase.status === 'fail' || phase.details?.fatal_failure === true || errorKeys.some(key => !!phase.details?.[key])) return true;
     if (report.status === 'partial' && phase.phase === 'capture_entities' && phase.status === 'warn') {
       const reason = phase.details?.stop_reason ?? '';
-      const pageText = (phase.details?.page_failures ?? []).map(item => item.reason ?? '').join('\n');
-      const text = `${phase.error?.message ?? ''}\n${pageText}`;
-      const timeoutHeld = reason === 'timeout' || /(?:wall-clock )?timeout exceeded|ingest_provider_timeout/i.test(text);
-      const processed = Number(phase.details?.pages_processed ?? 0) > 0;
+      const failures = phase.details?.page_failures ?? [];
+      const timeoutHeld = reason === 'timeout' || reason === 'failure' && failures.length > 0
+        && failures.every(item => /^(?:(?:wall-clock )?timeout exceeded|ingest_provider_timeout:.*)$/i.test((item.reason ?? '').trim()));
       const isolatedValidation = reason === 'ingest_validation' || phase.details?.isolated_output_failures === true;
-      if ((timeoutHeld || processed || isolatedValidation) && !['model_unavailable', 'relation_failure', 'parse'].includes(reason) && !/数据库/.test(phase.error?.message ?? '')) return false;
-      if (phase.details?.isolated_output_failures === true && !phase.error && reason !== 'parse') return false;
+      if (timeoutHeld && (!phase.error || /timeout exceeded|ingest_provider_timeout|模型.*超时/.test(phase.error.message ?? ''))) return false;
+      if (isolatedValidation && !phase.error && !['failure', 'model_unavailable', 'relation_failure', 'parse', 'network', 'provider_5xx', 'rate_limit'].includes(reason)) return false;
     }
     return (phase.error?.message && !['tokens', 'cost'].includes(phase.details?.stop_reason ?? ''))
       || ['failure', 'ingest_validation', 'relation_failure', 'model_unavailable', 'parse'].includes(phase.details?.stop_reason ?? '')
@@ -28,7 +27,7 @@ export function maintenanceFailure(result: unknown): string | null {
     const detailError=errorKeys.map(key=>failed.details?.[key]).find((value):value is string=>typeof value==='string');
     const pageFailure=failed.details?.page_failures?.find(item=>typeof item.reason==='string')?.reason;
     const reason=failed.error?.message??detailError??pageFailure;
-    const label=failed.phase==='extract_facts'?'提炼事实失败':'实体摄入失败';
+    const label=failed.phase==='extract_facts'?'提炼事实失败':failed.phase==='synthesize'?'内容综合失败':failed.phase==='patterns'?'模式分析失败':'实体摄入失败';
     return reason ? `${label}：${reason}` : '整理验收失败，请查看任务详情。';
   }
   return report.status==='failed'?'整理执行失败，请查看任务详情。':null;

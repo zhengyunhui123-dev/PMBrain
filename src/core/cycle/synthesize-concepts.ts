@@ -34,6 +34,8 @@ import { importFromContent } from '../import-file.ts';
 import { serializeMarkdown } from '../markdown.ts';
 import { validateSlug } from '../utils.ts';
 import { dreamModelDetails, resolveDreamModel } from './model-routing.ts';
+import { defaultMaxOutputTokens } from '../ai/model-compatibility.ts';
+import { modelTurnRequestPolicy } from '../ai/chat-request-runtime.ts';
 
 const DEFAULT_BUDGET_USD = 1.5;
 const TIER_T1_MIN = 10;
@@ -329,7 +331,8 @@ export async function runPhaseSynthesizeConcepts(
         complete=false;deferredConcepts++;
       } else {
         try {
-          budgetTracker.reserve({modelId:resolvedModel.model,estimatedInputTokens:Math.ceil(group.atomBodies.slice(0,5).join('').length/3)+300,maxOutputTokens:500,kind:'chat'});
+          const maxTokens = defaultMaxOutputTokens(resolvedModel.model);
+          budgetTracker.reserve({modelId:resolvedModel.model,estimatedInputTokens:Math.ceil(group.atomBodies.slice(0,5).join('').length/3)+300,maxOutputTokens:maxTokens,kind:'chat'});
           const result = await chat({
             model: resolvedModel.model,
             system: SYNTH_PROMPT,
@@ -346,7 +349,10 @@ export async function runPhaseSynthesizeConcepts(
                     .join('\n\n')}`,
               },
             ],
-            maxTokens: 500,
+            maxTokens,
+            disableReasoning: true,
+            retryLength: true,
+            requestPolicy: modelTurnRequestPolicy(resolvedModel.model, 300_000),
             abortSignal: opts.signal,
           });
           // Post-await yield (T3): the LLM call is the main TTL hazard

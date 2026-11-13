@@ -19,7 +19,7 @@ import { normalizeAliasList } from '../search/alias-normalize.ts';
 import { alignCapturedEntityGraph } from './entity-graph-align.ts';
 import { lineGrammarOptions } from '../line-grammar.ts';
 import { locateIngestSkillsDir, readIngestContract,readEntityCaptureContract, pruneEntityIngestLinks,ingestAbortKind } from '../pmbrain-adapters/entity-ingest-workflow.ts';
-import { captureScopeKey,captureChunkKey,planCaptureBodies,sourceTimelineDates } from '../pmbrain-adapters/entity-capture-plan.ts';
+import { captureScopeKey,captureChunkKey,planCaptureBodies,sourceTimelineDates,SINGLE_PASS_CAPTURE_CONTRACT } from '../pmbrain-adapters/entity-capture-plan.ts';
 import { captureReceiptProof,reuseCaptureReceipt,quickCaptureReceipt,type CaptureReceipt } from '../pmbrain-adapters/entity-capture-receipts.ts';
 import { runCaptureWindow,CaptureAdmission,withCaptureWrite } from '../pmbrain-adapters/entity-capture-window.ts';
 import { pendingCaptureCandidates, publishCaptureManifest } from '../pmbrain-adapters/entity-capture-manifest.ts';
@@ -154,7 +154,7 @@ export function buildEntityCapturePrompt(
   const chunkIndex = isChunk ? page.chunkIndex : 0;
   const chunkCount = isChunk ? page.chunkCount : 1;
   const candidateBlock = candidates.length === 0
-    ? '这一段没有检索到相关的已有实体。创建前仍必须 search。'
+    ? (singlePass ? '本段没有检索到相关已有实体，程序在保存时再次校验身份。' : '这一段没有检索到相关的已有实体。创建前仍必须 search。')
     : candidates.map(candidate => {
       const aliases = candidate.aliases.length > 0 ? candidate.aliases.join('、') : '无';
       return `- ${candidate.sourceId}:${candidate.slug} | ${candidate.type} | ${candidate.title} | aliases: ${aliases}`;
@@ -1009,7 +1009,8 @@ export async function runPhaseCaptureEntities(
             turn_timeout_ms:turnTimeoutMs,
             model_output_limit:modelOutputLimit,
             no_self_fix: true,
-            system: singlePass?`${systemContract}\n本次只返回一个完整的实体、事实、关系和时间线 JSON；程序负责查重、校验、持久化和验收，不请求工具或后续模型轮次。`:batchCapture?`${systemContract}\n本次按批量事实增量执行：候选目录已由程序提供，只有实际歧义才 search。优先一次调用 capture_entities 提交本段全部实体及证据关系；每批最多32个实体，仍有实体时 has_more:true 并继续分批，不得遗漏。全部准备好后由程序验收，不再逐个 put_page 或调用模型写总结。有明确日期的时间线使用保留的时间线工具，最后 complete_ingest。`:systemContract,
+            system: singlePass?SINGLE_PASS_CAPTURE_CONTRACT:batchCapture?`${systemContract}\n本次按批量事实增量执行：候选目录已由程序提供，只有实际歧义才 search。优先一次调用 capture_entities 提交本段全部实体及证据关系；每批最多32个实体，仍有实体时 has_more:true 并继续分批，不得遗漏。全部准备好后由程序验收，不再逐个 put_page 或调用模型写总结。有明确日期的时间线使用保留的时间线工具，最后 complete_ingest。`:systemContract,
+            system_no_tool_preamble: singlePass,
             ingest_context: {slug:chunk.slug,sourceId:chunk.sourceId,body:chunk.body,chunkBody:chunk.chunkBody,pageId:chunk.pageId,sourceIncarnation:chunk.sourceIncarnation,compact_contract:true,batch_capture:batchCapture,single_pass:singlePass,repair_single_pass:singlePass&&!!opts.roundWork,quickEntitiesOnly:opts.quickEntitiesOnly,defer_embedding:opts.deferEmbedding===true,acknowledged:acknowledged.map(entity=>`${entity.sourceId}:${entity.slug}`),turn_entity_refs:[...new Set([...related,...acknowledged].map(entity=>`${entity.sourceId}:${entity.slug}`))]},
             usage_limits: {
               input: maxDocumentInput,
@@ -1295,6 +1296,7 @@ export async function runPhaseCaptureEntities(
       peak_active_chunks:peakChunks,
       pages_remaining: pagesRemaining,
       pages_failed: failedPages,
+      fatal_failure: fatalFailure || !!relationError,
       ...(isolatedOutputFailures && { isolated_output_failures: true }),
       page_failures:pageFailures,
       chunks_failed: failedChunks,

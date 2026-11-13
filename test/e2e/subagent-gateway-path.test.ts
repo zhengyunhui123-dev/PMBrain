@@ -209,6 +209,17 @@ describe('runSubagentViaGateway (v0.38 Slice 1 — full handler path through gat
     expect(messages[1].message_idx).toBe(1);
   });
 
+  for (const model of ['anthropic:claude-sonnet-4-6', 'mimo:mimo-v2.6-flash']) it(`${model}: deep synthesis bounds a stalled model turn without an ingest context`, async () => {
+    await engine.setConfig('agent.use_gateway_loop', 'false');
+    let requests = 0;
+    __setChatTransportForTests(async () => { requests++; return new Promise<ChatResult>(() => {}); });
+    const { ctx } = await makeFakeJob({ prompt: '分析隔离资料', model });
+    ctx.data.turn_timeout_ms = 30;
+    ctx.signal = AbortSignal.timeout(1000);
+    await expect(buildHandler([])(ctx)).rejects.toMatchObject({ code: 'model_request_timeout' });
+    expect(requests).toBe(1);
+  });
+
   it('rejects an empty first turn with no tool calls instead of reporting false success', async () => {
     __setChatTransportForTests(async () => ({
       text: '',
