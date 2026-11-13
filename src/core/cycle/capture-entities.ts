@@ -1250,8 +1250,7 @@ export async function runPhaseCaptureEntities(
     const stopReason = (relationError?'relation_failure':budgetStop??(failureStop?failureReason:windowDeferred&&pagesRemaining>0?'window':'completed')) as CaptureStopReason;
     const isolatedOutputFailures = !!opts.roundWork && !fatalFailure && !relationError && !opts.signal?.aborted
       && pageFailures.length > 0 && pageFailures.every(failure => failure.kind === 'truncated' || failure.kind === 'lease_lost'
-        || failure.kind === 'parse' || failure.kind === 'ingest_validation'
-          && /ingest entity evidence missing|ingest no_entities conflicts/.test(failure.reason));
+        || failure.kind === 'parse' || failure.kind === 'ingest_validation');
     const degradedOpen = failureStop && captureDegradedReason(failureReason) && !fatalFailure;
     const cleanStatus: PhaseResult['status'] = failureStop
       ? (writtenSlugs.length > 0 || pagesProcessed > 0 || degradedOpen || isolatedOutputFailures ? 'warn' : 'fail')

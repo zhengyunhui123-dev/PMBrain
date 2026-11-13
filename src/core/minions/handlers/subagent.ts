@@ -977,7 +977,7 @@ async function runSubagentViaGateway(args: GatewayRunArgs): Promise<SubagentResu
       const failed=blocks.find(block=>block.type==='tool-result'&&block.isError);
       if(failed&&failed.type==='tool-result'){
         const message = typeof failed.output==='string'?failed.output:JSON.stringify(failed.output);
-        if (repairSinglePass && currentTurn === 0 && /ingest entity evidence missing|ingest no_entities conflicts/.test(message)) return null;
+        if (repairSinglePass && currentTurn === 0 && /ingest entity evidence missing|ingest no_entities conflicts|ingest ambiguous existing entity|ingest reuse existing entity/.test(message)) return null;
         throw new UnrecoverableError(`ingest invalid output: ${message}`);
       }
       const completed=await captureToolCompletion(blocks);

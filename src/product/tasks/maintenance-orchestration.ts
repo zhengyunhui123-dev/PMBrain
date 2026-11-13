@@ -16,7 +16,8 @@ export function maintenanceFailure(result: unknown): string | null {
       const text = `${phase.error?.message ?? ''}\n${pageText}`;
       const timeoutHeld = reason === 'timeout' || /(?:wall-clock )?timeout exceeded|ingest_provider_timeout/i.test(text);
       const processed = Number(phase.details?.pages_processed ?? 0) > 0;
-      if ((timeoutHeld || processed) && !['model_unavailable', 'relation_failure', 'parse'].includes(reason) && !/数据库/.test(phase.error?.message ?? '')) return false;
+      const isolatedValidation = reason === 'ingest_validation' || phase.details?.isolated_output_failures === true;
+      if ((timeoutHeld || processed || isolatedValidation) && !['model_unavailable', 'relation_failure', 'parse'].includes(reason) && !/数据库/.test(phase.error?.message ?? '')) return false;
       if (phase.details?.isolated_output_failures === true && !phase.error && reason !== 'parse') return false;
     }
     return (phase.error?.message && !['tokens', 'cost'].includes(phase.details?.stop_reason ?? ''))

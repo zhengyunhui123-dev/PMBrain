@@ -196,6 +196,9 @@ test('模型没返回可保存结果时这一页失败，其他资料继续；�
   expect(captureFailureDisposition({
     status: 'dead', errorText: 'ingest unresolved target: concepts/missing', stopReason: null, ingestVerified: false,
   })).toMatchObject({ fatal: false, reason: 'ingest_validation' });
+  expect(captureFailureDisposition({
+    status: 'dead', errorText: 'ingest invalid output: ingest ambiguous existing entity: default:projects/gbrain, default:projects/pmbrain', stopReason: null, ingestVerified: false,
+  })).toMatchObject({ fatal: false, reason: 'ingest_validation' });
   expect(captureReportLine({
     model: 'mimo:mimo-v2.6-flash', pagesProcessed: 0, pagesRemaining: 1, entitiesCreated: 0, relationsCreated: 0,
     costCny: null, costCapCny: 5, ollama: false, stopReason: 'no_tool',

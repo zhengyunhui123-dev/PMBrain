@@ -442,6 +442,24 @@ for(const [errorText,reason] of [
  expect(calls).toBe(1);expect(next.status).toBe('ok');
 },60_000);
 
+test('深度整理里两个已有项目撞名只挡住这一页，已处理资料继续保留',async()=>{
+ await note('notes/ambiguous','资料同时提到 GBrain 和 PMBrain，模型无法判断该写哪一个项目。');
+ await note('notes/kept','张三在星河公司讨论灯塔项目。');
+ let calls=0;
+ const result=await runPhaseCaptureEntities(engine,{sourceId:'vault',roundWork:{prioritySlugs:[]},handler:async ctx=>{
+  calls++;
+  if(promptOf(ctx).includes('notes/ambiguous'))throw new UnrecoverableError('ingest invalid output: ingest ambiguous existing entity: default:projects/gbrain, default:projects/pmbrain');
+  return {ingest_verified:true,stop_reason:'end_turn',tokens:{in:10,out:5}};
+ }});
+ expect(calls).toBe(2);
+ expect(result.status).toBe('warn');
+ expect(result.error).toBeUndefined();
+ expect(result.details.stop_reason).toBe('ingest_validation');
+ expect(result.details.isolated_output_failures).toBe(true);
+ expect(result.details.pages_processed).toBe(1);
+ expect(result.details.pages_failed).toBe(1);
+},60_000);
+
 test('新人、公司、项目和概念按类型落库，新别名复用已有公司', async () => {
   await engine.putPage('companies/xinghe', {
     type: 'company', title: '星河公司', compiled_truth: '已有公司页。', timeline: '', frontmatter: {},
