@@ -42,6 +42,9 @@ export interface DeepStageResult {
   links?: number;
   checked?: number;
   costCny?: number;
+  pendingReview?: number;
+  itemFailed?: number;
+  remaining?: number;
 }
 
 export interface DeepStageLogEntry {
@@ -92,6 +95,12 @@ export function deepStageTitle(round: DeepRoundProgress): string {
 
 export function deepOrganizeRecordedStages(round: DeepRoundProgress): number {
   return DEEP_ORGANIZE_STAGES.filter(stage => round.stages.some(saved => saved.id === stage.id)).length;
+}
+
+export function deepOrganizeOutcome(round: DeepRoundProgress): string | null {
+  if (round.stage !== 'done') return null;
+  const sum = (key: 'entities' | 'pendingReview' | 'itemFailed' | 'remaining') => round.stages.reduce((total, stage) => total + Number(stage[key] ?? 0), 0);
+  return `本轮已结束：成功 ${sum('entities')}，待核对 ${sum('pendingReview')}，失败 ${sum('itemFailed')}，尚未处理 ${sum('remaining')}`;
 }
 
 export function deepOrganizePercent(round: DeepRoundProgress): number {
@@ -172,7 +181,7 @@ export function summarizeDeepStage(id: CurrentDeepStageId, phases: DeepPhaseSnap
     ...(id === 'knowledge' ? { knowledge } : {}),
     ...(tracked ? { newKnowledge, maintainedKnowledge,
       ...(relevant.some(phase => Array.isArray(phase.details?.knowledge_created_refs)) ? { knowledgeCreatedRefs: createdRefs, knowledgeMaintainedRefs: maintainedRefs } : {}) } : {}),
-    ...(id === 'entities' ? { entities, links: captureLinks } : {}),
+    ...(id === 'entities' ? { entities, links: captureLinks, pendingReview: count(relevant, 'entities_pending_review'), itemFailed: count(relevant, 'entities_failed'), remaining: count(relevant, 'pages_remaining') } : {}),
     ...(['relations', 'knowledge', 'concepts'].includes(id) ? { links: extractLinks } : {}),
     ...(id === 'check' ? { checked, links: count(relevant, 'added') } : {}),
     ...(cost > 0 ? { costCny: cost } : {}),

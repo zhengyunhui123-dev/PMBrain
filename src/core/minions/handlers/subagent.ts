@@ -38,7 +38,7 @@ import type { BrainEngine } from '../../engine.ts';
 import type { GBrainConfig } from '../../config.ts';
 import { loadConfig } from '../../config.ts';
 import { buildBrainTools, filterAllowedTools } from '../tools/brain-allowlist.ts';
-import { entityIngestTools, verifyIngestResult, validateIngestCompletion, checkIngestCallBudget, ingestFinalPrompt,finalizeBeforeIngestBudget,ingestAbortKind,captureToolCompletion } from '../../pmbrain-adapters/entity-ingest-workflow.ts';
+import { entityIngestTools, verifyIngestResult, validateIngestCompletion, checkIngestCallBudget, ingestFinalPrompt,finalizeBeforeIngestBudget,ingestAbortKind,captureToolCompletion,continueIdentityRepair } from '../../pmbrain-adapters/entity-ingest-workflow.ts';
 import {
   acquireLease,
   releaseLease,
@@ -807,6 +807,7 @@ async function runSubagentViaGateway(args: GatewayRunArgs): Promise<SubagentResu
           jobId: ctx.id,
           remote: true,
           signal,
+          executionToken: ctx.lockToken,
           toolUseId: toolContext?.gbrainToolUseId,
           persistCommit: data.ingest_context && toolContext?.gbrainToolUseId ? async (tx, output) => {
             signal.throwIfAborted();
@@ -967,7 +968,7 @@ async function runSubagentViaGateway(args: GatewayRunArgs): Promise<SubagentResu
     lengthRetryLimit:data.ingest_context?({messages,maxTokens,finalTurn})=>checkIngestCallBudget(engine,ctx.id,data,systemPrompt,messages,finalTurn?[]:chatTools,!!finalTurn,maxTokens,true):undefined,
     retryLength:!!data.ingest_context&&(!singlePass||repairSinglePass),
     jsonToolCalls:singlePass||!!data.ingest_context&&(data.ingest_json_tools===true||classifyCapabilities(model)==='unusable:no_tools'),
-    ...(singlePass?{jsonDirectTool:'brain_capture_entities',jsonToolPrompt:'只输出一个 JSON 对象，包含 entities、reused_entities、relations 和 timeline_entries；entities 每项包含 slug 与完整 YAML frontmatter 的新增事实 content。已有实体无新增事实放入 reused_entities；没有实体时 entities 和 relations 为空且 no_entities 为 true。不要请求工具、不要输出说明。程序会检查来源、身份和关系并保存。'}:{}),
+    ...(singlePass?{jsonDirectTool:'brain_capture_entities',jsonToolPrompt:'只输出一个 JSON 对象，包含 entities、reused_entities、relations 和 timeline_entries；entities 每项包含 slug 与完整 YAML frontmatter 的新增事实 content。已有实体无新增事实放入 reused_entities；没有实体时 entities 和 relations 为空且 no_entities 为 true。不要请求工具、不要输出说明。程序会检查来源、身份和关系并保存。如果程序返回待确认身份，下一轮只提交这些实体：复用给出的已有 slug，或在该项设置 identity_confirmed 为 true，并把原文中能区分新对象的原句写入 distinguishing_evidence。不要读取页面，不要按名称相近自动合并。'}:{}),
     disableReasoning:!!data.ingest_context,
     finalizeOnLastTurn:!!data.ingest_context&&!singlePass,
     prepareFinalMessages:data.ingest_context&&!singlePass?async()=>[{role:'user',content:await ingestFinalPrompt(engine,ctx.id,data)}]:undefined,
@@ -977,9 +978,10 @@ async function runSubagentViaGateway(args: GatewayRunArgs): Promise<SubagentResu
       const failed=blocks.find(block=>block.type==='tool-result'&&block.isError);
       if(failed&&failed.type==='tool-result'){
         const message = typeof failed.output==='string'?failed.output:JSON.stringify(failed.output);
-        if (repairSinglePass && currentTurn === 0 && /ingest entity evidence missing|ingest no_entities conflicts|ingest ambiguous existing entity|ingest reuse existing entity/.test(message)) return null;
+        if (repairSinglePass && currentTurn === 0 && /ingest entity evidence missing|ingest no_entities conflicts|ingest ambiguous existing entity|ingest reuse existing entity|ingest verify existing entity/.test(message)) return null;
         throw new UnrecoverableError(`ingest invalid output: ${message}`);
       }
+      if (repairSinglePass && continueIdentityRepair(currentTurn, blocks)) return null;
       const completed=await captureToolCompletion(blocks);
       if(completed===null)throw new UnrecoverableError('ingest_output_truncated: entity JSON was incomplete; unfinished chunk is resumable');
       return completed;

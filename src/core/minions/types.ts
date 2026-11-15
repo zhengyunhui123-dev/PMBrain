@@ -232,6 +232,8 @@ export interface MinionJobContext {
   log(message: string | TranscriptEntry): Promise<void>;
   /** Check if the lock is still held (for long-running jobs). */
   isActive(): Promise<boolean>;
+  /** Claim token for this execution. Writes must stop when the row no longer holds it. */
+  lockToken?: string;
   /** Read unread inbox messages (marks as read). */
   readInbox(): Promise<InboxMessage[]>;
 }
@@ -560,6 +562,8 @@ export interface ToolCtx {
   remote: true;
   /** Fired on cooperative abort (timeout, lock loss, cancel, SIGTERM). */
   signal?: AbortSignal;
+  /** Claim token copied from the job. Absent in tests that do not simulate a lease. */
+  executionToken?: string;
 }
 
 /**
@@ -641,4 +645,6 @@ export interface SubagentResult {
   synth_mode_used?: 'oneshot' | 'agentic_fallback' | 'agentic';
   fallback_reason?: string;
   written_slugs?: string[];
+  ingest_pending_review?: number;
+  ingest_item_failures?: number;
 }

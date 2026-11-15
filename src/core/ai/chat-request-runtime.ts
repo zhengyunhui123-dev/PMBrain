@@ -33,11 +33,46 @@ export class IncompleteChatStream extends Error {
 type Activity='receiving'|'reasoning'|'answering'|'calling_tools';
 type Scope={signal:AbortSignal;activity:(phase?:Activity)=>void};
 const activeRequest=new AsyncLocalStorage<Scope>();
+function requestAskedForStream(init?:Parameters<typeof fetch>[1]):boolean{
+  const body=init?.body;
+  const text=typeof body==='string'?body:body instanceof Uint8Array?new TextDecoder().decode(body):null;
+  if(!text)return false;
+  try{return JSON.parse(text).stream===true;}catch{return false;}
+}
+function completionAsEventStream(completion:any):string{
+  const choice=completion.choices?.[0]??{};
+  const message=choice.message??{};
+  const toolCalls=Array.isArray(message.tool_calls)?message.tool_calls:[];
+  const base={id:completion.id??'completion',object:'chat.completion.chunk',created:completion.created??0,model:completion.model??''};
+  const chunks:unknown[]=[];
+  if(typeof message.content==='string'&&message.content)chunks.push({...base,choices:[{index:0,delta:{role:'assistant',content:message.content},finish_reason:null}]});
+  toolCalls.forEach((call:any,index:number)=>{
+    const name=call?.function?.name;
+    if(typeof name!=='string'||typeof call?.id!=='string')return;
+    const args=typeof call.function?.arguments==='string'?call.function.arguments:JSON.stringify(call.function?.arguments??{});
+    chunks.push({...base,choices:[{index:0,delta:{tool_calls:[{index,id:call.id,type:call.type??'function',function:{name,arguments:args}}]},finish_reason:null}]});
+  });
+  chunks.push({...base,choices:[{index:0,delta:{},finish_reason:choice.finish_reason??(toolCalls.length?'tool_calls':'stop')}],...(completion.usage?{usage:completion.usage}:{})});
+  return `${chunks.map(chunk=>`data: ${JSON.stringify(chunk)}\n\n`).join('')}data: [DONE]\n\n`;
+}
+async function adaptJsonChatCompletion(url:string,init:Parameters<typeof fetch>[1]|undefined,response:Response):Promise<Response>{
+  if(!response.ok||!response.body||!requestAskedForStream(init)||!/\/chat\/completions(?:\?|$)/.test(url))return response;
+  const type=response.headers.get('content-type')??'';
+  if(/event-stream/i.test(type)||!/json/i.test(type))return response;
+  const text=await response.text();
+  let completion:any;
+  try{completion=JSON.parse(text);}catch{return new Response(text,{status:response.status,statusText:response.statusText,headers:response.headers});}
+  if(!completion||!Array.isArray(completion.choices))return new Response(text,{status:response.status,statusText:response.statusText,headers:response.headers});
+  const headers=new Headers(response.headers);
+  headers.set('content-type','text/event-stream');
+  headers.delete('content-length');
+  return new Response(completionAsEventStream(completion),{status:response.status,statusText:response.statusText,headers});
+}
 export function chatRequestFetch(base:typeof fetch=fetch):typeof fetch {
   return (async(input:Parameters<typeof fetch>[0],init?:Parameters<typeof fetch>[1])=>{
     const scope=activeRequest.getStore();
     if(!scope)return base(input,init);
-    const response=await base(input,{...init,signal:init?.signal?AbortSignal.any([scope.signal,init.signal]):scope.signal,...(typeof Bun==='undefined'?{}:{timeout:false})} as Parameters<typeof fetch>[1]);
+    const response=await adaptJsonChatCompletion(typeof input==='string'?input:input instanceof URL?input.href:input.url,init,await base(input,{...init,signal:init?.signal?AbortSignal.any([scope.signal,init.signal]):scope.signal,...(typeof Bun==='undefined'?{}:{timeout:false})} as Parameters<typeof fetch>[1]));
     if(!response.body)return response;
     const url=typeof input==='string'?input:input instanceof URL?input.href:input.url;
     const sse=/event-stream/i.test(response.headers.get('content-type')??'');

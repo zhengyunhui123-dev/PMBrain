@@ -37,10 +37,12 @@ export interface EntityIngestContext {
   defer_embedding?:boolean;
   pageId?:number|string;
   sourceIncarnation?:string;
+  candidatePages?:LinkPageMetadata[];
+  confirmedVariant?:{slug:string;evidence:string};
 }
 interface EntityRef { slug: string; sourceId: string; title: string; type: string; evidence: string; names: string[] }
 interface IngestRelation { from: string; to: string; link_type: string; evidence: string }
-interface IngestReceipt { entities: string[]; relations: IngestRelation[]; no_entities?: boolean }
+interface IngestReceipt { entities: string[]; relations: IngestRelation[]; no_entities?: boolean; capture_incomplete?: boolean }
 
 export function locateIngestSkillsDir(): string | null {
   for(const start of [process.cwd(),dirname(fileURLToPath(import.meta.url)),dirname(process.execPath)]){
@@ -82,7 +84,7 @@ function parseReceipt(text:string):IngestReceipt {
   if(!value)throw new UnrecoverableError('ingest receipt missing or invalid JSON');
   if(!Array.isArray(value.entities)||!value.entities.every(x=>typeof x==='string')||!Array.isArray(value.relations)
     ||value.relations.some(x=>!x||typeof x.from!=='string'||typeof x.to!=='string'||typeof x.link_type!=='string'||typeof x.evidence!=='string')
-    ||(value.entities.length===0&&(value.no_entities!==true||value.relations.length>0))){
+    ||(value.entities.length===0&&((value.no_entities!==true&&value.capture_incomplete!==true)||value.relations.length>0))){
     throw new UnrecoverableError('ingest receipt requires entities, relations and explicit no_entities for an empty result');
   }
   return value;
@@ -201,7 +203,7 @@ export async function validateIngestWrite(engine:BrainEngine,context:EntityInges
     if(!evidence)throw new UnrecoverableError(`ingest entity evidence missing: ${slug}; title '${title}' or an established alias is not present in this source chunk. Keep the supported identity or omit this unsupported capture; do not invent an alias. Do not repeat this unchanged write.`);
     if(!content.includes('[Source:')||!content.includes(context.slug))throw new UnrecoverableError(`ingest provenance missing: ${slug}`);
     if(!['person','company','organization','entity','project','concept'].includes(String(input.type??metadata.type??existing?.type??parsed.type)))throw new UnrecoverableError(`ingest invalid entity type: ${slug}`);
-    const pages=await engine.executeRaw<LinkPageMetadata>(`SELECT p.slug,p.source_id,p.type,p.title,p.knowledge_revision::text AS knowledge_revision,
+    const pages=Array.isArray(context.candidatePages)?context.candidatePages:await engine.executeRaw<LinkPageMetadata>(`SELECT p.slug,p.source_id,p.type,p.title,p.knowledge_revision::text AS knowledge_revision,
       COALESCE((SELECT jsonb_agg(COALESCE(a.alias_text,a.alias_norm)) FROM page_aliases a WHERE a.slug=p.slug AND a.source_id=p.source_id),p.frontmatter->'aliases') AS aliases
       FROM pages p WHERE p.deleted_at IS NULL AND p.source_id=ANY($1::text[]) AND p.type=ANY($2::text[]) ORDER BY p.source_id,p.slug`,
       [[...new Set([context.sourceId,'default'])],['person','company','organization','entity','project','concept']]);
@@ -222,7 +224,10 @@ export async function validateIngestWrite(engine:BrainEngine,context:EntityInges
       const proposedCore=(entityType==='company'||entityType==='organization')?legalEntityCore(title):'';
       const legalNearby=proposedCore&&proposedCore!==title?pages.filter(p=>[context.sourceId,'default'].includes(p.source_id)&&['company','organization'].includes(p.type)&&p.slug!==slug&&legalEntityCore(p.title??'')===proposedCore&&!BLOCKED_LEGAL_CORES.has(proposedCore)):[] ;
       const variants=[...new Map([...nearby,...legalNearby].map(p=>[`${p.source_id}:${p.slug}`,p])).values()];
-      if(variants.length)throw new UnrecoverableError(`ingest verify existing entity before creating a name variant: ${variants.map(p=>`${p.source_id}:${p.slug} (${p.title})`).join(', ')}. Read these pages and reuse only a confirmed identity. New project aliases require an explicit same-entity declaration in the original source. No automatic fuzzy merge is permitted.`);
+      const evidenceText=context.confirmedVariant?.slug===slug?context.confirmedVariant.evidence.trim():'';
+      const sameEvidence=(name:string)=>surfaceName(name)===surfaceName(evidenceText)||identityName(name)===identityName(evidenceText);
+      const confirmedNew=evidenceText.length>=4&&context.chunkBody.includes(evidenceText)&&!sameEvidence(title)&&!variants.some(p=>sameEvidence(p.title??'')||(Array.isArray(p.aliases)&&p.aliases.some(alias=>typeof alias==='string'&&sameEvidence(alias))));
+      if(variants.length&&!confirmedNew)throw new UnrecoverableError(`ingest verify existing entity before creating a name variant: ${variants.map(p=>`${p.source_id}:${p.slug} (${p.title})`).join(', ')}. Read these pages and reuse only a confirmed identity. New project aliases require an explicit same-entity declaration in the original source. No automatic fuzzy merge is permitted.`);
     }
   }else if(name==='add_timeline_entry'){
     await resolveEntity(engine,context,String(input.slug??''));
@@ -376,6 +381,17 @@ export function entityIngestTools(tools:ToolDef[],context:EntityIngestContext):T
   },wrapped.find(tool=>tool.name==='brain_add_timeline_entry'))];
 }
 
+export function continueIdentityRepair(turn: number, blocks: readonly { type: string; isError?: boolean; output?: unknown }[]): boolean {
+  if (turn !== 0) return false;
+  return blocks.some(block => {
+    if (block.type !== 'tool-result' || block.isError) return false;
+    let output = block.output;
+    if (typeof output === 'string') { try { output = JSON.parse(output); } catch { return false; } }
+    const pending = output && typeof output === 'object' ? (output as { pending_review?: unknown }).pending_review : undefined;
+    return Array.isArray(pending) && pending.length > 0;
+  });
+}
+
 export async function captureToolCompletion(blocks: readonly ChatBlock[]): Promise<string | null> {
   if (blocks.some(block => block.type === 'tool-result' && block.isError)) return null;
   const last = blocks.at(-1);
@@ -521,7 +537,33 @@ export async function verifyIngestResult(engine:BrainEngine,data:SubagentHandler
   const rejected=jobId==null?[]:await engine.executeRaw<{from:string;to:string;reason:string}>(`SELECT DISTINCT i->>'from' AS "from",i->>'to' AS "to",o->>'reason' AS reason
     FROM (SELECT CASE WHEN jsonb_typeof(input)='string' THEN (input #>> '{}')::jsonb ELSE input END i,CASE WHEN jsonb_typeof(output)='string' THEN (output #>> '{}')::jsonb ELSE output END o FROM subagent_tool_executions WHERE job_id=$1 AND tool_name='brain_add_link') x WHERE o->>'status'='rejected'`,[jobId]);
   for(const row of rejected)verified.unresolved.push({sourcePage:row.from,sourceId:data.ingest_context.sourceId,target:row.to,field:'ingest_relation',reason:row.reason});
-  return {...result,ingest_verified:verified.verified,graph_reconciled:false,ingest_entities:verified.entities,ingest_unresolved:verified.unresolved,ingest_links_created:verified.linksCreated};
+  const captures=jobId==null?[]:await engine.executeRaw<{output:unknown}>("SELECT output FROM subagent_tool_executions WHERE job_id=$1 AND tool_name='brain_capture_entities' AND output IS NOT NULL ORDER BY id",[jobId]);
+  const saved=new Set<string>();
+  const pendingItems:Array<{slug?:string;candidates?:Array<{source_id?:string;slug?:string}>}>=[];
+  const failedItems:Array<{slug?:string;candidates?:Array<{source_id?:string;slug?:string}>}>=[];
+  const deferred:Array<{from?:string;to?:string}>=[];
+  for(const row of captures){
+    const output=(typeof row.output==='string'?JSON.parse(row.output):row.output) as {completed?:Record<string,{output?:{slug?:string}}>;pending?:Record<string,{slug?:string;candidates?:Array<{source_id?:string;slug?:string}>}>;failed?:Record<string,{slug?:string;candidates?:Array<{source_id?:string;slug?:string}>}>;deferred_relations?:Array<{from?:string;to?:string}>}|null;
+    if(!output)continue;
+    for(const step of Object.values(output.completed??{})){
+      const slug=step?.output?.slug;
+      if(!slug)continue;
+      saved.add(slug);
+      saved.add(slug.includes(':')?slug.slice(slug.indexOf(':')+1):slug);
+    }
+    pendingItems.push(...Object.values(output.pending??{}));
+    failedItems.push(...Object.values(output.failed??{}));
+    deferred.push(...(output.deferred_relations??[]));
+  }
+  const settled=(item:{slug?:string;candidates?:Array<{source_id?:string;slug?:string}>})=>[item.slug,...(item.candidates??[]).flatMap(candidate=>[candidate.slug,candidate.source_id&&candidate.slug?`${candidate.source_id}:${candidate.slug}`:undefined])].some(name=>!!name&&saved.has(name));
+  const known=(reference:string)=>!!reference&&(saved.has(reference)||saved.has(reference.includes(':')?reference.slice(reference.indexOf(':')+1):reference));
+  const ingestPending=pendingItems.filter(item=>!settled(item)).length;
+  const ingestFailed=failedItems.filter(item=>!settled(item)).length;
+  for(const relation of deferred){
+    if(known(String(relation.from??''))&&known(String(relation.to??'')))continue;
+    verified.unresolved.push({sourcePage:String(relation.from??''),sourceId:data.ingest_context.sourceId,target:String(relation.to??''),field:'identity_pending',reason:'关系涉及待核对或未保存的实体，本轮未写入'});
+  }
+  return {...result,ingest_verified:verified.verified,graph_reconciled:false,ingest_entities:verified.entities,ingest_unresolved:verified.unresolved,ingest_links_created:verified.linksCreated,ingest_pending_review:ingestPending,ingest_item_failures:ingestFailed};
 }
 
 export async function ingestFinalPrompt(engine:BrainEngine,jobId:number,data:SubagentHandlerData):Promise<string>{

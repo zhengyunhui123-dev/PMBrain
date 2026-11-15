@@ -24,6 +24,7 @@
  */
 
 import { describe, expect, test, beforeEach } from 'bun:test';
+import { executionTiming, resetExecutionTiming } from '../src/core/minions/execution-timing.ts';
 import {
   runLockRenewalTick,
   resolveLockRenewalKnobs,
@@ -281,6 +282,31 @@ describe('runLockRenewalTick: lock_lost (token mismatch)', () => {
     expect(audit.log.failures).toHaveLength(0);
     expect(audit.log.gaveUps).toHaveLength(0);
     expect(audit.log.recoveries).toHaveLength(0);
+  });
+});
+
+describe('续租耗时只记录，不新增重试', () => {
+  test('成功和丢锁都保留原来的结果，并记下本次等待', async () => {
+    resetExecutionTiming();
+    let clock = 0;
+    const slow = await runLockRenewalTick({
+      renewLock: async () => { clock = 1200; return true; },
+      audit: freshAudit().sink,
+      now: () => clock,
+      setTimeout: makeFakeTimer().setTimeout,
+    }, makeState({ lastSuccessfulRenewalAt: 0 }));
+    expect(slow).toEqual({ kind: 'ok' });
+    expect(executionTiming().renewWaitMs).toBe(1200);
+    resetExecutionTiming();
+    clock = 0;
+    const lost = await runLockRenewalTick({
+      renewLock: async () => { clock = 1800; return false; },
+      audit: freshAudit().sink,
+      now: () => clock,
+      setTimeout: makeFakeTimer().setTimeout,
+    }, makeState({ lastSuccessfulRenewalAt: 0 }));
+    expect(lost).toEqual({ kind: 'lock_lost' });
+    expect(executionTiming().renewWaitMs).toBe(1800);
   });
 });
 

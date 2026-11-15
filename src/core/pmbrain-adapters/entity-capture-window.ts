@@ -1,3 +1,5 @@
+import { noteExecutionDuration } from '../minions/execution-timing.ts';
+
 const MAX_WINDOW_BYTES=32*1024**2;
 export const MAX_CAPTURE_CONCURRENCY=4;
 const writers=new WeakMap<object,Promise<void>>();
@@ -36,8 +38,11 @@ export async function withCaptureWrite<T>(engine:object,signal:AbortSignal|undef
   let release!:()=>void;
   const current=new Promise<void>(resolve=>{release=resolve;});
   writers.set(engine,current);
-  try{await prior;signal?.throwIfAborted();return await work();}
-  finally{release();if(writers.get(engine)===current)writers.delete(engine);}
+  try{
+    await prior;signal?.throwIfAborted();
+    const started=Date.now();
+    try{return await work();}finally{noteExecutionDuration('transaction',Math.max(0,Date.now()-started));}
+  }finally{release();if(writers.get(engine)===current)writers.delete(engine);}
 }
 
 export async function runCaptureWindow<T>(items:T[],work:(item:T,slot:number)=>Promise<void>,options:{getConcurrency:()=>number;sizeOf:(item:T)=>number;shouldStop:()=>boolean;signal?:AbortSignal}):Promise<void>{

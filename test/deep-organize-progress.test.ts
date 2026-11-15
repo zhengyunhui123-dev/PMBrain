@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import { createRequire } from 'node:module';
 import { DeepOrganizeProgress } from '../admin/src/product/DeepOrganizeProgress';
 import { TaskProductProgressSchema } from '../shared/contracts/common';
-import { DEEP_ORGANIZE_STAGES, deepOrganizePercent, deepOrganizeTotals, isStagedDeepOrganize, summarizeDeepStage, type DeepRoundProgress } from '../shared/deep-organize-progress';
+import { DEEP_ORGANIZE_STAGES, deepOrganizeOutcome, deepOrganizePercent, deepOrganizeTotals, isStagedDeepOrganize, summarizeDeepStage, type DeepRoundProgress } from '../shared/deep-organize-progress';
 
 test('综合页、知识点、模式概念都按真实新建和维护累计，关联单独计数', () => {
   const stages = [
@@ -88,10 +88,44 @@ test('深度整理详情按七个阶段展示，同步失败使用文件队列�
   expect(html).toContain('识别和更新实体');
   expect(html).toContain('同步 3，新增 2，更新 1');
   expect(html).toContain('文件队列成功 2，失败 1');
+  expect(html).toContain('阶段进度');
   expect(html).toContain('2 / 7 个阶段已记录');
+  expect(html).toContain('正在识别实体');
+  expect(html).not.toContain('等待开始');
   expect(html).not.toContain('更新搜索索引');
   expect(html).toContain('提炼 5 条知识点');
   expect(html).toContain('notes/first.md');
   expect(html).toContain('¥0.20');
   expect(html).toContain('¥5.00');
+});
+
+test('本轮结束后分开显示成功、待核对、失败和尚未处理，部分完成仍是 99%', () => {
+  const round: DeepRoundProgress = {
+    stage: 'done',
+    scan: { scanned: 2000, unchanged: 200, complete: true },
+    stages: DEEP_ORGANIZE_STAGES.map(stage => ({
+      id: stage.id,
+      status: stage.id === 'entities' ? 'partial' as const : 'completed' as const,
+      durationMs: 0,
+      result: stage.id === 'entities' ? '写入 4 个实体，新增 9 条关联' : '已完成',
+      detail: stage.id === 'entities' ? '待处理候选 1752' : '',
+      ...(stage.id === 'entities' ? { entities: 4, links: 9, pendingReview: 2, itemFailed: 1, remaining: 1752 } : {}),
+    })),
+  };
+  expect(deepOrganizePercent(round)).toBe(99);
+  expect(deepOrganizeOutcome(round)).toBe('本轮已结束：成功 4，待核对 2，失败 1，尚未处理 1752');
+  expect(deepOrganizeOutcome({ ...round, stage: 'entities' })).toBeNull();
+  const html = renderToStaticMarkup(createElement(DeepOrganizeProgress, {
+    link: false,
+    run: {
+      id: 'task-done', kind: 'dream_full', status: 'failed', command: [], stdout: '', stderr: '', exitCode: 1, error: '实体身份待确认',
+      startedAt: '2026-11-15T06:00:00.000Z', completedAt: '2026-11-15T09:24:00.000Z', durationMs: 1000,
+      product: { deep: round, name: 'AI 深度整理', stage: '深度整理部分完成', percent: 99, phasePercent: null, completedSteps: 7, steps: [], processed: null, total: null, file: null, metrics: [], errorReason: null, budget: null },
+    },
+  })) as string;
+  expect(html).toContain('本轮已结束：成功 4，待核对 2，失败 1，尚未处理 1752');
+  expect(html).toContain('剩余资料不是失败份数');
+  expect(html).toContain('完成检查只核对本轮结构');
+  expect(html).not.toContain('等待开始');
+  expect(html).toContain('7 / 7 个阶段已记录');
 });

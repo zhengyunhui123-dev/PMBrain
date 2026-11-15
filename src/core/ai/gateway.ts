@@ -2636,6 +2636,11 @@ function instantiateChat(recipe: Recipe, modelId: string, cfg: AIGatewayConfig):
   }
 }
 
+function toolCallInput(value: unknown): unknown {
+  if (typeof value !== 'string') return value;
+  try { return JSON.parse(value); } catch { return value; }
+}
+
 /**
  * Map AI SDK's `finish_reason` (and provider-specific signals) to a provider-
  * neutral `stopReason`. This is the structural-signal layer that
@@ -3023,7 +3028,7 @@ async function chatOnce(opts: ChatOpts): Promise<ChatResult> {
             type: 'tool-call',
             toolCallId: part.toolCallId,
             toolName: part.toolName,
-            input: part.input ?? part.args,
+            input: toolCallInput(part.input ?? part.args),
           });
         }
       }
@@ -3038,7 +3043,7 @@ async function chatOnce(opts: ChatOpts): Promise<ChatResult> {
           type: 'tool-call',
           toolCallId: tc.toolCallId,
           toolName: tc.toolName,
-          input: tc.input ?? tc.args,
+          input: toolCallInput(tc.input ?? tc.args),
         });
       }
     }

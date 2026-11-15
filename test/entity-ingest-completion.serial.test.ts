@@ -205,8 +205,32 @@ test('一次 JSON 提取包含无法处理的内容时拒绝保存，不假装�
 test('一次 JSON 提取遇到不支持的事实时保留具体错误和已保存资料',async()=>{
  const output=JSON.stringify({entities:[{slug,content:'---\ntitle: 三纪早会体系\ntype: concept\n---\n没有来源的记录。'}],relations:[]});
  const execution=await run([response(output)],false,6,undefined,undefined,{...context,compact_contract:true,batch_capture:true,single_pass:true} as EntityIngestContext);
- const error=await expectRejection(execution.result);expect(error.message).toContain('ingest provenance missing');expect(execution.calls).toHaveLength(1);
+ const result=await execution.result;expect(result.ingest_verified).toBe(true);expect(result.ingest_item_failures).toBe(1);expect(execution.calls).toHaveLength(1);
  expect(await engine.getPage(slug)).toBeNull();expect((await engine.getPage(context.slug))?.compiled_truth).toBe(context.body);
+ const [stored]=await engine.executeRaw<{output:unknown}>("SELECT output FROM subagent_tool_executions WHERE job_id=$1 AND tool_name='brain_capture_entities'",[execution.jobId]);
+ expect(JSON.stringify(typeof stored?.output==='string'?JSON.parse(stored.output):stored?.output)).toContain('ingest provenance missing');
+});
+
+test('一次 JSON 提取遇到相近名称时先保存其他人，再用原文原句确认新对象',async()=>{
+ const body='李四整理了个人知识库 Wiki 索引。Wiki 索引只汇总目录链接，不替代原来的项目页。';
+ await engine.putPage(context.slug,{type:'note',title:'原始记录',compiled_truth:body,frontmatter:{}});
+ await engine.putPage('projects/wiki-index',{type:'project',title:'个人知识库 Wiki 索引',compiled_truth:'已有索引页。',frontmatter:{}});
+ const [source]=await engine.executeRaw<{id:number;incarnation:string}>('SELECT p.id,s.incarnation::text incarnation FROM pages p JOIN sources s ON s.id=p.source_id WHERE p.slug=$1 AND p.source_id=$2',[context.slug,'default']);
+ const variant='projects/wiki-suoyin',person='people/lisi';
+ const variantContent='---\ntitle: Wiki 索引\ntype: project\n---\nWiki 索引只汇总目录链接。[Source: notes/meeting]';
+ const personContent='---\ntitle: 李四\ntype: person\n---\n李四整理了个人知识库 Wiki 索引。[Source: notes/meeting]';
+ const first=JSON.stringify({entities:[{slug:variant,content:variantContent},{slug:person,content:personContent}],relations:[{from:person,to:variant,link_type:'mentions',evidence:'李四整理了个人知识库 Wiki 索引'}]});
+ const second=JSON.stringify({entities:[{slug:variant,content:variantContent,identity_confirmed:true,distinguishing_evidence:'只汇总目录链接'}],relations:[]});
+ const execution=await run([response(first),response(second)],false,6,undefined,undefined,{...context,body,chunkBody:body,pageId:source!.id,sourceIncarnation:source!.incarnation,compact_contract:true,batch_capture:true,single_pass:true,repair_single_pass:true,quickEntitiesOnly:true} as EntityIngestContext);
+ const result=await execution.result;
+ expect(execution.calls).toHaveLength(2);
+ expect(JSON.stringify(execution.calls[0])).toContain('不要读取页面');
+ expect(result.ingest_verified).toBe(true);
+ expect(result.ingest_pending_review).toBe(0);
+ expect(await engine.getPage(person)).toMatchObject({title:'李四'});
+ expect(await engine.executeRaw('SELECT id FROM pages WHERE slug=$1',[person])).toHaveLength(1);
+ expect(await engine.getPage(variant)).toMatchObject({title:'Wiki 索引'});
+ expect(await engine.getPage('projects/wiki-index')).toMatchObject({title:'个人知识库 Wiki 索引'});
 });
 
 test('一次 JSON 提取遇到同名身份不明的人不会猜测合并或新建',async()=>{
@@ -214,8 +238,10 @@ test('一次 JSON 提取遇到同名身份不明的人不会猜测合并或新�
  for(const target of ['people/existing-a','people/existing-b'])await engine.putPage(target,{type:'person',title:'张三',compiled_truth:'已有人工资料。',frontmatter:{}});
  const output=JSON.stringify({entities:[{slug:'people/new-name',content:'---\ntitle: 张三\ntype: person\n---\n张三参与工作安排。[Source: notes/meeting]'}],relations:[]});
  const execution=await run([response(output)],false,6,undefined,undefined,{...context,body,chunkBody:body,compact_contract:true,batch_capture:true,single_pass:true,quickEntitiesOnly:true} as EntityIngestContext);
- const error=await expectRejection(execution.result);expect(error.message).toContain('ingest reuse existing entity');expect(execution.calls).toHaveLength(1);
+ const result=await execution.result;expect(result.ingest_verified).toBe(true);expect(result.ingest_pending_review).toBe(1);expect(execution.calls).toHaveLength(1);
  expect(await engine.getPage('people/new-name')).toBeNull();
+ expect(await engine.getPage('people/existing-a')).toMatchObject({title:'张三'});
+ expect(await engine.getPage('people/existing-b')).toMatchObject({title:'张三'});
 });
 
 for(const pending of [false,true])test(`一次 JSON 提取在${pending?'待保存':'保存前'}中断后继续，不重新调用模型`,async()=>{

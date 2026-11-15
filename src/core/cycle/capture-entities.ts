@@ -819,6 +819,8 @@ export async function runPhaseCaptureEntities(
   });
   reportProgress();
   let directLinks = 0;
+  let pendingReview = 0;
+  let itemFailures = 0;
   const recognizedEntities=new Map<string,{slug:string;sourceId:string}>(cachedEntities);
   const unresolvedReferences:unknown[]=[...cachedWarnings];
   let inputTokens = 0;
@@ -872,10 +874,10 @@ export async function runPhaseCaptureEntities(
       WHERE j.status='completed' AND j.result->>'ingest_verified'='true' AND j.result ? 'capture_proof'
         AND j.data->'ingest_context'->>'sourceId'=$1
         AND j.data->'ingest_context'->>'chunkBody'=$2
-        AND left(j.data->>'system',length($3))=$3
+        AND (left(j.data->>'system',length($3))=$3 OR left(j.data->>'system',length($4))=$4)
         AND p.deleted_at IS NULL AND NOT s.archived AND p.compiled_truth=j.data->'ingest_context'->>'body'
         AND p.id::text=j.data->'ingest_context'->>'pageId' AND s.incarnation::text=j.data->'ingest_context'->>'sourceIncarnation'
-      ORDER BY j.id DESC LIMIT 16`,[chunk.sourceId,chunk.chunkBody,baseContract]);
+      ORDER BY j.id DESC LIMIT 16`,[chunk.sourceId,chunk.chunkBody,baseContract,singlePass?SINGLE_PASS_CAPTURE_CONTRACT:baseContract]);
     for(const row of rows){
       const context={slug:chunk.slug,sourceId:chunk.sourceId,body:chunk.body,chunkBody:chunk.chunkBody,pageId:chunk.pageId,sourceIncarnation:chunk.sourceIncarnation,quickEntitiesOnly:true};
       const receipt=quickCaptureReceipt(row.receipt,chunk.sourceId);
@@ -1126,6 +1128,8 @@ export async function runPhaseCaptureEntities(
           }
           const result=job.result as any;
           directLinks+=reused?0:Number(result?.ingest_links_created??0);
+          pendingReview+=Number(result?.ingest_pending_review??0);
+          itemFailures+=Number(result?.ingest_item_failures??0);
           for(const ref of result?.ingest_entities??[])recognizedEntities.set(JSON.stringify([ref.sourceId,ref.slug]),ref);
           unresolvedReferences.push(...(result?.ingest_unresolved??[]));
           if (job.status !== 'completed' || result?.ingest_verified!==true || (result?.stop_reason && result.stop_reason!=='end_turn')) {
@@ -1311,6 +1315,8 @@ export async function runPhaseCaptureEntities(
       report_line: reportLine,
       ollama,
       entities_written: entitiesCreated,
+      entities_pending_review: pendingReview,
+      entities_failed: itemFailures,
       relations_created: relationsCreated,
       relations_removed: relationsRemoved,
       direct_links_created: directLinks+(toolLinks?.n??0)+batchLinks,
