@@ -910,6 +910,10 @@ export function buildDreamOutcome(run: ConsoleRun): DreamOutcomeSummary {
         : `事实：写入 ${factsInserted} 条；这次运行记录未保留来源页面明细`,
     );
   }
+  const conceptsNew = Math.max(0, Number(concepts.concepts_new ?? 0));
+  const conceptsUpdated = Math.max(0, Number(concepts.concepts_updated ?? 0));
+  const conceptsPending = Math.max(0, Number(concepts.concepts_pending_verification ?? 0));
+  const conceptsConflict = Math.max(0, Number(concepts.concepts_conflict ?? 0));
   if (conceptsWritten > 0) {
     extractionItems.push(
       conceptSlugs.length > 0
@@ -917,6 +921,10 @@ export function buildDreamOutcome(run: ConsoleRun): DreamOutcomeSummary {
         : `概念：形成 ${conceptsWritten} 个；这次运行记录未保留名称明细`,
     );
   }
+  if (conceptsNew > 0) extractionItems.push(`新增概念：${conceptsNew} 个。`);
+  if (conceptsUpdated > 0) extractionItems.push(`更新概念：${conceptsUpdated} 个，新的表述已替换旧表述，历史仍保留。`);
+  if (conceptsPending > 0) extractionItems.push(`待重新核验：${conceptsPending} 个旧结论失去了有效证据，原文仍保留。`);
+  if (conceptsConflict > 0) extractionItems.push(`冲突：${conceptsConflict} 个结论与现有证据不一致，旧表述仍保留。`);
   if (proposalsInserted > 0) {
     if (proposalSamples.length > 0) {
       extractionItems.push(...proposalSamples.slice(0, 20).map(item =>

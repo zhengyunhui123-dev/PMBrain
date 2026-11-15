@@ -36,6 +36,7 @@ import { normalizeAlias } from './alias-normalize.ts';
 import { normalizeChineseQuery } from './query-normalize-zh.ts';
 import { resolveHardExcludes } from './source-boost.ts';
 import { stampEvidence } from './evidence.ts';
+import { stampConclusionReview } from './conclusion-review.ts';
 import { applyExactLookupTier } from './exact-lookup.ts';
 import { expandAnchors, hydrateChunks } from './two-pass.ts';
 import { enforceTokenBudget } from './token-budget.ts';
@@ -1117,6 +1118,7 @@ export async function hybridSearch(
         ? { token_budget: noEmbedBudgetMeta }
         : {}),
     });
+    await stampConclusionReview(engine, noEmbedBudgeted);
     return noEmbedBudgeted;
   }
 
@@ -1402,6 +1404,7 @@ export async function hybridSearch(
         ? { token_budget: kwBudgetMeta }
         : {}),
     });
+    await stampConclusionReview(engine, kwBudgeted);
     return kwBudgeted;
   }
 
@@ -1686,6 +1689,7 @@ export async function hybridSearch(
     metadata_boost_gate: metadataBoostGate,
     ...(relationalPinDecision ? { relational_rerank_pin: relationalPinDecision } : {}),
   });
+  await stampConclusionReview(engine, budgeted);
   return budgeted;
 }
 
@@ -1962,6 +1966,7 @@ export async function hybridSearchCached(
       } catch {
         // swallow — telemetry is best-effort
       }
+      await stampConclusionReview(engine, budgeted);
       return budgeted;
     }
   }

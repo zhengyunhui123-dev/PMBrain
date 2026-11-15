@@ -714,6 +714,7 @@ function NaturalLanguagePanel({
                       <em>{hit.score.toFixed(3)}</em>
                     </div>
                     <code className="knowledge-search-slug">{hit.slug}</code>
+                    {hit.review_label && <span className="knowledge-search-locator">{hit.review_label}</span>}
                     {hit.locator && <span className="knowledge-search-locator">{hit.locator}</span>}
                     {hit.snippet && <p>{hit.snippet}{hit.snippet.length >= 160 ? '…' : ''}</p>}
                   </li>

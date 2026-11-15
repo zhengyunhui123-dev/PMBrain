@@ -21,6 +21,24 @@ export interface AdvisorProductSuggestion {
 
 export const ADVISOR_PRODUCT_NAME = '知识库体检';
 
+export type AdvisorReadinessState =
+  | 'ready'
+  | 'pending'
+  | 'failed'
+  | 'not_configured'
+  | 'incomplete'
+  | 'unavailable'
+  | 'not_reviewed'
+  | 'unknown'
+  | 'none';
+
+export interface AdvisorReadinessItem {
+  key: 'sync' | 'keyword_search' | 'semantic_search' | 'organize' | 'content_review';
+  label: string;
+  state: AdvisorReadinessState;
+  text: string;
+}
+
 export interface AdvisorProductView {
   product_name: string;
   score: number | null;
@@ -30,6 +48,7 @@ export interface AdvisorProductView {
   suggestions: AdvisorProductSuggestion[];
   generated_at: string;
   worst: AdvisorSeverity | null;
+  readiness: AdvisorReadinessItem[];
 }
 
 export type AdminAdvisorAction =
@@ -208,10 +227,63 @@ export function toProductSuggestion(finding: AdvisorFinding): AdvisorProductSugg
   };
 }
 
+function readinessItem(
+  key: AdvisorReadinessItem['key'],
+  label: string,
+  state: AdvisorReadinessState,
+  text: string,
+): AdvisorReadinessItem {
+  return { key, label, state, text };
+}
+
+export function advisorReadiness(report: AdvisorReport): AdvisorReadinessItem[] {
+  const failed = new Set(report.failed_collectors ?? []);
+  const findings = report.findings;
+  const has = (pred: (finding: AdvisorFinding) => boolean) => findings.some(pred);
+  const syncUnknown = failed.has('stalled-jobs');
+  const syncPending = has(finding => finding.id.startsWith('stale_sync:')) || report.maintenance?.sync === 'pending';
+  const organizeState = report.maintenance?.organize;
+  const organizeFailed = has(finding => finding.id.startsWith('stalled_job:')) || organizeState === 'failed';
+  const migrationUnknown = failed.has('migration');
+  const migrationBlocking = has(finding => finding.id === 'pending_migration' && finding.severity === 'critical');
+  const semanticUnknown = failed.has('setup-smells') || failed.has('usage-shape');
+  const semanticMissing = has(finding => finding.id === 'embedding_not_configured' || finding.id === 'embeddings_disabled');
+  const semanticIncomplete = has(finding => finding.id === 'low_embed_coverage');
+  const sync = syncUnknown
+    ? readinessItem('sync', '资料同步', 'unknown', '未完成检查')
+    : syncPending
+      ? readinessItem('sync', '资料同步', 'pending', '有知识源待同步')
+      : report.maintenance?.sync === 'current'
+        ? readinessItem('sync', '资料同步', 'ready', '最近已同步')
+        : readinessItem('sync', '资料同步', 'none', '没有需要同步的知识源');
+  const organize = syncUnknown
+    ? readinessItem('organize', '知识整理', 'unknown', '未完成检查')
+    : organizeFailed
+      ? readinessItem('organize', '知识整理', 'failed', '上次整理没有正常结束')
+      : organizeState === 'running'
+        ? readinessItem('organize', '知识整理', 'pending', '正在整理')
+        : organizeState === 'completed'
+          ? readinessItem('organize', '知识整理', 'ready', '已完成')
+          : readinessItem('organize', '知识整理', 'none', '尚未整理');
+  return [
+    sync,
+    readinessItem('keyword_search', '关键词搜索', migrationUnknown ? 'unknown' : migrationBlocking ? 'unavailable' : 'ready', migrationUnknown ? '未完成检查' : migrationBlocking ? '数据库结构未升级，还不能当作可用' : '可用'),
+    readinessItem('semantic_search', '语义搜索', semanticUnknown ? 'unknown' : semanticMissing ? 'not_configured' : semanticIncomplete ? 'incomplete' : 'ready', semanticUnknown ? '未完成检查' : semanticMissing ? '未配置向量模型' : semanticIncomplete ? '向量尚未补齐' : '可用'),
+    organize,
+    readinessItem('content_review', '内容是否采纳', 'not_reviewed', '尚未验收'),
+  ];
+}
+
 export function buildAdvisorProductView(report: AdvisorReport, score: number | null): AdvisorProductView {
   const band = score == null ? { status: 'ok' as const, status_label: '待评估' } : healthStatusFromScore(score);
   const visibleFindings = report.findings.filter((finding) => finding.collector !== 'chronicle');
   const suggestions = visibleFindings.map(toProductSuggestion);
+  const failed = report.failed_collectors ?? [];
+  const status = failed.length > 0
+    ? { status: 'needs_attention' as const, status_label: '未完成检查' }
+    : visibleFindings.some((finding) => finding.severity === 'critical')
+      ? { status: 'needs_attention' as const, status_label: '需要处理' }
+      : band;
   const worst: AdvisorSeverity | null =
     visibleFindings.some((finding) => finding.severity === 'critical') ? 'critical'
       : visibleFindings.some((finding) => finding.severity === 'warn') ? 'warn'
@@ -220,11 +292,12 @@ export function buildAdvisorProductView(report: AdvisorReport, score: number | n
   return {
     product_name: ADVISOR_PRODUCT_NAME,
     score,
-    ...band,
+    ...status,
     suggestion_count: suggestions.length,
     suggestions,
     generated_at: report.generated_at,
     worst,
+    readiness: advisorReadiness(report),
   };
 }
 

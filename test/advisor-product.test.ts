@@ -171,4 +171,72 @@ describe('advisor product view', () => {
     expect(view.suggestions.every((item) => item.dispatch_id == null)).toBe(true);
     expect(view.suggestion_count).toBe(1);
   });
+
+  test('严重问题压过高分，失败的检查不能显示成良好', () => {
+    const critical = buildAdvisorProductView(report([
+      finding({
+        id: 'pending_migration',
+        severity: 'critical',
+        title: 'Schema migrations are pending.',
+        collector: 'migration',
+      }),
+    ], 'critical'), 95);
+    expect(critical.status_label).toBe('需要处理');
+    expect(critical.readiness.find(item => item.key === 'keyword_search')?.state).toBe('unavailable');
+    expect(critical.readiness.find(item => item.key === 'content_review')).toMatchObject({
+      state: 'not_reviewed',
+      text: '尚未验收',
+    });
+
+    const incomplete = buildAdvisorProductView({
+      ...report([], null),
+      failed_collectors: ['usage-shape'],
+    }, 98);
+    expect(incomplete.status).toBe('needs_attention');
+    expect(incomplete.status_label).toBe('未完成检查');
+    expect(incomplete.suggestions).toEqual([]);
+    expect(incomplete.readiness.find(item => item.key === 'semantic_search')?.text).toBe('未完成检查');
+    expect(incomplete.readiness.find(item => item.key === 'content_review')?.text).toBe('尚未验收');
+  });
+
+  test('只有提醒时，高分仍是良好，同步和语义搜索分开说明', () => {
+    const view = buildAdvisorProductView(report([
+      finding({
+        id: 'low_embed_coverage',
+        severity: 'warn',
+        title: '168 chunks are missing embeddings.',
+        collector: 'usage-shape',
+      }),
+      finding({
+        id: 'stale_sync:work',
+        severity: 'info',
+        title: 'Source "work" has not synced in 5 days.',
+        collector: 'stalled-jobs',
+      }),
+    ]), 92);
+    expect(view.status_label).toBe('良好');
+    expect(view.readiness.map(item => [item.key, item.state])).toEqual([
+      ['sync', 'pending'],
+      ['keyword_search', 'ready'],
+      ['semantic_search', 'incomplete'],
+      ['organize', 'none'],
+      ['content_review', 'not_reviewed'],
+    ]);
+    expect(view.readiness.find(item => item.key === 'organize')?.text).toBe('尚未整理');
+  });
+
+  test('同步和整理要看到实际记录，没有记录不算已完成', () => {
+    const idle = buildAdvisorProductView(report([], null), 95);
+    expect(idle.status_label).toBe('良好');
+    expect(idle.readiness.find(item => item.key === 'sync')).toMatchObject({ state: 'none', text: '没有需要同步的知识源' });
+    expect(idle.readiness.find(item => item.key === 'organize')).toMatchObject({ state: 'none', text: '尚未整理' });
+
+    const done = buildAdvisorProductView({
+      ...report([], null),
+      maintenance: { sync: 'current', organize: 'completed' },
+    }, 95);
+    expect(done.status_label).toBe('良好');
+    expect(done.readiness.find(item => item.key === 'sync')).toMatchObject({ state: 'ready', text: '最近已同步' });
+    expect(done.readiness.find(item => item.key === 'organize')).toMatchObject({ state: 'ready', text: '已完成' });
+  });
 });

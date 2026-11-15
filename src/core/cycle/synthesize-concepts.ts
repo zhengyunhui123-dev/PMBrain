@@ -32,12 +32,19 @@ import { upsertExtractRollup } from '../extract/rollup-writer.ts';
 import { chat as gatewayChat, isAvailable } from '../ai/gateway.ts';
 import { importFromContent } from '../import-file.ts';
 import { serializeMarkdown } from '../markdown.ts';
+import {
+  CONCLUSION_CURRENT,
+  CONCLUSION_CURRENT_LABEL,
+  CONCLUSION_PENDING,
+  CONCLUSION_PENDING_LABEL,
+} from '../search/conclusion-review.ts';
 import { validateSlug } from '../utils.ts';
 import { dreamModelDetails, resolveDreamModel } from './model-routing.ts';
 import { defaultMaxOutputTokens } from '../ai/model-compatibility.ts';
 import { modelTurnRequestPolicy } from '../ai/chat-request-runtime.ts';
 
 const DEFAULT_BUDGET_USD = 1.5;
+const CITED_ATOM_LIMIT = 5;
 const TIER_T1_MIN = 10;
 const TIER_T2_MIN = 5;
 const TIER_T3_MIN = 2;
@@ -110,6 +117,99 @@ export interface SynthesizeConceptsOpts {
   _chat?: typeof gatewayChat;
   /** Test seam: skip DB query; cluster these atoms directly. */
   _atoms?: Array<{ slug: string; source_id?: string; concept_refs: string[]; body: string; title: string }>;
+}
+
+export function conceptPageSlug(label: string): string {
+  const title = label.split('/').pop() ?? label;
+  return validateSlug(`concepts/${title}`);
+}
+
+export function citedAtomIndexes(count: number, sourceIds: string[]): number[] {
+  const picked: number[] = [];
+  const seen = new Set<string>();
+  for (let index = 0; index < count && picked.length < CITED_ATOM_LIMIT; index++) {
+    const source = sourceIds[index] ?? 'default';
+    if (seen.has(source)) continue;
+    seen.add(source);
+    picked.push(index);
+  }
+  for (let index = 0; index < count && picked.length < CITED_ATOM_LIMIT; index++) {
+    if (!picked.includes(index)) picked.push(index);
+  }
+  return picked;
+}
+
+function frontmatterRecord(value: unknown): Record<string, unknown> {
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value) as unknown;
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed as Record<string, unknown>;
+    } catch { /* unreadable frontmatter still leaves the page in place */ }
+  }
+  if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, unknown>;
+  return {};
+}
+
+function dreamConceptEvidence(frontmatter: Record<string, unknown>): Array<{ source_id: string; slug: string }> | null {
+  const synthesizedBy = frontmatter.synthesized_by;
+  const generated = frontmatter.dream_generated === true
+    || (typeof synthesizedBy === 'string' && synthesizedBy.startsWith('synthesize_concepts'))
+    || (typeof frontmatter.pmbrain_concept_members_hash === 'string' && frontmatter.pmbrain_concept_members_hash.length > 0);
+  if (!generated || !Array.isArray(frontmatter.derives_from) || frontmatter.derives_from.length === 0) return null;
+  const refs: Array<{ source_id: string; slug: string }> = [];
+  for (const item of frontmatter.derives_from) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
+    const slug = (item as { slug?: unknown }).slug;
+    const sourceId = (item as { source_id?: unknown }).source_id;
+    if (typeof slug !== 'string' || slug.length === 0) return null;
+    refs.push({ slug, source_id: typeof sourceId === 'string' && sourceId.length > 0 ? sourceId : 'default' });
+  }
+  return refs;
+}
+
+async function markUnsupportedConcepts(
+  engine: BrainEngine,
+  sourceId: string,
+  currentEvidence: Map<string, Set<string>>,
+  rewritingSlugs: Set<string>,
+): Promise<number> {
+  const rows = await engine.executeRaw<{
+    slug: string;
+    title: string | null;
+    compiled_truth: string | null;
+    timeline: string | null;
+    frontmatter: unknown;
+  }>(
+    `SELECT slug, title, compiled_truth, timeline, frontmatter
+       FROM pages
+      WHERE type = 'concept' AND deleted_at IS NULL AND source_id = $1`,
+    [sourceId],
+  );
+  let marked = 0;
+  for (const row of rows) {
+    const frontmatter = frontmatterRecord(row.frontmatter);
+    const recorded = dreamConceptEvidence(frontmatter);
+    if (!recorded || frontmatter.pmbrain_review_status === CONCLUSION_PENDING) continue;
+    const current = currentEvidence.get(row.slug) ?? new Set<string>();
+    const intact = recorded.every(ref => current.has(`${ref.source_id}:${ref.slug}`));
+    if (intact || rewritingSlugs.has(row.slug)) continue;
+    const tags = await engine.getTags(row.slug, { sourceId });
+    const markdown = serializeMarkdown(
+      {
+        ...frontmatter,
+        pmbrain_concept_complete: false,
+        pmbrain_review_status: CONCLUSION_PENDING,
+        pmbrain_review_label: CONCLUSION_PENDING_LABEL,
+        pmbrain_review_reason: 'supporting knowledge was removed or corrected',
+      },
+      row.compiled_truth ?? '',
+      row.timeline ?? '',
+      { type: 'concept', title: row.title ?? row.slug, tags },
+    );
+    await importFromContent(engine, row.slug, markdown, { noEmbed: true, sourceId });
+    marked++;
+  }
+  return marked;
 }
 
 interface AtomGroup {
@@ -213,12 +313,22 @@ export async function runPhaseSynthesizeConcepts(
   }
 
   if (atoms.length === 0) {
+    const conceptsPending = !opts.dryRun && opts._atoms === undefined
+      ? await markUnsupportedConcepts(engine, opts.sourceId ?? 'default', new Map(), new Set())
+      : 0;
     return {
       phase: 'synthesize_concepts',
       status: 'skipped',
       duration_ms: 0,
       summary: 'synthesize_concepts: no atoms with concept refs',
-      details: { ...modelDetails, reason: 'no_atoms' },
+      details: {
+        ...modelDetails,
+        reason: 'no_atoms',
+        concepts_pending_verification: conceptsPending,
+        concepts_new: 0,
+        concepts_updated: 0,
+        concepts_conflict: 0,
+      },
     };
   }
 
@@ -255,18 +365,40 @@ export async function runPhaseSynthesizeConcepts(
     });
   }
 
+  const currentEvidence = new Map<string, Set<string>>();
+  for (const [label, data] of groups) {
+    const pageSlug = conceptPageSlug(label);
+    const keys = currentEvidence.get(pageSlug) ?? new Set<string>();
+    for (const ref of data.refs) keys.add(`${ref.source_id}:${ref.slug}`);
+    currentEvidence.set(pageSlug, keys);
+  }
+  const rewritingSlugs = new Set(atomGroups.map(group => conceptPageSlug(group.conceptSlug)));
+  const conceptsPending = !opts.dryRun && opts._atoms === undefined
+    ? await markUnsupportedConcepts(engine, opts.sourceId ?? 'default', currentEvidence, rewritingSlugs)
+    : 0;
+
   if (atomGroups.length === 0) {
     return {
       phase: 'synthesize_concepts',
       status: 'skipped',
       duration_ms: 0,
       summary: `synthesize_concepts: no concept groups with ≥${TIER_T3_MIN} atoms`,
-      details: { ...modelDetails, reason: 'no_groups_above_threshold', atoms_seen: atoms.length },
+      details: {
+        ...modelDetails,
+        reason: 'no_groups_above_threshold',
+        atoms_seen: atoms.length,
+        concepts_pending_verification: conceptsPending,
+        concepts_new: 0,
+        concepts_updated: 0,
+        concepts_conflict: 0,
+      },
     };
   }
 
   // 4. Per group: synthesize narrative (LLM for T1/T2, deterministic for T3+)
   let conceptsWritten = 0;
+  let conceptsNew = 0;
+  let conceptsUpdated = 0;
   const conceptSlugs: string[] = [];
   let estimatedSpendUsd = 0;
   const budgetCap = await readPhaseBudget(engine,'cycle.synthesize_concepts.budget_usd',DEFAULT_BUDGET_USD);
@@ -311,7 +443,13 @@ export async function runPhaseSynthesizeConcepts(
     const outputSlug = validateSlug(`concepts/${title}`);
     const outputSourceId=opts.sourceId??'default';
     const baseline=await engine.getPage(outputSlug,{sourceId:outputSourceId});
-    const membersHash=createHash('sha256').update(JSON.stringify(['dream-concept-v1',group.tier,group.atomRefs.map((ref,i)=>[ref.source_id,ref.slug,group.atomTitles[i],group.atomBodies[i]]).sort((a,b)=>JSON.stringify(a).localeCompare(JSON.stringify(b)))])).digest('hex');
+    const cited = citedAtomIndexes(group.atomRefs.length, group.atomRefs.map(ref => ref.source_id)).map(index => ({
+      slug: group.atomRefs[index]!.slug,
+      source_id: group.atomRefs[index]!.source_id,
+      title: group.atomTitles[index] ?? '',
+      body: group.atomBodies[index] ?? '',
+    }));
+    const membersHash=createHash('sha256').update(JSON.stringify(['dream-concept-v2',group.tier,cited.map(item => [item.source_id, item.slug, item.title, item.body]).sort((a,b)=>JSON.stringify(a).localeCompare(JSON.stringify(b)))])).digest('hex');
     if(baseline?.frontmatter.pmbrain_concept_members_hash===membersHash&&baseline.frontmatter.pmbrain_concept_complete!==false){cachedConcepts++;continue;}
     const retryKey=`dream.concepts.retry.${createHash('sha256').update(JSON.stringify([outputSourceId,outputSlug])).digest('hex')}`;
     const retryHash=createHash('sha256').update(JSON.stringify([membersHash,resolvedModel.model])).digest('hex');
@@ -327,12 +465,12 @@ export async function runPhaseSynthesizeConcepts(
     let complete=true;
     if (group.tier === 'T1' || group.tier === 'T2') {
       if (estimatedSpendUsd >= budgetCap) {
-        narrative = deterministicNarrative(group);
+        narrative = deterministicNarrative(group, cited.map(item => item.title));
         complete=false;deferredConcepts++;
       } else {
         try {
           const maxTokens = defaultMaxOutputTokens(resolvedModel.model);
-          budgetTracker.reserve({modelId:resolvedModel.model,estimatedInputTokens:Math.ceil(group.atomBodies.slice(0,5).join('').length/3)+300,maxOutputTokens:maxTokens,kind:'chat'});
+          budgetTracker.reserve({modelId:resolvedModel.model,estimatedInputTokens:Math.ceil(cited.map(item => item.body).join('').length/3)+300,maxOutputTokens:maxTokens,kind:'chat'});
           const result = await chat({
             model: resolvedModel.model,
             system: SYNTH_PROMPT,
@@ -341,11 +479,10 @@ export async function runPhaseSynthesizeConcepts(
                 role: 'user',
                 content:
                   `Concept slug: ${group.conceptSlug}\n` +
-                  `${group.atomTitles.length} atoms reference this concept.\n\n` +
-                  `Sample atom titles:\n${group.atomTitles.slice(0, 10).map((t) => `  - ${t}`).join('\n')}\n\n` +
-                  `Sample atom bodies:\n${group.atomBodies
-                    .slice(0, 5)
-                    .map((b, i) => `${i + 1}. ${b.slice(0, 500)}`)
+                  `Showing ${cited.length} of ${group.atomTitles.length} supporting fragments. Use only these fragments as evidence.\n\n` +
+                  `Sample atom titles:\n${cited.map(item => `  - ${item.title}`).join('\n')}\n\n` +
+                  `Sample atom bodies:\n${cited
+                    .map((item, index) => `${index + 1}. ${item.body.slice(0, 500)}`)
                     .join('\n\n')}`,
               },
             ],
@@ -375,11 +512,11 @@ export async function runPhaseSynthesizeConcepts(
             failures.push({concept:group.conceptSlug,error:message});
             if(!opts.dryRun&&/empty|truncat|length|schema|parse|invalid|refusal|content.?filter/i.test(message))await engine.setConfig(retryKey,JSON.stringify({sourceId:outputSourceId,slug:outputSlug,hash:retryHash,attempts:retry.hash===retryHash?Number(retry.attempts??0)+1:1}));
           }
-          narrative = deterministicNarrative(group);
+          narrative = deterministicNarrative(group, cited.map(item => item.title));
         }
       }
     } else {
-      narrative = deterministicNarrative(group);
+      narrative = deterministicNarrative(group, cited.map(item => item.title));
       deterministicConcepts++;
     }
 
@@ -399,29 +536,34 @@ export async function runPhaseSynthesizeConcepts(
       // the same chunk/search pipeline as imported knowledge. A bare putPage
       // only wrote the pages row, so reuse the canonical import path while
       // retaining the existing global-source and relationship semantics.
+      const conceptFrontmatter: Record<string, unknown> = {
+        ...baseline?.frontmatter,
+        ...(!baseline?{dream_generated:true}:{}),
+        tier: group.tier,
+        mention_count: group.atomTitles.length,
+        pmbrain_concept_cited_count: cited.length,
+        composite_score: group.atomTitles.length,
+        synthesized_at: new Date().toISOString(),
+        synthesized_by: 'synthesize_concepts-v0.41',
+        pmbrain_concept_members_hash:membersHash,
+        pmbrain_concept_narrative:narrative,
+        pmbrain_concept_complete:complete,
+        pmbrain_review_status: CONCLUSION_CURRENT,
+        pmbrain_review_label: CONCLUSION_CURRENT_LABEL,
+        derives_from: cited.map(ref => ({
+          slug: ref.slug,
+          source_id: ref.source_id,
+        })),
+      };
+      delete conceptFrontmatter.pmbrain_review_reason;
       const markdown = serializeMarkdown(
-        {
-          ...baseline?.frontmatter,
-          ...(!baseline?{dream_generated:true}:{}),
-          tier: group.tier,
-          mention_count: group.atomTitles.length,
-          composite_score: group.atomTitles.length,
-          synthesized_at: new Date().toISOString(),
-          synthesized_by: 'synthesize_concepts-v0.41',
-          pmbrain_concept_members_hash:membersHash,
-          pmbrain_concept_narrative:narrative,
-          pmbrain_concept_complete:complete,
-          derives_from: group.atomRefs.map(ref => ({
-            slug: ref.slug,
-            source_id: ref.source_id,
-          })),
-        },
+        conceptFrontmatter,
         compiled,
         baseline?.timeline??'',
         { type: 'concept', title: baseline?.title??title.replace(/-/g, ' '), tags: baseline?await engine.getTags(outputSlug,{sourceId:outputSourceId}):[] },
       );
       await engine.transaction(async tx=>{
-      for(const ref of group.atomRefs){
+      for(const ref of cited){
         const snapshot=evidenceSnapshots.get(`${ref.source_id}:${ref.slug}`);
         if(snapshot===undefined)continue;
         const [currentAtom]=await tx.executeRaw<{id:number;knowledge_revision:string;title:string;compiled_truth:string;frontmatter:unknown}>("SELECT id,knowledge_revision,title,compiled_truth,frontmatter FROM pages WHERE source_id=$1 AND slug=$2 AND deleted_at IS NULL FOR SHARE",[ref.source_id,ref.slug]);
@@ -434,7 +576,7 @@ export async function runPhaseSynthesizeConcepts(
         noEmbed: opts.deferEmbedding||!isAvailable('embedding'),
         sourceId: outputSourceId,
       });
-      const relationshipRows = group.atomRefs.flatMap(ref => [
+      const relationshipRows = cited.flatMap(ref => [
         {
           from_slug: outputSlug,
           to_slug: ref.slug,
@@ -462,7 +604,7 @@ export async function runPhaseSynthesizeConcepts(
           resolution_type: 'qualified' as const,
         },
       ]);
-      const provenanceLinks = group.atomRefs.flatMap(ref => [
+      const provenanceLinks = cited.flatMap(ref => [
         {
           from_slug: outputSlug,
           to_slug: ref.slug,
@@ -486,6 +628,8 @@ export async function runPhaseSynthesizeConcepts(
         await tx.addLinksBatch(provenanceLinks, { auditSite: 'cycle.synthesize_concepts.provenance' }); // gbrain-allow-direct-insert: Dream concept provenance is written inside the cycle reconcile path.
       });
       conceptSlugs.push(outputSlug);
+      if (baseline) conceptsUpdated++;
+      else conceptsNew++;
     }
     conceptsWritten++;
     if (isFresh(group)) freshProcessed++;
@@ -554,6 +698,10 @@ export async function runPhaseSynthesizeConcepts(
     details: {
       ...modelDetails,
       concepts_written: conceptsWritten,
+      concepts_new: conceptsNew,
+      concepts_updated: conceptsUpdated,
+      concepts_pending_verification: conceptsPending,
+      concepts_conflict: failures.filter(row => /conflict|preservation_hold/.test(row.error)).length,
       ...(opts.roundWork && { round_fresh_processed: freshProcessed, round_older_processed: conceptsWritten - freshProcessed, round_remaining: unexamined + deferredConcepts + failures.length, round_time_reached: roundTimeReached }),
       concepts_cached:cachedConcepts,
       concepts_llm:llmConcepts,
@@ -578,13 +726,12 @@ export async function runPhaseSynthesizeConcepts(
  * T1/T2 groups. No LLM call. v0.41 minimal shape — v0.42 enriches with
  * dominant themes, time spread, breadth.
  */
-function deterministicNarrative(group: AtomGroup): string {
+function deterministicNarrative(group: AtomGroup, citedTitles: string[]): string {
   const tier = group.tier;
   const count = group.atomTitles.length;
   return (
     `${tier} concept. ${count} atom${count === 1 ? '' : 's'} reference this. ` +
-    `Top mentions:\n${group.atomTitles
-      .slice(0, 5)
+    `Cited evidence:\n${citedTitles
       .map((t) => `  - ${t}`)
       .join('\n')}`
   );

@@ -10,8 +10,11 @@
  *   2. frontmatter.date          — dated essays
  *   3. frontmatter.published     — writing/
  *   4. filename-date             — leading YYYY-MM-DD in basename
- *   5. updated_at                — fallback
- *   6. created_at                — last resort (only if updated_at NULL)
+ *   5. none                      — source 'ingest', date null
+ *
+ * updated_at and created_at are when the row was written. They are not the
+ * event time and are not stored as effective_date. Historical rows may still
+ * carry source 'fallback' until a backfill; search windows ignore both.
  *
  * Per-prefix override: for `daily/` and `meetings/` slug prefixes, the
  * filename-date jumps to position 1 — the filename is the user's primary
@@ -114,11 +117,11 @@ function hasFilenameFirstPrefix(slug: string): boolean {
 
 /**
  * Run the precedence chain. Returns the first valid (in-range) date and its
- * source label. Falls all the way through to updated_at / created_at as
- * 'fallback' when nothing in frontmatter or filename parses.
+ * source label. When nothing in frontmatter or filename parses, the date is
+ * null and the source is 'ingest'. Import time is not the event time.
  */
 export function computeEffectiveDate(opts: ComputeEffectiveDateOpts): EffectiveDateResult {
-  const { slug, frontmatter, filename, updatedAt, createdAt } = opts;
+  const { slug, frontmatter, filename } = opts;
   const filenameFirst = hasFilenameFirstPrefix(slug);
 
   const fmEvent = validateInRange(parseDateLoose(frontmatter.event_date));
@@ -146,13 +149,5 @@ export function computeEffectiveDate(opts: ComputeEffectiveDateOpts): EffectiveD
     if (c.date !== null) return { date: c.date, source: c.source };
   }
 
-  // Fallback chain: updated_at, then created_at. Both are guaranteed
-  // non-null by the schema; the validation here is defensive against bad
-  // test fixtures.
-  const upd = validateInRange(updatedAt);
-  if (upd !== null) return { date: upd, source: 'fallback' };
-  const cre = validateInRange(createdAt);
-  if (cre !== null) return { date: cre, source: 'fallback' };
-
-  return { date: null, source: null };
+  return { date: null, source: 'ingest' };
 }

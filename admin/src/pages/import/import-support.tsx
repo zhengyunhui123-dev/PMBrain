@@ -52,6 +52,8 @@ export interface KnowledgeSearchHit {
   source_id: string | null;
   page_id: number;
   chunk_id: number;
+  review_status?: string | null;
+  review_label?: string | null;
 }
 
 export interface KnowledgeSearchPayload {

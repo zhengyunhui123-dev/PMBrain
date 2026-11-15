@@ -7,6 +7,7 @@ import type { SearchResult } from '../core/types.ts';
 import { dedupResults } from '../core/search/dedup.ts';
 import { hybridSearch } from '../core/search/hybrid.ts';
 import { normalizeChineseQuery } from '../core/search/query-normalize-zh.ts';
+import { stampConclusionReview } from '../core/search/conclusion-review.ts';
 import { embeddingRebuildPausesVectorSearch } from '../core/embedding-rebuild-state.ts';
 
 export type AdminKnowledgeSearchMode = 'keyword' | 'semantic';
@@ -21,6 +22,8 @@ export interface AdminKnowledgeSearchHit {
   source_id: string | null;
   page_id: number;
   chunk_id: number;
+  review_status?: string | null;
+  review_label?: string | null;
 }
 
 export interface AdminKnowledgeSearchResponse {
@@ -63,6 +66,7 @@ function toHit(row: SearchResult): AdminKnowledgeSearchHit {
     source_id: row.source_id ?? null,
     page_id: row.page_id,
     chunk_id: row.chunk_id,
+    ...(row.review_status ? { review_status: row.review_status, review_label: row.review_label ?? null } : {}),
   };
 }
 
@@ -84,7 +88,9 @@ async function runKeywordSearch(
       ...(chineseQuery.until ? { beforeDate: chineseQuery.until.toISOString() } : {}),
     })),
   );
-  return dedupResults(batches.flat()).slice(0, limit);
+  const results = dedupResults(batches.flat()).slice(0, limit);
+  await stampConclusionReview(engine, results);
+  return results;
 }
 
 async function runSemanticSearch(

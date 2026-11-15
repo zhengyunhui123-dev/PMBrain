@@ -132,6 +132,23 @@ describe('federated by-slug read scope', () => {
     expect(page.tags).not.toContain('default-secret-tag');
   });
 
+  test('get_page does not choose when the same slug is visible in two granted sources', async () => {
+    const federated = ctx({
+      auth: {
+        token: 'test',
+        clientId: 'test',
+        scopes: ['read'],
+        sourceId: 'alpha',
+        allowedSources: ['alpha', 'beta'],
+      },
+    });
+    await expect(op('get_page').handler(federated, { slug: 'shared/dup' })).rejects.toThrow(/alpha, beta/);
+
+    const beta = await op('get_page').handler(federated, { slug: 'shared/dup', source_id: 'beta' }) as { source_id?: string; compiled_truth?: string };
+    expect(beta.source_id).toBe('beta');
+    expect(beta.compiled_truth).toBe('Beta duplicate slug.');
+  });
+
   test('get_tags uses federated sourceIds and unions duplicate slugs', async () => {
     const betaTags = await op('get_tags').handler(ctx({
       auth: { token: 'test', clientId: 'test', scopes: ['read'], sourceId: 'alpha', allowedSources: ['alpha', 'beta'] },

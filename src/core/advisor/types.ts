@@ -39,9 +39,16 @@ export interface AdvisorCollector {
   collect: (ctx: AdvisorContext) => Promise<AdvisorFinding[]>;
 }
 
+export interface AdvisorMaintenance {
+  sync: 'current' | 'pending' | 'none';
+  organize: 'completed' | 'failed' | 'running' | 'none';
+}
+
 export interface AdvisorReport {
   version: string;
   generated_at: string;
   findings: AdvisorFinding[];
   worst: AdvisorSeverity | null;
+  failed_collectors?: string[];
+  maintenance?: AdvisorMaintenance;
 }

@@ -182,7 +182,8 @@ export type EffectiveDateSource =
   | 'date'
   | 'published'
   | 'filename'
-  | 'fallback';
+  | 'fallback'
+  | 'ingest';
 
 // `image` (v0.27.1): multimodal ingestion path, parallel to markdown + code.
 export type PageKind = 'markdown' | 'code' | 'image';
@@ -226,7 +227,7 @@ export interface PageInput {
    * v0.29.1: content date from frontmatter precedence (computed by importer
    * via `computeEffectiveDate`). When omitted, putPage leaves the column
    * unchanged on conflict (preserves any existing value); on insert the
-   * column is NULL. NULL is fine — recency paths COALESCE to updated_at.
+   * column is NULL. NULL is fine. A search window does not treat import time as the event.
    */
   effective_date?: Date | null;
   /** v0.29.1: paired with effective_date; NULL when effective_date is NULL. */
@@ -705,6 +706,9 @@ export interface SearchResult {
    */
   effective_date?: string | null;
   effective_date_source?: string | null;
+  /** Set when the page is an organized conclusion. pending_verification means the old text is kept but no longer supported. */
+  review_status?: string;
+  review_label?: string;
   /**
    * v0.40.4 graph signals — populated by applyGraphSignals when the
    * graph_signals mode-bundle knob is on. Surfaced in JSON envelope
