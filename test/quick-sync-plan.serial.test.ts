@@ -105,6 +105,62 @@ test('停止重启后复用固定清单；新增文件不混入旧轮次', async
   expect(await engine.getPage('after-restart', { sourceId: 'fixed-resume' })).toBeNull();
 }, 240000);
 
+test('同一文件两次完成校验不一致后结束重试，其余资料继续维护', async () => {
+  const dir = join(root, 'receipt-mismatch');
+  const sourceId = 'fixed-receipt-mismatch';
+  const badPath = join(dir, 'receipt.md');
+  mkdirSync(dir);
+  writeFileSync(badPath, '# 校验样本\n\n这份正文已经保存。');
+  writeFileSync(join(dir, 'good.md'), '# 正常资料\n\n同一轮的其他资料。');
+  await engine.executeRaw('INSERT INTO sources(id,name,local_path) VALUES($1,$1,$2)', [sourceId, dir]);
+  await engine.executeRaw('CREATE TABLE synthetic_receipt_count(attempts int NOT NULL)');
+  await engine.executeRaw('INSERT INTO synthetic_receipt_count VALUES (0)');
+  await engine.executeRaw(`CREATE FUNCTION synthetic_receipt_mismatch() RETURNS trigger LANGUAGE plpgsql AS $$
+    DECLARE current_attempt int;
+    BEGIN
+      IF NEW.status='completed' AND NEW.result->>'status' IN ('imported','skipped')
+        AND OLD.status='active' AND NEW.data->'task'->'input'->>'relativePath'='receipt.md'
+        AND NEW.data->'task'->'input'->'options'->>'sourceId'='fixed-receipt-mismatch' THEN
+        UPDATE synthetic_receipt_count SET attempts=attempts+1 RETURNING attempts INTO current_attempt;
+        IF current_attempt<=2 THEN
+          NEW.result=jsonb_set(NEW.result, '{chunkHash}', '"synthetic-mismatch"'::jsonb);
+        END IF;
+      END IF;
+      RETURN NEW;
+    END $$`);
+  await engine.executeRaw('CREATE TRIGGER synthetic_receipt_mismatch BEFORE UPDATE ON minion_jobs FOR EACH ROW EXECUTE FUNCTION synthetic_receipt_mismatch()');
+  try {
+    const id = (await runtime.submitDream({ preset: 'quick', sourceId })).id;
+    const done = await finished(id);
+    expect(done.status).toBe('completed');
+    expect(done.product?.syncFiles).toMatchObject({ total: 2, completed: 1, failed: 1, remaining: 0 });
+    expect(done.product?.maintenance?.stages.map(stage => stage.id)).toEqual(['sync', 'relations', 'check']);
+    expect((await runtime.files(id))?.rows.find(row => row.path === 'receipt.md')).toMatchObject({
+      status: 'failed', error: expect.stringContaining('校验'),
+    });
+    expect(await engine.executeRaw('SELECT attempts FROM synthetic_receipt_count')).toEqual([{ attempts: 2 }]);
+    expect(await engine.getPage('receipt', { sourceId })).not.toBeNull();
+    expect(await engine.getPage('good', { sourceId })).not.toBeNull();
+    expect(await engine.executeRaw(
+      "SELECT count(*)::int AS total FROM minion_jobs WHERE parent_job_id=$1 AND data->'task'->'input'->>'relativePath'='receipt.md'",
+      [Number(id.slice(5))],
+    )).toEqual([{ total: 1 }]);
+
+    await runtime.close();
+    runtime = new ProductTaskRuntime(engine, { background: idleBackground });
+    await runtime.start();
+    expect((await runtime.files(id))?.rows.find(row => row.path === 'receipt.md')?.status).toBe('failed');
+    await runtime.retry(id);
+    const resumed = await finished(id);
+    expect(resumed.product?.syncFiles).toMatchObject({ total: 2, completed: 2, failed: 0, remaining: 0 });
+    expect(await engine.executeRaw('SELECT attempts FROM synthetic_receipt_count')).toEqual([{ attempts: 3 }]);
+  } finally {
+    await engine.executeRaw('DROP TRIGGER synthetic_receipt_mismatch ON minion_jobs');
+    await engine.executeRaw('DROP FUNCTION synthetic_receipt_mismatch()');
+    await engine.executeRaw('DROP TABLE synthetic_receipt_count');
+  }
+}, 240000);
+
 test('失败不计作已导入；修复原文件后仅核对未完成文件，继续同一轮清单',async()=>{
   const dir=join(root,'failed');mkdirSync(dir);
   writeFileSync(join(dir,'good.md'),'# 成功资料\n\n已经写入的资料应保留。');

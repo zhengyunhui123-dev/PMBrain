@@ -18,19 +18,28 @@ import {MAX_STREAMED_OFFICE_BYTES} from '../../shared/document-limits.ts';
 import {importLegacyOffice,type LegacyOfficeCandidate} from './document/legacy-office.ts';
 import {queueDocumentOcr} from './pmbrain-adapters/deferred-document-ocr.ts';
 
+type OfficeReuseOptions = {
+  sourceId?: string;
+  noEmbed?: boolean;
+  structured?: boolean;
+  checkOnly?: boolean;
+  deferDocumentOcr?: boolean;
+};
+
 async function unchangedOfficeFile(
   engine: BrainEngine, relativePath: string, rawHash: string,
-  opts: { sourceId?: string; noEmbed?: boolean; structured?: boolean; checkOnly?: boolean;deferDocumentOcr?:boolean },
+  opts: OfficeReuseOptions,
   ocrRequested: boolean,
+  expectedSlug?: string,
 ): Promise<ImportResult | {legacy:LegacyOfficeCandidate} | null> {
   const sourceId = opts.sourceId ?? 'default';
-  let slug = slugifyPath(relativePath);
+  let slug = expectedSlug ?? slugifyPath(relativePath);
   const metadata = (path: string) => engine.executeRaw<{
     id:number; frontmatter: Record<string, any>; chunker_version: number;body_hash:string;
   }>(`SELECT p.id,p.frontmatter,p.chunker_version,CASE WHEN p.frontmatter->>'document_chunk_hash' IS NULL OR p.frontmatter ? 'document_legacy_reuse' OR COALESCE(p.frontmatter->>'document_ocr_failed','0')<>'0' OR COALESCE(p.frontmatter->>'document_ocr_skipped','0')<>'0' OR ($3::boolean AND COALESCE(p.frontmatter->>'document_ocr_succeeded','0')<>'0') THEN md5(p.compiled_truth) END AS body_hash
        FROM pages p WHERE p.source_id=$1 AND p.slug=$2 AND p.deleted_at IS NULL`, [sourceId, path, opts.deferDocumentOcr===true]);
   let [page] = await metadata(slug);
-  if (!page && engine.findDuplicatePage) {
+  if (!page && !expectedSlug && engine.findDuplicatePage) {
     const duplicate = await engine.findDuplicatePage(sourceId, { hash: rawHash, frontmatterId: `office:${rawHash}` });
     if (duplicate) { slug = duplicate.slug; [page] = await metadata(slug); }
   }
@@ -41,7 +50,16 @@ async function unchangedOfficeFile(
   if(!integrity || page.frontmatter.document_chunk_count!==integrity.chunks || page.frontmatter.document_chunk_hash!==integrity.chunk_hash)return !opts.checkOnly&&opts.deferDocumentOcr&&Number(page.frontmatter.document_ocr_succeeded??0)>0?{legacy:{...page,slug}}:null;
   const fm = page.frontmatter;
   if(fm.document_legacy_reuse&&(fm.document_legacy_reuse.bodyHash!==page.body_hash||fm.document_legacy_reuse.verified!==true))return null;
-  if (fm.document_structured !== (opts.structured !== false) && !fm.document_parser_fallback&&!fm.document_legacy_reuse) return !opts.checkOnly&&opts.deferDocumentOcr&&Number(fm.document_ocr_succeeded??0)>0?{legacy:{...page,slug}}:null;
+  const legacyOfficeText = fm.document_structured === false && (
+    (fm.document_parser === 'windows-word-com' && /\.(doc|wps)$/i.test(relativePath))
+    || (fm.document_parser === 'windows-powerpoint-com' && /\.ppt$/i.test(relativePath))
+  );
+  if (fm.document_structured !== (opts.structured !== false) && !legacyOfficeText
+    && !fm.document_parser_fallback && !fm.document_legacy_reuse) {
+    return !opts.checkOnly && opts.deferDocumentOcr && Number(fm.document_ocr_succeeded ?? 0) > 0
+      ? { legacy: { ...page, slug } }
+      : null;
+  }
   const receipt = fm.ocr_receipt;
   if (ocrRequested && !opts.deferDocumentOcr && (Number(fm.document_images) > 0 || Number(fm.document_pages_needing_ocr) > 0)) {
     if (!receipt || receipt.version !== OCR_RECEIPT_VERSION || receipt.promptVersion !== OCR_PROMPT_VERSION
@@ -59,6 +77,18 @@ async function unchangedOfficeFile(
     ocrWarnings: Array.isArray(receipt?.failedItems) ? receipt.failedItems.map(String) : [],
   };
   return { slug, status: 'skipped', chunks: 0, embeddingPending: integrity.pending > 0, documentSummary: summary };
+}
+
+export async function readStoredOfficeImport(
+  engine: BrainEngine,
+  relativePath: string,
+  rawHash: string,
+  options: OfficeReuseOptions & { documentOcr?: boolean },
+  expectedSlug?: string,
+): Promise<ImportResult | null> {
+  const ocrRequested = options.documentOcr ?? (await import('./ai/gateway.ts')).isOcrEnabled();
+  const stored = await unchangedOfficeFile(engine, relativePath, rawHash, { ...options, checkOnly: true }, ocrRequested, expectedSlug);
+  return stored && !('legacy' in stored) ? stored : null;
 }
 
 export const SUPPORTED_OFFICE_EXTS = ['.docx', '.doc', '.wps', '.pptx', '.ppt', '.pdf', '.xlsx', '.xlsm', '.xls', '.csv'] as const;
