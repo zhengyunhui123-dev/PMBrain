@@ -18,6 +18,8 @@ import { join } from 'node:path';
 import { PGLiteEngine } from '../../src/core/pglite-engine.ts';
 import { runPhaseExtractAtoms, parseAtomsResponse } from '../../src/core/cycle/extract-atoms.ts';
 import { runPhaseSynthesizeConcepts } from '../../src/core/cycle/synthesize-concepts.ts';
+import { operationsByName } from '../../src/core/operations.ts';
+import { stampConclusionReview } from '../../src/core/search/conclusion-review.ts';
 import { resetPgliteState } from '../helpers/reset-pglite.ts';
 import type { ChatResult, ChatOpts } from '../../src/core/ai/gateway.ts';
 
@@ -486,5 +488,159 @@ describe('v0.41 T6: runPhaseSynthesizeConcepts via stubbed chat', () => {
     );
     expect(provenance).toHaveLength(4);
     expect(provenance.every(row => row.link_source === 'concept-provenance')).toBe(true);
+  });
+
+  test('人工概念和没有证据记录的页面不会被标成证据失效', async () => {
+    await engine.putPage('concepts/hand-written', {
+      title: 'hand written',
+      type: 'concept',
+      compiled_truth: '人工维护的概念',
+      timeline: '',
+      frontmatter: { pmbrain_concept_complete: true },
+    });
+    await engine.putPage('concepts/no-evidence-record', {
+      title: 'no evidence',
+      type: 'concept',
+      compiled_truth: '只有生成标记没有证据记录',
+      timeline: '',
+      frontmatter: { synthesized_by: 'synthesize_concepts-v0.41', pmbrain_concept_complete: true },
+    });
+    const result = await runPhaseSynthesizeConcepts(engine);
+    expect(result.details?.concepts_pending_verification).toBe(0);
+    const hand = await engine.getPage('concepts/hand-written');
+    const unmarked = await engine.getPage('concepts/no-evidence-record');
+    expect(hand?.frontmatter.pmbrain_review_status ?? null).toBeNull();
+    expect(hand?.compiled_truth).toContain('人工维护的概念');
+    expect(unmarked?.frontmatter.pmbrain_review_status ?? null).toBeNull();
+    expect(unmarked?.compiled_truth).toContain('只有生成标记没有证据记录');
+  });
+
+  test('原来采用的证据少了一条，剩下的证据不够重写时标成待重新核验', async () => {
+    const originA = await engine.putPage('notes/evidence-a', {
+      title: 'evidence a',
+      type: 'note',
+      compiled_truth: '原文甲最初写着通过',
+      timeline: '',
+      frontmatter: {},
+    });
+    const originB = await engine.putPage('notes/evidence-b', {
+      title: 'evidence b',
+      type: 'note',
+      compiled_truth: '原文乙最初写着通过',
+      timeline: '',
+      frontmatter: {},
+    });
+    const hashA = originA.content_hash?.slice(0, 16);
+    const hashB = originB.content_hash?.slice(0, 16);
+    expect(hashA && hashB).toBeTruthy();
+    await engine.putPage('atoms/evidence-a', {
+      title: '证据甲',
+      type: 'atom',
+      compiled_truth: '证据甲写着通过',
+      timeline: '',
+      frontmatter: { concepts: ['partial-acceptance'], source_slug: 'notes/evidence-a', source_hash: hashA },
+    });
+    await engine.putPage('atoms/evidence-b', {
+      title: '证据乙',
+      type: 'atom',
+      compiled_truth: '证据乙写着通过',
+      timeline: '',
+      frontmatter: { concepts: ['partial-acceptance'], source_slug: 'notes/evidence-b', source_hash: hashB },
+    });
+    const first = await runPhaseSynthesizeConcepts(engine);
+    expect(first.details?.concepts_new).toBe(1);
+    const created = await engine.getPage('concepts/partial-acceptance');
+    const body = created?.compiled_truth ?? '';
+    const cited = created?.frontmatter.derives_from as Array<{ slug: string }>;
+    expect(cited.map(item => item.slug).sort()).toEqual(['atoms/evidence-a', 'atoms/evidence-b']);
+    expect(created?.frontmatter.pmbrain_review_label).toBe('仍有效');
+    expect(created?.frontmatter.pmbrain_concept_complete).not.toBe(false);
+    await engine.putPage('notes/evidence-a', {
+      title: 'evidence a',
+      type: 'note',
+      compiled_truth: '原文甲已经改成不通过',
+      timeline: '',
+      frontmatter: {},
+    });
+    const second = await runPhaseSynthesizeConcepts(engine);
+    expect(second.details?.concepts_pending_verification).toBe(1);
+    expect(second.details?.concepts_updated ?? 0).toBe(0);
+    const page = await engine.getPage('concepts/partial-acceptance');
+    expect(page?.compiled_truth).toBe(body);
+    expect(page?.frontmatter.pmbrain_review_status).toBe('pending_verification');
+    expect(page?.frontmatter.pmbrain_review_label).toBe('待重新核验');
+    expect(page?.frontmatter.pmbrain_concept_complete).toBe(false);
+    expect(page?.deleted_at ?? null).toBeNull();
+    const versions = await engine.executeRaw<{ review: string | null }>(
+      `SELECT pv.frontmatter->>'pmbrain_review_status' AS review
+         FROM page_versions pv
+         JOIN pages p ON p.id = pv.page_id
+        WHERE p.slug = 'concepts/partial-acceptance'`,
+    );
+    expect(versions.some(row => row.review == null || row.review === 'current')).toBe(true);
+    const hits = await engine.searchKeyword('证据甲', { limit: 5 });
+    await stampConclusionReview(engine, hits);
+    expect(hits.find(hit => hit.slug === 'concepts/partial-acceptance')?.review_label).toBe('待重新核验');
+    const read = await operationsByName.get_page.handler({
+      engine,
+      config: { engine: 'pglite' },
+      logger: { info() {}, warn() {}, error() {} },
+      dryRun: false,
+      remote: true,
+      sourceId: 'default',
+    } as never, { slug: 'concepts/partial-acceptance' }) as { review_label?: string; compiled_truth: string };
+    expect(read.review_label).toBe('待重新核验');
+    expect(read.compiled_truth).toBe(body);
+  });
+
+  test('只把展示给模型的片段写成证据，超过 5 条时不把没展示的也连上', async () => {
+    await engine.executeRaw(
+      `INSERT INTO sources (id, name)
+       VALUES ('wide-1', 'wide-1'), ('wide-2', 'wide-2'), ('wide-3', 'wide-3')
+       ON CONFLICT (id) DO NOTHING`,
+    );
+    const bodies = ['body-one', 'body-two', 'body-three', 'body-four', 'body-five', 'body-six'];
+    const sources = ['wide-1', 'wide-1', 'wide-1', 'wide-1', 'wide-2', 'wide-3'];
+    for (let index = 0; index < bodies.length; index++) {
+      await engine.putPage(`atoms/wide-${index}`, {
+        title: `Wide ${index}`,
+        type: 'atom',
+        compiled_truth: bodies[index]!,
+        frontmatter: { concepts: ['wide-theme'] },
+        timeline: '',
+      }, { sourceId: sources[index] });
+    }
+    let prompt = '';
+    const result = await runPhaseSynthesizeConcepts(engine, {
+      _chat: async (opts) => {
+        const content = opts.messages[0]?.content;
+        prompt = typeof content === 'string' ? content : JSON.stringify(content);
+        return stubChat('wide narrative')(opts);
+      },
+    });
+    expect(result.details?.concepts_new).toBe(1);
+    expect(prompt).toContain('5 of 6');
+    const shown = bodies.filter(body => prompt.includes(body));
+    const hidden = bodies.filter(body => !prompt.includes(body));
+    expect(shown).toHaveLength(5);
+    expect(hidden).toHaveLength(1);
+    const links = await engine.executeRaw<{ to_slug: string; to_source_id: string }>(
+      `SELECT t.slug AS to_slug, t.source_id AS to_source_id
+         FROM links l
+         JOIN pages f ON f.id = l.from_page_id
+         JOIN pages t ON t.id = l.to_page_id
+        WHERE f.slug = 'concepts/wide-theme'
+          AND l.link_type = 'derives_from'
+          AND l.link_source = 'frontmatter'`,
+    );
+    expect(links).toHaveLength(5);
+    expect(new Set(links.map(row => row.to_source_id))).toEqual(new Set(['wide-1', 'wide-2', 'wide-3']));
+    expect(links.map(row => row.to_slug)).not.toContain(`atoms/wide-${bodies.indexOf(hidden[0]!)}`);
+    const page = await engine.getPage('concepts/wide-theme');
+    const derives = page?.frontmatter.derives_from as Array<{ slug: string }>;
+    expect(derives.map(item => item.slug).sort()).toEqual(links.map(row => row.to_slug).sort());
+    expect(page?.frontmatter.pmbrain_review_label).toBe('仍有效');
+    expect(page?.frontmatter.mention_count).toBe(6);
+    expect(page?.frontmatter.pmbrain_concept_cited_count).toBe(5);
   });
 });

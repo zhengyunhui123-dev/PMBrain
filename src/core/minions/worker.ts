@@ -879,6 +879,7 @@ export class MinionWorker extends EventEmitter {
       data: job.data,
       attempts_made: job.attempts_made,
       signal: abort.signal,
+      lockToken,
       deadlineAtMs: job.timeout_at?.getTime() ?? null,
       shutdownSignal: this.shutdownAbort.signal,
       updateProgress: async (progress: unknown) => {

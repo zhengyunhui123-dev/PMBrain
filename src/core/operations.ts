@@ -8,7 +8,7 @@ import { lstatSync, realpathSync } from 'fs';
 import { resolve, relative, sep, isAbsolute } from 'path';
 import type { BrainEngine } from './engine.ts';
 import { clampSearchLimit } from './engine.ts';
-import type { Link, PageType, SearchResult } from './types.ts';
+import type { Link, Page, PageType, SearchResult } from './types.ts';
 import { importFromContent } from './import-file.ts';
 import { serializePageToMarkdown } from './markdown.ts';
 import { resolvePolicyPageFilePath, resolveWritePolicyForPath } from './write-policy.ts';
@@ -27,6 +27,7 @@ import { stripFactsFence } from './facts-fence.ts';
 import { bumpLastRetrievedAt } from './last-retrieved.ts';
 import { isSearchMode } from './search/mode.ts';
 import { stampEvidence } from './search/evidence.ts';
+import { conclusionReviewFromFrontmatter, stampConclusionReview } from './search/conclusion-review.ts';
 import { CJK_SLUG_CHARS } from './cjk.ts';
 import { getContentFlag } from './quarantine.ts';
 import { normalizeChineseQuery } from './search/query-normalize-zh.ts';
@@ -48,6 +49,7 @@ import { OperationError } from './operation-error.ts';
 import { MEMORY_VERBS_VERSION, memoryVerbOperations } from './memory-verbs.ts';
 import type { Operation, OperationContext } from './ops/contract.ts';
 import { sourceScopeOpts } from './ops/context.ts';
+import { pageReadFilter } from './search/read-policy-sql.ts';
 import { entityIdentityOperations } from './ops/entity-identity.ts';
 import { connectorsOperations } from './ops/connectors.ts';
 import { loopsOperations } from './ops/loops.ts';
@@ -269,6 +271,103 @@ export function requestedSourceScopeOpts(
   return { sourceId: requestedSource };
 }
 
+/**
+ * Read-side source selection shared by search, query, get_page and image search.
+ * A named source must sit inside the credential. Local `__all__` stays cross-source.
+ * Remote `__all__` keeps the credential scope and cannot widen it.
+ */
+export function explicitReadSourceScope(
+  ctx: OperationContext,
+  requested: unknown,
+): { sourceId?: string; sourceIds?: string[] } {
+  if (requested === undefined || requested === null || requested === '') {
+    return sourceScopeOpts(ctx);
+  }
+  if (requested === '__all__') {
+    if (ctx.remote === false) return {};
+    return sourceScopeOpts(ctx);
+  }
+  return requestedSourceScopeOpts(ctx, requested);
+}
+
+function requestedPageSource(params: Record<string, unknown>): unknown {
+  const present = (value: unknown) => value !== undefined && value !== null && value !== '';
+  const source = present(params.source) ? params.source : undefined;
+  const sourceId = present(params.source_id) ? params.source_id : undefined;
+  if (source !== undefined && sourceId !== undefined && source !== sourceId) {
+    throw new OperationError('invalid_params', 'source and source_id must name the same knowledge source.');
+  }
+  return source ?? sourceId;
+}
+
+function isSingleSourceScope(scope: { sourceId?: string; sourceIds?: string[] }): boolean {
+  return Boolean(scope.sourceId) && !(scope.sourceIds && scope.sourceIds.length > 0);
+}
+
+async function pageSourceIds(
+  ctx: OperationContext,
+  slug: string,
+  scope: { sourceId?: string; sourceIds?: string[] },
+  includeDeleted: boolean,
+  excludePrivate: boolean,
+): Promise<string[]> {
+  const params: unknown[] = [slug];
+  const filter = pageReadFilter('p', { ...scope, excludePrivate }, params, false);
+  const rows = await ctx.engine.executeRaw<{ source_id: string }>(
+    `SELECT p.source_id FROM pages p WHERE p.slug = $1 AND ${filter}${includeDeleted ? '' : ' AND p.deleted_at IS NULL'} ORDER BY p.source_id`,
+    params,
+  );
+  return rows.map((row) => row.source_id);
+}
+
+async function readUniquePage(
+  ctx: OperationContext,
+  slug: string,
+  scope: { sourceId?: string; sourceIds?: string[] },
+  includeDeleted: boolean,
+  excludePrivate: boolean,
+): Promise<Page | null> {
+  let page: Page | null;
+  if (isSingleSourceScope(scope)) {
+    page = await ctx.engine.getPage(slug, { includeDeleted, ...scope });
+  } else {
+    const sourceIds = await pageSourceIds(ctx, slug, scope, includeDeleted, excludePrivate);
+    if (sourceIds.length > 1) {
+      throw new OperationError(
+        'ambiguous',
+        `Page "${slug}" exists in more than one knowledge source (${sourceIds.join(', ')}).`,
+        'Pass source_id copied from the search result. PMBrain will not choose one.',
+      );
+    }
+    page = sourceIds.length === 1
+      ? await ctx.engine.getPage(slug, { includeDeleted, sourceId: sourceIds[0] })
+      : null;
+  }
+  if (page && excludePrivate && isPrivatePage(page.frontmatter)) return null;
+  return page;
+}
+
+async function readPinnedPageRefs(
+  ctx: OperationContext,
+  slug: string,
+  requested: unknown,
+): Promise<Array<{ slug: string; source_id: string }>> {
+  const scope = explicitReadSourceScope(ctx, requested);
+  const excludePrivate = await resolveExcludePrivatePages(ctx.engine, ctx.remote);
+  const refs = await readPageRefs(ctx.engine.executeRaw.bind(ctx.engine), slug, { ...scope, excludePrivate });
+  if (!isSingleSourceScope(scope)) {
+    const sourceIds = [...new Set(refs.map(ref => ref.source_id))].sort();
+    if (sourceIds.length > 1) {
+      throw new OperationError(
+        'ambiguous',
+        `Page "${slug}" exists in more than one knowledge source (${sourceIds.join(', ')}).`,
+        'Pass source_id copied from the search result. PMBrain will not choose one.',
+      );
+    }
+  }
+  return refs;
+}
+
 export function linkReadScopeOpts(ctx: OperationContext): { sourceId?: string; sourceIds?: string[] } {
   const scope = sourceScopeOpts(ctx);
   if (ctx.remote !== false && scope.sourceId && !scope.sourceIds) {
@@ -379,9 +478,11 @@ function maybeCaptureSearch(
 
 const get_page: Operation = {
   name: 'get_page',
-  description: 'Read a page by slug. Copy the exact `slug` verbatim from a search/query/list_pages result; never invent a slug from the user question or page title. Optional fuzzy matching is only for a known partial slug. Soft-deleted pages are hidden by default; pass include_deleted: true to surface them with deleted_at populated (see v0.26.5 recovery window).',
+  description: 'Read a page by slug. Copy the exact `slug` verbatim from a search/query/list_pages result; never invent a slug from the user question or page title. When that result includes a knowledge source, pass the same value as source or source_id. If the slug exists in more than one allowed source, PMBrain reports the source ids and does not choose one. Optional fuzzy matching is only for a known partial slug. Soft-deleted pages are hidden by default; pass include_deleted: true to surface them with deleted_at populated (see v0.26.5 recovery window).',
   params: {
     slug: { type: 'string', required: true, description: 'Page slug copied verbatim from a previous PMBrain tool result; do not construct or guess it' },
+    source: { type: 'string', description: 'Knowledge source id copied from the search result. Same value as source_id. Must stay inside this credential.' },
+    source_id: { type: 'string', description: 'Knowledge source id copied from the search result. Required when the same slug exists in more than one allowed source. Must stay inside this credential.' },
     fuzzy: { type: 'boolean', description: 'Enable fuzzy slug resolution (default: false)' },
     include_deleted: { type: 'boolean', description: 'v0.26.5: surface soft-deleted pages with deleted_at populated (default: false). Used by restore workflows.' },
   },
@@ -389,34 +490,20 @@ const get_page: Operation = {
     const slug = p.slug as string;
     const fuzzy = (p.fuzzy as boolean) || false;
     const includeDeleted = (p.include_deleted as boolean) === true;
-    // v0.31.8 (D20): thread ctx.sourceId through read-side ops. Only pass
-    // sourceId when it's set on ctx — when unset (local CLI default chain
-    // resolves to no source), the engine two-branch query falls through to
-    // the cross-source view, preserving pre-v0.31.8 behavior. MCP callers
-    // (stdio + HTTP) populate ctx.sourceId via the transport layer.
-    const sourceOpts = sourceScopeOpts(ctx);
+    const sourceOpts = explicitReadSourceScope(ctx, requestedPageSource(p));
     const excludePrivate = await resolveExcludePrivatePages(ctx.engine, ctx.remote);
-    // v0.41.13 #1436: fuzzy resolveSlugs ALSO needs source scope — pre-fix
-    // it was unscoped, so a remote `get_page` with `fuzzy: true` could
-    // return candidates from sources outside ctx.auth.allowedSources /
-    // ctx.sourceId. sourceScopeOpts(ctx) is the canonical precedence
-    // ladder (federated array > scalar > nothing) shared with every other
-    // read-side handler.
-    const fuzzyScope = sourceScopeOpts(ctx);
 
-    let page = await ctx.engine.getPage(slug, { includeDeleted, ...sourceOpts });
-    if (page && excludePrivate && isPrivatePage(page.frontmatter)) page = null;
+    let page = await readUniquePage(ctx, slug, sourceOpts, includeDeleted, excludePrivate);
     let resolved_slug: string | undefined;
 
     if (!page && fuzzy) {
-      let candidates = await ctx.engine.resolveSlugs(slug, fuzzyScope);
+      let candidates = await ctx.engine.resolveSlugs(slug, sourceOpts);
       if (excludePrivate) {
-        const hidden = await findPrivateOnlySlugs(ctx.engine, candidates, fuzzyScope, { includeDeleted });
+        const hidden = await findPrivateOnlySlugs(ctx.engine, candidates, sourceOpts, { includeDeleted });
         candidates = candidates.filter((candidate) => !hidden.has(candidate));
       }
       if (candidates.length === 1) {
-        page = await ctx.engine.getPage(candidates[0], { includeDeleted, ...sourceOpts });
-        if (page && excludePrivate && isPrivatePage(page.frontmatter)) page = null;
+        page = await readUniquePage(ctx, candidates[0], sourceOpts, includeDeleted, excludePrivate);
         resolved_slug = candidates[0];
       } else if (candidates.length > 1) {
         return { error: 'ambiguous_slug', candidates };
@@ -475,10 +562,12 @@ const get_page: Operation = {
         }
       : page;
     const content_flag = getContentFlag(page.frontmatter);
+    const review = conclusionReviewFromFrontmatter(page.type, page.frontmatter);
     return {
       ...visibleBody,
       tags,
       ...(content_flag ? { content_flag } : {}),
+      ...(review ?? {}),
       ...(resolved_slug ? { resolved_slug } : {}),
     };
   },
@@ -551,7 +640,7 @@ const put_page: Operation = {
     // Checks all auth env vars for the resolved provider, not just OPENAI_API_KEY,
     // so Gemini / Ollama / Voyage brains don't silently drop embeddings (Codex C2).
     const { isAvailable } = await import('./ai/gateway.ts');
-    const noEmbed = !isAvailable('embedding');
+    const noEmbed = ctx.deferPageEmbedding === true || !isAvailable('embedding');
     if (!noEmbed) {
       const { assertNoEmbeddingEnvConfigDrift } = await import('./config.ts');
       assertNoEmbeddingEnvConfigDrift();
@@ -1123,6 +1212,7 @@ const search: Operation = {
     if (keywordOnly) {
       stampEvidenceSafe(results);
       await stampContentFlags(ctx.engine, results);
+      await stampConclusionReview(ctx.engine, results);
     }
     const retrievalMeta = capturedMeta ?? {
       vector_enabled: !keywordOnly,
@@ -1221,17 +1311,17 @@ const query: Operation = {
     since: {
       type: 'string',
       description:
-        "v0.29.1 — filter to pages whose effective_date is >= this. ISO-8601 (YYYY-MM-DD or full timestamp) OR relative ('7d', '2w', '1y'). Replaces deprecated `afterDate`.",
+        "Filter to pages whose content date is >= this. ISO-8601 (YYYY-MM-DD or full timestamp) OR relative ('7d', '2w', '1y'). A page with only an import time stays out of the window. Replaces deprecated `afterDate`.",
     },
     until: {
       type: 'string',
       description:
-        "v0.29.1 — filter to effective_date <= this. Same format as `since`. Replaces deprecated `beforeDate`. YYYY-MM-DD lands at end-of-day.",
+        "Filter to pages whose content date is <= this. Same format as `since`. Import time does not count. Replaces deprecated `beforeDate`. YYYY-MM-DD lands at end-of-day.",
     },
     source_id: {
       type: 'string',
       description:
-        "v0.34: scope search to a single source. Defaults to OperationContext.sourceId (set from CLI --source / GBRAIN_SOURCE / .gbrain-source dotfile). Pass '__all__' to force cross-source search in multi-source brains.",
+        "Scope to one knowledge source inside this credential. A remote caller cannot select a source outside the credential, and remote '__all__' stays inside the credential. Local '__all__' searches across sources.",
     },
     cross_modal: {
       type: 'string',
@@ -1281,15 +1371,7 @@ const query: Operation = {
       typeof p.embedding_column === 'string' && p.embedding_column.length > 0
         ? (p.embedding_column as string)
         : undefined;
-    // Explicit per-call source_id must win over ctx.sourceId. The special
-    // __all__ value opts out of source filtering for local cross-source search.
-    const sourceIdParam = typeof p.source_id === 'string' ? p.source_id : undefined;
-    const querySourceScope =
-      sourceIdParam !== undefined
-        ? sourceIdParam === '__all__'
-          ? {}
-          : { sourceId: sourceIdParam }
-        : sourceScopeOpts(ctx);
+    const querySourceScope = explicitReadSourceScope(ctx, p.source_id);
     const excludePrivate = await resolveExcludePrivatePages(ctx.engine, ctx.remote);
 
     // v0.27.1: image-similarity branch. Bypasses hybridSearch (which is
@@ -1322,11 +1404,6 @@ const query: Operation = {
     // stays SearchResult[] (Cathedral II callers depend on that); meta
     // arrives via callback so eval capture can record what actually ran.
     //
-    // v0.34 (Codex finding #2): thread ctx.sourceId so multi-source brains
-    // get source-scoped retrieval. Explicit `source_id` param wins over
-    // ctx.sourceId for callers that want to override (per-call multi-source
-    // search). When the param is the literal '__all__', force-allow
-    // cross-source mode (matches SearchOpts.sourceId contract).
     let capturedMeta: HybridSearchMeta | null = null;
     // v0.32.x search-lite: route the query op through hybridSearchCached so
     // semantic cache + token budget + intent weighting fire automatically.
@@ -2437,20 +2514,16 @@ const put_raw_data: Operation = {
 
 const get_raw_data: Operation = {
   name: 'get_raw_data',
-  description: 'Retrieve raw data for a page',
+  description: 'Retrieve raw data for a page. Pass source_id from the search result when the same slug exists in more than one knowledge source. PMBrain reports the source ids and does not merge them. The source parameter filters the raw-data provider and is not the knowledge source.',
   params: {
     slug: { type: 'string', required: true },
-    source: { type: 'string', description: 'Filter by source' },
+    source: { type: 'string', description: 'Raw-data provider filter, such as crustdata. This is not the knowledge source.' },
+    source_id: { type: 'string', description: 'Knowledge source id copied from the search result. Required when the same slug exists in more than one allowed source.' },
   },
   handler: async (ctx, p) => {
-    if (ctx.remote !== false) {
-      const refs = await readPageRefs(ctx.engine.executeRaw.bind(ctx.engine), p.slug as string, { ...sourceScopeOpts(ctx), excludePrivate: await resolveExcludePrivatePages(ctx.engine, ctx.remote) });
-      return (await Promise.all(refs.map(ref => ctx.engine.getRawData(ref.slug, p.source as string | undefined, { sourceId: ref.source_id })))).flat();
-    }
-    // v0.31.8 (D20 + D21): thread ctx.sourceId.
-    const sourceOpts = ctx.sourceId ? { sourceId: ctx.sourceId } : {};
-    if (await slugHiddenFromCaller(ctx.engine, ctx.remote, p.slug as string, sourceOpts)) return [];
-    return ctx.engine.getRawData(p.slug as string, p.source as string | undefined, sourceOpts);
+    const refs = await readPinnedPageRefs(ctx, p.slug as string, p.source_id);
+    if (refs.length === 0) return [];
+    return (await Promise.all(refs.map(ref => ctx.engine.getRawData(ref.slug, p.source as string | undefined, { sourceId: ref.source_id })))).flat();
   },
   scope: 'read',
 };
@@ -2475,19 +2548,16 @@ const resolve_slugs: Operation = {
 
 const get_chunks: Operation = {
   name: 'get_chunks',
-  description: 'Get content chunks for a page',
+  description: 'Get content chunks for a page. Copy source or source_id from the search result when the same slug exists in more than one knowledge source. PMBrain reports the source ids and does not merge the chunks.',
   params: {
     slug: { type: 'string', required: true },
+    source: { type: 'string', description: 'Knowledge source id copied from the search result. Same value as source_id.' },
+    source_id: { type: 'string', description: 'Knowledge source id copied from the search result. Required when the same slug exists in more than one allowed source.' },
   },
   handler: async (ctx, p) => {
-    if (ctx.remote !== false) {
-      const refs = await readPageRefs(ctx.engine.executeRaw.bind(ctx.engine), p.slug as string, { ...sourceScopeOpts(ctx), excludePrivate: await resolveExcludePrivatePages(ctx.engine, ctx.remote) });
-      return (await Promise.all(refs.map(ref => ctx.engine.getChunks(ref.slug, { sourceId: ref.source_id })))).flat();
-    }
-    // v0.31.8 (D20): thread ctx.sourceId.
-    const sourceOpts = ctx.sourceId ? { sourceId: ctx.sourceId } : {};
-    if (await slugHiddenFromCaller(ctx.engine, ctx.remote, p.slug as string, sourceOpts)) return [];
-    return ctx.engine.getChunks(p.slug as string, sourceOpts);
+    const refs = await readPinnedPageRefs(ctx, p.slug as string, requestedPageSource(p));
+    if (refs.length === 0) return [];
+    return (await Promise.all(refs.map(ref => ctx.engine.getChunks(ref.slug, { sourceId: ref.source_id })))).flat();
   },
   scope: 'read',
 };
@@ -4131,7 +4201,7 @@ const search_by_image: Operation = {
     query: { type: 'string', description: 'Optional text refinement; runs hybrid intersect via D13 weighted RRF.' },
     limit: { type: 'number', description: 'Max results (default 20)' },
     offset: { type: 'number', description: 'Skip first N results (for pagination)' },
-    source_id: { type: 'string', description: "Scope to a single source. Defaults to ctx.sourceId. '__all__' opts out." },
+    source_id: { type: 'string', description: "Scope to one knowledge source inside this credential. Remote '__all__' stays inside the credential; local '__all__' searches across sources." },
   },
   scope: 'read',
   // NOT localOnly: remote MCP callers can pass image_url or image_data
@@ -4142,7 +4212,6 @@ const search_by_image: Operation = {
     const imageData = p.image_data as string | undefined;
     const imageMime = (p.image_mime as string) || undefined;
     const queryRefinement = p.query as string | undefined;
-    const sourceIdParam = typeof p.source_id === 'string' ? p.source_id : undefined;
 
     // D18 P0 — remote callers cannot pass image_path. Rejecting at handler
     // entry, before any file I/O fires. validateParams catches it too at the
@@ -4160,6 +4229,8 @@ const search_by_image: Operation = {
     if ([imagePath, imageUrl, imageData].filter(Boolean).length > 1) {
       throw new Error('search_by_image accepts only one of: image_path, image_url, image_data');
     }
+
+    const imageScope = explicitReadSourceScope(ctx, p.source_id);
 
     // D23-#6 — pre-flight daily-budget check for remote OAuth clients.
     // Local CLI callers (ctx.remote=false) bypass the cap (clientId="").
@@ -4181,14 +4252,6 @@ const search_by_image: Operation = {
       { maxBytes: cap },
     );
 
-    // Resolve source-scope (D5 canonical thread).
-    const resolvedSourceId =
-      sourceIdParam !== undefined
-        ? sourceIdParam === '__all__'
-          ? undefined
-          : sourceIdParam
-        : ctx.sourceId;
-
     const { searchByImage } = await import('./search/by-image.ts');
     const results = await searchByImage(
       ctx.engine,
@@ -4197,8 +4260,7 @@ const search_by_image: Operation = {
         limit: (p.limit as number) || 20,
         offset: (p.offset as number) || 0,
         query: queryRefinement,
-        sourceId: resolvedSourceId,
-        ...sourceScopeOpts(ctx),
+        ...imageScope,
       },
     );
 

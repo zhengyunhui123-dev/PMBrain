@@ -2,7 +2,7 @@ import type { AdvisorCollector, AdvisorContext, AdvisorFinding, AdvisorReport, A
 import { collectVersion } from './collect-version.ts';
 import { collectMigration } from './collect-migration.ts';
 import { collectSchemaPack } from './collect-schema-pack.ts';
-import { collectStalledJobs } from './collect-stalled-jobs.ts';
+import { collectStalledJobs, readMaintenanceStatus } from './collect-stalled-jobs.ts';
 import { collectUsageShape } from './collect-usage-shape.ts';
 import { collectSetupSmells } from './collect-setup-smells.ts';
 import { collectUninstalledBrainPack } from './collect-uninstalled-brain-pack.ts';
@@ -50,6 +50,7 @@ export function rankFindings(findings: AdvisorFinding[], opts: { infoCap?: numbe
 
 export async function runAdvisor(ctx: AdvisorContext): Promise<AdvisorReport> {
   const all: AdvisorFinding[] = [];
+  const failedCollectors: string[] = [];
   for (const c of COLLECTORS) {
     try {
       const found = await c.collect(ctx);
@@ -58,7 +59,15 @@ export async function runAdvisor(ctx: AdvisorContext): Promise<AdvisorReport> {
         all.push(f);
       }
     } catch {
-      // One collector failing must not kill the report.
+      failedCollectors.push(c.id);
+    }
+  }
+  let maintenance: AdvisorReport['maintenance'];
+  if (!failedCollectors.includes('stalled-jobs')) {
+    try {
+      maintenance = await readMaintenanceStatus(ctx);
+    } catch {
+      failedCollectors.push('stalled-jobs');
     }
   }
   const findings = rankFindings(all);
@@ -67,5 +76,12 @@ export async function runAdvisor(ctx: AdvisorContext): Promise<AdvisorReport> {
       : findings.some((f) => f.severity === 'warn') ? 'warn'
         : findings.length > 0 ? 'info'
           : null;
-  return { version: ctx.version, generated_at: ctx.now.toISOString(), findings, worst };
+  return {
+    version: ctx.version,
+    generated_at: ctx.now.toISOString(),
+    findings,
+    worst,
+    failed_collectors: failedCollectors,
+    ...(maintenance ? { maintenance } : {}),
+  };
 }

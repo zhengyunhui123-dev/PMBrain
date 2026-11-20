@@ -8,6 +8,7 @@ import {
   embed,
   resetGateway,
 } from '../../src/core/ai/gateway.ts';
+import { officialCompletionTokenFetch } from '../../src/core/ai/provider-chat-body.ts';
 import { getRecipe } from '../../src/core/ai/recipes/index.ts';
 
 afterAll(() => resetGateway());
@@ -62,7 +63,7 @@ describe('custom-openai recipe', () => {
     expect(applyOpenAICompatConfig(recipe, {
       env: {},
       base_urls: { 'custom-openai': 'http://127.0.0.1:8000/v1' },
-    })).toEqual({ baseURL: 'http://127.0.0.1:8000/v1' });
+    })).toEqual({ baseURL: 'http://127.0.0.1:8000/v1', fetch: officialCompletionTokenFetch });
     expect(() => applyOpenAICompatConfig(recipe, { env: {} })).toThrow('requires a base URL');
   });
 
@@ -78,10 +79,10 @@ describe('custom-openai recipe', () => {
         },
       },
     };
-    expect(applyOpenAICompatConfig(recipe, config, 'chat')).toEqual({ baseURL: 'http://127.0.0.1:8001/v1' });
-    expect(applyOpenAICompatConfig(recipe, config, 'embedding')).toEqual({ baseURL: 'http://127.0.0.1:8002/v1' });
-    expect(applyOpenAICompatConfig(recipe, config, 'expansion')).toEqual({ baseURL: 'http://127.0.0.1:8001/v1' });
-    expect(applyOpenAICompatConfig(recipe, config)).toEqual({ baseURL: 'http://127.0.0.1:8000/v1' });
+    expect(applyOpenAICompatConfig(recipe, config, 'chat')).toEqual({ baseURL: 'http://127.0.0.1:8001/v1', fetch: officialCompletionTokenFetch });
+    expect(applyOpenAICompatConfig(recipe, config, 'embedding')).toEqual({ baseURL: 'http://127.0.0.1:8002/v1', fetch: officialCompletionTokenFetch });
+    expect(applyOpenAICompatConfig(recipe, config, 'expansion')).toEqual({ baseURL: 'http://127.0.0.1:8001/v1', fetch: officialCompletionTokenFetch });
+    expect(applyOpenAICompatConfig(recipe, config)).toEqual({ baseURL: 'http://127.0.0.1:8000/v1', fetch: officialCompletionTokenFetch });
   });
 
   test('probes embedding dimensions through a real OpenAI-compatible HTTP endpoint', async () => {

@@ -14,6 +14,7 @@ import {assertSafeE2eDatabaseUrl} from './helpers/db-guard.ts';
 import {resetPgliteState} from './helpers/reset-pglite.ts';
 import {checkIngestCallBudget,entityIngestTools,type EntityIngestContext} from '../src/core/pmbrain-adapters/entity-ingest-workflow.ts';
 import { randomUUID } from 'node:crypto';
+import { runPhaseCaptureEntities } from '../src/core/cycle/capture-entities.ts';
 
 const previous=process.env.PMBRAIN_HOME;
 process.env.PMBRAIN_HOME=mkdtempSync(join(tmpdir(),'pmbrain-ingest-completion-'));
@@ -33,6 +34,13 @@ afterEach(()=>{__setChatTransportForTests(null);resetGateway();});
 afterAll(async()=>{await engine.disconnect();if(previous===undefined)delete process.env.PMBRAIN_HOME;else process.env.PMBRAIN_HOME=previous;},60_000);
 
 function response(text=receipt,write=false):ChatResult{return {text:write?'':text,providerId:'custom-openai',model:'custom-openai:Qwen3.6-35B-A3B',blocks:write?[{type:'tool-call',toolCallId:'put-entity',toolName:'brain_put_page',input:{slug,content}}]:[{type:'text',text}],stopReason:write?'tool_calls':'end',usage:{input_tokens:10,output_tokens:5,cache_read_tokens:0,cache_creation_tokens:0}};}
+
+function wireResponse(body: { stream?: boolean; model: string }, text: string, calls: Array<{ id: string; type: string; function: { name: string; arguments: string } }> = []): Response {
+  const finish = calls.length ? 'tool_calls' : 'stop';
+  const usage = { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 };
+  if (!body.stream) return Response.json({ id: 'wire-ingest', object: 'chat.completion', created: 1, model: body.model, choices: [{ index: 0, finish_reason: finish, message: { role: 'assistant', content: text, tool_calls: calls } }], usage });
+  return new Response(`data: ${JSON.stringify({ id: 'wire-ingest', object: 'chat.completion.chunk', created: 1, model: body.model, choices: [{ index: 0, delta: { content: text, ...(calls.length ? { tool_calls: calls.map((call, index) => ({ ...call, index })) } : {}) }, finish_reason: finish }], usage })}\n\ndata: [DONE]\n\n`, { headers: { 'content-type': 'text/event-stream' } });
+}
 
 test('截断恢复扣除持久用量并预留最终回执，最终回执可使用剩余额度',async()=>{
  const data={prompt:'实体验收',model:'custom-openai:Qwen3.6-35B-A3B',model_output_limit:10,usage_limits:{input:100000,output:30,cost_cny:null,input_price:null,output_price:null}};
@@ -154,6 +162,33 @@ test('一次 JSON 提取格式错误时保留失败，不反复请求模型',asy
  await expectRejection(execution.result);expect(execution.calls).toHaveLength(1);
 });
 
+test('实体网络重试只在请求层执行一次，队列不能再把整次请求重复三遍', async () => {
+  await engine.setConfig('version', '140');
+  let requests = 0;
+  const server = Bun.serve({ port: 0, fetch() { requests++; return Response.json({ error: { message: 'upstream temporarily unavailable' } }, { status: 503 }); } });
+  try {
+    configureGateway({ generative_enabled: true, chat_model: 'mimo:mimo-v2.6-flash', base_urls: { mimo: server.url.origin + '/v1' }, env: { MIMO_API_KEY: 'isolated-test-only' } });
+    const phase = await runPhaseCaptureEntities(engine, { sourceId: 'default', model: 'mimo:mimo-v2.6-flash', quickEntitiesOnly: true, roundWork: { prioritySlugs: [] }, budget: { costCapCny: null }, signal: AbortSignal.timeout(20_000) });
+    expect(requests).toBe(2);
+    expect(phase.details.pages_remaining).toBe(1);
+    expect(phase.details.stop_reason).toBe('provider_5xx');
+    expect(phase.details.pages_processed).toBe(0);
+  } finally { server.stop(true); }
+}, 30_000);
+
+test('单次实体请求只包含提取规则，没有让模型调用工具和外部补充的矛盾提示', async () => {
+  await engine.setConfig('version', '140');
+  const requests: Array<{ system?: string; messages: unknown }> = [];
+  __setChatTransportForTests(async opts => { requests.push(opts); return response(JSON.stringify({ entities: [], relations: [], no_entities: true })); });
+  const phase = await runPhaseCaptureEntities(engine, { sourceId: 'default', model: 'custom-openai:Qwen3.6-35B-A3B', quickEntitiesOnly: true, roundWork: { prioritySlugs: [] }, budget: { costCapCny: null } });
+  expect(phase.details.pages_remaining).toBe(0);
+  expect(requests).toHaveLength(1);
+  expect(requests[0].system!.length).toBeLessThan(4000);
+  expect(requests[0].system).not.toContain('Call the tool.');
+  expect(requests[0].system).not.toContain('upload-raw');
+  expect(JSON.stringify(requests[0].messages)).not.toContain('创建前仍必须 search');
+});
+
 test('一次 JSON 提取遇到工具参数错误不暗中重试模型',async()=>{
  const rejected=Object.assign(new Error('tools are not supported'),{status:400});
  const execution=await run([rejected,response(JSON.stringify({entities:[],relations:[],no_entities:true}))],false,6,undefined,undefined,{...context,compact_contract:true,batch_capture:true,single_pass:true} as EntityIngestContext);
@@ -170,8 +205,32 @@ test('一次 JSON 提取包含无法处理的内容时拒绝保存，不假装�
 test('一次 JSON 提取遇到不支持的事实时保留具体错误和已保存资料',async()=>{
  const output=JSON.stringify({entities:[{slug,content:'---\ntitle: 三纪早会体系\ntype: concept\n---\n没有来源的记录。'}],relations:[]});
  const execution=await run([response(output)],false,6,undefined,undefined,{...context,compact_contract:true,batch_capture:true,single_pass:true} as EntityIngestContext);
- const error=await expectRejection(execution.result);expect(error.message).toContain('ingest provenance missing');expect(execution.calls).toHaveLength(1);
+ const result=await execution.result;expect(result.ingest_verified).toBe(true);expect(result.ingest_item_failures).toBe(1);expect(execution.calls).toHaveLength(1);
  expect(await engine.getPage(slug)).toBeNull();expect((await engine.getPage(context.slug))?.compiled_truth).toBe(context.body);
+ const [stored]=await engine.executeRaw<{output:unknown}>("SELECT output FROM subagent_tool_executions WHERE job_id=$1 AND tool_name='brain_capture_entities'",[execution.jobId]);
+ expect(JSON.stringify(typeof stored?.output==='string'?JSON.parse(stored.output):stored?.output)).toContain('ingest provenance missing');
+});
+
+test('一次 JSON 提取遇到相近名称时先保存其他人，再用原文原句确认新对象',async()=>{
+ const body='李四整理了个人知识库 Wiki 索引。Wiki 索引只汇总目录链接，不替代原来的项目页。';
+ await engine.putPage(context.slug,{type:'note',title:'原始记录',compiled_truth:body,frontmatter:{}});
+ await engine.putPage('projects/wiki-index',{type:'project',title:'个人知识库 Wiki 索引',compiled_truth:'已有索引页。',frontmatter:{}});
+ const [source]=await engine.executeRaw<{id:number;incarnation:string}>('SELECT p.id,s.incarnation::text incarnation FROM pages p JOIN sources s ON s.id=p.source_id WHERE p.slug=$1 AND p.source_id=$2',[context.slug,'default']);
+ const variant='projects/wiki-suoyin',person='people/lisi';
+ const variantContent='---\ntitle: Wiki 索引\ntype: project\n---\nWiki 索引只汇总目录链接。[Source: notes/meeting]';
+ const personContent='---\ntitle: 李四\ntype: person\n---\n李四整理了个人知识库 Wiki 索引。[Source: notes/meeting]';
+ const first=JSON.stringify({entities:[{slug:variant,content:variantContent},{slug:person,content:personContent}],relations:[{from:person,to:variant,link_type:'mentions',evidence:'李四整理了个人知识库 Wiki 索引'}]});
+ const second=JSON.stringify({entities:[{slug:variant,content:variantContent,identity_confirmed:true,distinguishing_evidence:'只汇总目录链接'}],relations:[]});
+ const execution=await run([response(first),response(second)],false,6,undefined,undefined,{...context,body,chunkBody:body,pageId:source!.id,sourceIncarnation:source!.incarnation,compact_contract:true,batch_capture:true,single_pass:true,repair_single_pass:true,quickEntitiesOnly:true} as EntityIngestContext);
+ const result=await execution.result;
+ expect(execution.calls).toHaveLength(2);
+ expect(JSON.stringify(execution.calls[0])).toContain('不要读取页面');
+ expect(result.ingest_verified).toBe(true);
+ expect(result.ingest_pending_review).toBe(0);
+ expect(await engine.getPage(person)).toMatchObject({title:'李四'});
+ expect(await engine.executeRaw('SELECT id FROM pages WHERE slug=$1',[person])).toHaveLength(1);
+ expect(await engine.getPage(variant)).toMatchObject({title:'Wiki 索引'});
+ expect(await engine.getPage('projects/wiki-index')).toMatchObject({title:'个人知识库 Wiki 索引'});
 });
 
 test('一次 JSON 提取遇到同名身份不明的人不会猜测合并或新建',async()=>{
@@ -179,8 +238,10 @@ test('一次 JSON 提取遇到同名身份不明的人不会猜测合并或新�
  for(const target of ['people/existing-a','people/existing-b'])await engine.putPage(target,{type:'person',title:'张三',compiled_truth:'已有人工资料。',frontmatter:{}});
  const output=JSON.stringify({entities:[{slug:'people/new-name',content:'---\ntitle: 张三\ntype: person\n---\n张三参与工作安排。[Source: notes/meeting]'}],relations:[]});
  const execution=await run([response(output)],false,6,undefined,undefined,{...context,body,chunkBody:body,compact_contract:true,batch_capture:true,single_pass:true,quickEntitiesOnly:true} as EntityIngestContext);
- const error=await expectRejection(execution.result);expect(error.message).toContain('ingest reuse existing entity');expect(execution.calls).toHaveLength(1);
+ const result=await execution.result;expect(result.ingest_verified).toBe(true);expect(result.ingest_pending_review).toBe(1);expect(execution.calls).toHaveLength(1);
  expect(await engine.getPage('people/new-name')).toBeNull();
+ expect(await engine.getPage('people/existing-a')).toMatchObject({title:'张三'});
+ expect(await engine.getPage('people/existing-b')).toMatchObject({title:'张三'});
 });
 
 for(const pending of [false,true])test(`一次 JSON 提取在${pending?'待保存':'保存前'}中断后继续，不重新调用模型`,async()=>{
@@ -255,7 +316,7 @@ for(const wire of [false,true])test(`${wire?'Qwen 实际 HTTP':'持久工具'}�
  const sequence=[...replies,duplicate,response(final)],requests:any[]=[];
  const server=wire?Bun.serve({port:0,async fetch(request){
   const params:any=await request.json();requests.push(params);const reply=sequence.shift()!;
-  return Response.json({id:`dense-${requests.length}`,object:'chat.completion',created:1,model:params.model,choices:[{index:0,finish_reason:reply.stopReason==='tool_calls'?'tool_calls':'stop',message:{role:'assistant',content:reply.text,tool_calls:reply.blocks.filter(block=>block.type==='tool-call').map(block=>({id:(block as any).toolCallId,type:'function',function:{name:(block as any).toolName,arguments:JSON.stringify((block as any).input)}}))}}],usage:{prompt_tokens:10,completion_tokens:5,total_tokens:15}});
+  return wireResponse(params, reply.text, reply.blocks.filter(block=>block.type==='tool-call').map(block=>({id:(block as any).toolCallId,type:'function',function:{name:(block as any).toolName,arguments:JSON.stringify((block as any).input)}})));
  }}):null;
  try{
   if(server)configureGateway({chat_model:'custom-openai:Qwen3.6-35B-A3B',generative_enabled:true,base_urls:{'custom-openai':server.url.origin+'/v1'},env:{CUSTOM_OPENAI_API_KEY:'isolated-test-only'}});
@@ -312,7 +373,7 @@ for(const model of ['deepseek:deepseek-v4-flash','mimo:mimo-v2.6-pro','custom-op
   if(body.response_format)return Response.json({error:{message:'response_format json_schema unsupported'}},{status:422});
   const text=++completions===1?JSON.stringify({tool_calls:[{name:'brain_put_page',arguments:{slug,content}}]}):receipt;
   if(new URL(request.url).pathname.endsWith('/api/chat'))return new Response(JSON.stringify({model:body.model,message:{role:'assistant',content:JSON.stringify({result:JSON.parse(text)})},done:true,done_reason:'stop',prompt_eval_count:10,eval_count:5})+'\n',{headers:{'content-type':'application/x-ndjson'}});
-  return Response.json({id:'wire-ingest',object:'chat.completion',created:1,model:body.model,choices:[{index:0,finish_reason:'stop',message:{role:'assistant',content:text}}],usage:{prompt_tokens:10,completion_tokens:5,total_tokens:15}});
+  return wireResponse(body, text);
  }});
  try{
   const provider=model.split(':')[0]!;

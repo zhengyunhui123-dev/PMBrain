@@ -1,4 +1,5 @@
 import type { Recipe } from '../types.ts';
+import { officialCompletionTokenFetch } from '../provider-chat-body.ts';
 
 /**
  * User-supplied OpenAI-compatible endpoint.
@@ -47,4 +48,5 @@ export const customOpenAI: Recipe = {
   },
   setup_hint:
     'In config.json, set provider_touchpoint_base_urls.custom-openai.chat/embedding and provider_touchpoint_api_keys.custom-openai.chat/embedding for separate endpoints and credentials. The shared provider_base_urls.custom-openai and CUSTOM_OPENAI_API_KEY remain compatible fallbacks. Then use custom-openai:<model>.',
+  compat: { fetch: officialCompletionTokenFetch },
 };

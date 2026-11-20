@@ -7,6 +7,7 @@ import { readMentionPolicy } from './mentions/policy.ts';
 import { writePageAliases } from './mentions/pass.ts';
 import { composablePgliteTransaction } from './page-state/transactions.ts';
 import { pageReadFilter } from './search/read-policy-sql.ts';
+import { contentEventDateExpr } from './search/content-date-sql.ts';
 import { currentMemoryTakeSql, memoryPageIsCurrent, memoryPageFilterForSchema } from './pmbrain-adapters/memory-projections.ts';
 import { readRelationalFanout, readTakes } from './search/read-enrichment.ts';
 import { createPgliteDatabase } from './pglite-open.ts';
@@ -1972,17 +1973,14 @@ export class PGLiteEngine implements BrainEngine {
       params.push(opts.types);
       extraFilter += ` AND p.type = ANY($${params.length}::text[])`;
     }
-    // v0.29.1 — since/until date filter (Postgres parity, codex pass-1 #10).
-    // Reads against COALESCE(effective_date, updated_at) so date filtering
-    // matches user intent (a meeting was on its event_date, not when it
-    // got reimported). Same param shape as Postgres engine.
+    // Time windows use the content date only. Import time is not the event.
     if (opts?.afterDate) {
       params.push(opts.afterDate);
-      extraFilter += ` AND COALESCE(p.effective_date, p.updated_at, p.created_at) > $${params.length}::timestamptz`;
+      extraFilter += ` AND ${contentEventDateExpr('p')} > $${params.length}::timestamptz`;
     }
     if (opts?.beforeDate) {
       params.push(opts.beforeDate);
-      extraFilter += ` AND COALESCE(p.effective_date, p.updated_at, p.created_at) < $${params.length}::timestamptz`;
+      extraFilter += ` AND ${contentEventDateExpr('p')} < $${params.length}::timestamptz`;
     }
     // v0.34.1 (#861 — P0 leak seal): source-isolation. Array wins over scalar.
     if (opts?.sourceIds && opts.sourceIds.length > 0) {
@@ -2106,11 +2104,11 @@ export class PGLiteEngine implements BrainEngine {
     }
     if (opts?.afterDate) {
       params.push(opts.afterDate);
-      extraFilter += ` AND COALESCE(p.effective_date, p.updated_at, p.created_at) > $${params.length}::timestamptz`;
+      extraFilter += ` AND ${contentEventDateExpr('p')} > $${params.length}::timestamptz`;
     }
     if (opts?.beforeDate) {
       params.push(opts.beforeDate);
-      extraFilter += ` AND COALESCE(p.effective_date, p.updated_at, p.created_at) < $${params.length}::timestamptz`;
+      extraFilter += ` AND ${contentEventDateExpr('p')} < $${params.length}::timestamptz`;
     }
     // v0.34.1 (#861 — P0 leak seal): source-isolation on the CJK fallback path.
     if (opts?.sourceIds && opts.sourceIds.length > 0) {
@@ -2301,11 +2299,11 @@ export class PGLiteEngine implements BrainEngine {
     // v0.29.1 since/until parity (codex pass-1 #10).
     if (opts?.afterDate) {
       params.push(opts.afterDate);
-      extraFilter += ` AND COALESCE(p.effective_date, p.updated_at, p.created_at) > $${params.length}::timestamptz`;
+      extraFilter += ` AND ${contentEventDateExpr('p')} > $${params.length}::timestamptz`;
     }
     if (opts?.beforeDate) {
       params.push(opts.beforeDate);
-      extraFilter += ` AND COALESCE(p.effective_date, p.updated_at, p.created_at) < $${params.length}::timestamptz`;
+      extraFilter += ` AND ${contentEventDateExpr('p')} < $${params.length}::timestamptz`;
     }
     // v0.34.1 (#861 — P0 leak seal): source-isolation for the chunk-grain
     // anchor primitive. Layer 7 two-pass walks from these anchors so a
@@ -2379,11 +2377,11 @@ export class PGLiteEngine implements BrainEngine {
     }
     if (opts?.afterDate) {
       params.push(opts.afterDate);
-      extraFilter += ` AND COALESCE(p.effective_date, p.updated_at, p.created_at) > $${params.length}::timestamptz`;
+      extraFilter += ` AND ${contentEventDateExpr('p')} > $${params.length}::timestamptz`;
     }
     if (opts?.beforeDate) {
       params.push(opts.beforeDate);
-      extraFilter += ` AND COALESCE(p.effective_date, p.updated_at, p.created_at) < $${params.length}::timestamptz`;
+      extraFilter += ` AND ${contentEventDateExpr('p')} < $${params.length}::timestamptz`;
     }
     if (opts?.sourceIds && opts.sourceIds.length > 0) {
       params.push(opts.sourceIds);
@@ -2512,11 +2510,11 @@ export class PGLiteEngine implements BrainEngine {
     // pages — preserves pagination contract.
     if (opts?.afterDate) {
       params.push(opts.afterDate);
-      extraFilter += ` AND COALESCE(p.effective_date, p.updated_at, p.created_at) > $${params.length}::timestamptz`;
+      extraFilter += ` AND ${contentEventDateExpr('p')} > $${params.length}::timestamptz`;
     }
     if (opts?.beforeDate) {
       params.push(opts.beforeDate);
-      extraFilter += ` AND COALESCE(p.effective_date, p.updated_at, p.created_at) < $${params.length}::timestamptz`;
+      extraFilter += ` AND ${contentEventDateExpr('p')} < $${params.length}::timestamptz`;
     }
     // v0.34.1 (#861, F2 — P0 leak seal): source-isolation in the INNER CTE
     // so HNSW candidate pool narrows before re-rank. Mirrors postgres-engine

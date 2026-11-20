@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PGLiteEngine } from '../src/core/pglite-engine.ts';
-import { configureGateway, resetGateway, type ChatResult } from '../src/core/ai/gateway.ts';
+import { configureGateway, resetGateway, __setChatTransportForTests, type ChatResult } from '../src/core/ai/gateway.ts';
 import { discoverExtractablePages, runPhaseExtractAtoms } from '../src/core/cycle/extract-atoms.ts';
 import { runPhaseSynthesizeConcepts } from '../src/core/cycle/synthesize-concepts.ts';
 import { resetPgliteState } from './helpers/reset-pglite.ts';
@@ -13,6 +13,7 @@ import { BudgetExhausted } from '../src/core/budget/budget-tracker.ts';
 import type { BrainEngine } from '../src/core/engine.ts';
 import { assertSafeE2eDatabaseUrl } from './helpers/db-guard.ts';
 import {prepareDreamKnowledge} from '../src/product/tasks/dream-knowledge';
+import { expectRejection } from './helpers/await-rejection.ts';
 
 let engine: BrainEngine;
 let home: string;
@@ -27,7 +28,7 @@ beforeAll(async()=>{
   mkdirSync(join(home,'.pmbrain'));
   writeFileSync(join(home,'.pmbrain','config.json'),JSON.stringify({engine:'pglite',schema_pack:'gbrain-base-v2',embedding_disabled:true,models:{default:'mimo:mimo-v2.6-flash'}}));
   process.env.PMBRAIN_HOME=home;
-  configureGateway({env:{},generative_enabled:false});
+  configureGateway({env:{},generative_enabled:false,embedding_dimensions:1536});
   if(process.env.PMBRAIN_DREAM_TEST_POSTGRES==='1'){
     const url=process.env.DATABASE_URL??'';assertSafeE2eDatabaseUrl(url);
     const {PostgresEngine}=await import('../src/core/postgres-engine.ts');
@@ -127,6 +128,49 @@ test('concept synthesis reuses an unchanged evidence receipt and preserves exist
   expect(calls).toBe(1);expect(first.status).toBe('ok');
 });
 
+test('知识提炼和概念综合都关闭思考并监视逐次模型请求，概念保留充足输出空间', async () => {
+  await seed('notes/request-policy', 'note');
+  const requests: import('../src/core/ai/gateway.ts').ChatOpts[] = [];
+  await runPhaseExtractAtoms(engine, { sourceId: 'default', _transcripts: [], _chat: async opts => { requests.push(opts); return result([]); } });
+  const atoms = Array.from({ length: 6 }, (_, i) => ({ slug: `atoms/policy-${i}`, source_id: 'default', title: `证据${i}`, body: text, concept_refs: ['request-policy'] }));
+  await runPhaseSynthesizeConcepts(engine, { sourceId: 'default', _atoms: atoms, dryRun: true, _chat: async opts => { requests.push(opts); return result('所有结论均以保存的原文证据为准。'); } });
+  expect(requests).toHaveLength(2);
+  for (const opts of requests) {
+    expect(opts.disableReasoning).toBe(true);
+    expect(opts.requestPolicy).toMatchObject({ firstResponseMs: 90_000, idleMs: 45_000, totalMs: 300_000, maxRetries: 1 });
+  }
+  expect(requests[1].maxTokens).toBeGreaterThanOrEqual(4096);
+  expect(requests[1].retryLength).toBe(true);
+});
+
+test('内容综合的服务端故障只重试当前请求，失败资料不被标记完成', async () => {
+  const { runPhaseSynthesize } = await import('../src/core/cycle/synthesize.ts');
+  await engine.setConfig('version', '140');
+  await engine.setConfig('dream.synthesize.dual_write', 'false');
+  await engine.setConfig('dream.synthesize.min_chars', '500');
+  const corpus = join(home, 'isolated-corpus');
+  mkdirSync(corpus, { recursive: true });
+  writeFileSync(join(corpus, 'synthetic-source.txt'), seedBody);
+  configureGateway({ generative_enabled: true, chat_model: 'mimo:mimo-v2.6-flash', env: { MIMO_API_KEY: 'isolated-test-only' } });
+  const requests: import('../src/core/ai/gateway.ts').ChatOpts[] = [];
+  __setChatTransportForTests(async opts => { requests.push(opts); throw Object.assign(new Error('isolated upstream failure'), { statusCode: 503 }); });
+  try {
+    const phase = await runPhaseSynthesize(engine, { brainDir: home, dryRun: false, inputFile: corpus, sourceId: 'default', signal: AbortSignal.timeout(15_000) });
+    expect(phase.status, JSON.stringify(phase)).toBe('warn');
+    expect(requests).toHaveLength(2);
+    expect(requests[0].requestPolicy).toMatchObject({ firstResponseMs: 90_000, idleMs: 45_000, totalMs: 300_000, maxRetries: 1 });
+    expect(phase.details.transcripts_processed).toBe(0);
+    expect(phase.error?.message).toContain('isolated upstream failure');
+    expect(await engine.getConfig('dream.synthesize.last_completion_ts')).toBeNull();
+    const jobs = await engine.executeRaw<{status:string;attempts_made:number}>("SELECT status,attempts_made FROM minion_jobs WHERE name='subagent'");
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]).toMatchObject({ status: 'dead', attempts_made: 1 });
+  } finally {
+    __setChatTransportForTests(null);
+    resetGateway();
+  }
+}, 30_000);
+
 test('a failed second atom rolls back the whole item and retry can publish every atom',async()=>{
   await seed('notes/atomic','note');
   await engine.executeRaw("CREATE FUNCTION reject_dream_atom_test() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.type='atom' AND NEW.title='第二条知识点' THEN RAISE EXCEPTION 'injected atom publication failure'; END IF; RETURN NEW; END $$");
@@ -166,10 +210,10 @@ test('a source edited during extraction is preserved and remains pending',async(
 
 test('concept publication rejects evidence changed during the model call',async()=>{
   for(let i=0;i<5;i++)await seed(`atoms/live-${i}`,'atom',{concepts:['live-evidence']});
-  await expect(runPhaseSynthesizeConcepts(engine,{sourceId:'default',_chat:async()=>{
+  await expectRejection(runPhaseSynthesizeConcepts(engine,{sourceId:'default',_chat:async()=>{
     await seed('atoms/live-0','atom',{concepts:['different-evidence']});
     return result('依据旧证据的综合');
-  }})).rejects.toThrow('concept_evidence_conflict');
+  }}), 'concept_evidence_conflict');
   expect(await engine.getPage('concepts/live-evidence')).toBeNull();
 });
 

@@ -142,7 +142,7 @@ describe('E2E patterns — insufficient_evidence', () => {
 });
 
 describe('E2E patterns — no API key', () => {
-  test('enough reflections, no ANTHROPIC_API_KEY → skipped no_api_key', async () => {
+  test('enough reflections, no ANTHROPIC_API_KEY → unfinished with the original authentication error', async () => {
     const rig = await setupRig();
     try {
       await seedReflections(rig.engine, 5); // above default min_evidence (3)
@@ -151,8 +151,9 @@ describe('E2E patterns — no API key', () => {
           brainDir: rig.brainDir,
           dryRun: false,
         });
-        expect(result.status).toBe('skipped');
-        expect((result.details as { reason?: string }).reason).toBe('no_api_key');
+        expect(result.status).toBe('warn');
+        expect(result.details.stop_reason).toBe('failure');
+        expect(result.error?.message).toMatch(/ANTHROPIC_API_KEY|apiKey|auth/i);
       });
     } finally {
       await rig.cleanup();

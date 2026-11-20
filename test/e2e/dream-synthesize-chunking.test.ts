@@ -22,6 +22,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { PGLiteEngine } from '../../src/core/pglite-engine.ts';
 import { runPhaseSynthesize } from '../../src/core/cycle/synthesize.ts';
+import { TRIAGE_VERSION } from '../../src/core/cycle/structured-triage.ts';
 
 interface TestRig {
   engine: PGLiteEngine;
@@ -108,7 +109,7 @@ async function seedVerdict(engine: PGLiteEngine, filePath: string, content: stri
     segments: [],
     entities: [],
     model: verdictModel,
-    triage_version: 1,
+    triage_version: TRIAGE_VERSION,
   });
   return contentHash;
 }

@@ -2482,6 +2482,7 @@ export async function runCycle(
           signal: opts.signal,
           yieldDuringPhase: opts.yieldDuringPhase,
           deadlineAtMs: opts.deadlineAtMs ?? null,
+          deferEmbedding: defersDerivedEmbedding,
           privateQueueOwnerJobId: opts.privateQueueOwnerJobId ?? null,
           handler: opts.captureEntitiesHandler,
           getConcurrency:opts.captureEntitiesConcurrency,

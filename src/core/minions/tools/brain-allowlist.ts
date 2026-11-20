@@ -169,6 +169,7 @@ function namespacedPutPageSchema(
 /** Args required to build the registry for a given subagent job. */
 export interface BuildBrainToolsOpts {
   allowEntityLinks?: boolean;
+  deferPageEmbedding?: boolean;
   subagentId: number;
   engine: BrainEngine;
   config: GBrainConfig;
@@ -213,6 +214,7 @@ interface OpContextDeps {
   allowedSlugPrefixes?: readonly string[];
   sourceId?: string;
   skillsDir?: string;
+  deferPageEmbedding?: boolean;
 }
 
 function buildOpContext(deps: OpContextDeps): OperationContext {
@@ -235,6 +237,7 @@ function buildOpContext(deps: OpContextDeps): OperationContext {
       ? [...deps.allowedSlugPrefixes]
       : undefined,
     skillsDir: deps.skillsDir,
+    deferPageEmbedding: deps.deferPageEmbedding,
   };
 }
 
@@ -284,6 +287,7 @@ export function buildBrainTools(opts: BuildBrainToolsOpts): ToolDef[] {
           allowedSlugPrefixes: opts.allowedSlugPrefixes,
           sourceId: opts.sourceId,
           skillsDir: opts.skillsDir,
+          deferPageEmbedding: opts.deferPageEmbedding,
         });
         opCtx.preparePageCommit = ctx.preparePageCommit;
         opCtx.preparedPageImport = ctx.preparedPageImport;

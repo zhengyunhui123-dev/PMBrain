@@ -44,6 +44,8 @@ function parseRelativeWindow(
   now: Date,
 ): { query: string; since?: Date; until?: Date } {
   const today = startOfDay(now);
+  const ordinal = /最近一次|最新一次|最后一次|上一次|上次/g;
+  const text = query.replace(ordinal, ' ').replace(/\s+/g, ' ').trim();
   const rules: Array<{
     pattern: RegExp;
     range: () => { since: Date; until: Date };
@@ -88,15 +90,15 @@ function parseRelativeWindow(
 
   for (const rule of rules) {
     rule.pattern.lastIndex = 0;
-    if (!rule.pattern.test(query)) continue;
+    if (!rule.pattern.test(text)) continue;
     rule.pattern.lastIndex = 0;
     const range = rule.range();
     return {
-      query: query.replace(rule.pattern, ' ').replace(/\s+/g, ' ').trim(),
+      query: text.replace(rule.pattern, ' ').replace(/\s+/g, ' ').trim(),
       ...range,
     };
   }
-  return { query };
+  return { query: text };
 }
 
 /**

@@ -34,13 +34,14 @@ async function settledKnowledge(sourceIds?:string[]){
   while(Date.now()<deadline){
     const pending=await engine.executeRaw<{key:string}>(`SELECT key FROM config WHERE key LIKE 'dream.entity_capture.pending.%'`);
     const relevant=sourceIds?pending.filter(row=>sourceIds.some(id=>row.key.endsWith(`.${id}`))):pending;
+    const handoff=await engine.executeRaw<{key:string}>(`SELECT key FROM config WHERE key LIKE 'pmbrain.deep.vector-handoff.%'`);
     const optimize=await loadSearchOptimize(engine);
     const runs=await runtime.listRuns();
     const busy=runs.some(run=>run.kind==='embed_stale'&&['queued','running','paused'].includes(run.status)||(run.kind==='dream_capture_entities'||run.kind==='dream_quick')&&['queued','running'].includes(run.status));
-    if(!busy&&relevant.length===0&&optimize.pending===0)return;
+    if(!busy&&relevant.length===0&&handoff.length===0&&optimize.pending===0)return;
     await Bun.sleep(40);
   }
-  throw new Error(JSON.stringify({runs:await runtime.listRuns(),pending:await engine.executeRaw(`SELECT key FROM config WHERE key LIKE 'dream.entity_capture.pending.%'`),optimize:await engine.getConfig('pmbrain.search_optimize')}));
+  throw new Error(JSON.stringify({runs:await runtime.listRuns(),pending:await engine.executeRaw(`SELECT key FROM config WHERE key LIKE 'dream.entity_capture.pending.%' OR key LIKE 'pmbrain.deep.vector-handoff.%'`),optimize:await engine.getConfig('pmbrain.search_optimize')}));
 }
 async function maintain(sourceId:string){
   const done=await finished((await runtime.submitDream({preset:'full',sourceId})).id);

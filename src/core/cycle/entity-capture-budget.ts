@@ -7,6 +7,10 @@ import type {ServiceModel} from '../../../shared/model-services.ts';
 export const DEFAULT_ENTITY_CAPTURE_COST_CAP_CNY = 5;
 export const ENTITY_CAPTURE_CANDIDATE_LIMIT = 60;
 
+export function entityCaptureJobTimeoutMs(turnTimeoutMs:number,jobTurns:number,singlePass:boolean):number{
+  return singlePass?jobTurns*turnTimeoutMs+60_000:jobTurns*(turnTimeoutMs*2+30_000);
+}
+
 export type CaptureStopReason = 'completed' | 'window' | 'tokens' | 'document_tokens' | 'document_turns' | 'cost' | 'failure' | 'ingest_validation' | 'relation_failure' | 'aborted' | 'user_stop' | 'service_shutdown' | 'model_unavailable'|'truncated'|'parse'|'timeout'|'network'|'rate_limit'|'provider_5xx'|'no_tool'|'lease_lost';
 
 import { CJK_PLAIN_MENTION_BLOCKLIST } from '../pmbrain-adapters/mention-policy.ts';
@@ -449,6 +453,10 @@ export function captureFailureDisposition(input: {
       fatal = false;
       pageStopped = false;
     }
+  } else if (/^(?:wall-clock )?timeout exceeded$/i.test(message.trim())) {
+    reason = 'timeout';
+    fatal = false;
+    pageStopped = false;
   } else if (/ingest_provider_(auth|billing|model_not_found)/.test(message)) {
     reason = 'model_unavailable';
   } else if (!budgetStop && /\bingest /.test(message)) {

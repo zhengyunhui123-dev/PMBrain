@@ -47,6 +47,8 @@
  * below; tests + workers both consume it.
  */
 
+import { noteExecutionDuration } from './execution-timing.ts';
+
 export interface LockRenewalKnobs {
   /**
    * Failure counter cap used ONLY for audit-event labeling.
@@ -216,6 +218,7 @@ export async function runLockRenewalTick(
   if (state.cancelled()) return { kind: 'cancelled' };
 
   let renewed: boolean;
+  const started = deps.now();
   try {
     renewed = await Promise.race([
       deps.renewLock(state.jobId, state.lockToken, state.lockDurationMs),
@@ -228,6 +231,7 @@ export async function runLockRenewalTick(
   } catch (err) {
     if (state.cancelled()) return { kind: 'cancelled' };
     const timedOut = err instanceof Error && err.message.includes('timed out');
+    noteExecutionDuration('renew', timedOut && state.ownsExecution?.() ? state.knobs.callTimeoutMs : Math.max(0, deps.now() - started));
     if (timedOut && state.ownsExecution?.()) return { kind: 'ok' };
     state.consecutiveFailures += 1;
     // Defense-in-depth (codex C4): audit must never escape this catch.
@@ -246,6 +250,7 @@ export async function runLockRenewalTick(
     return { kind: 'ok' }; // counter incremented; not yet at deadline
   }
 
+  noteExecutionDuration('renew', Math.max(0, deps.now() - started));
   if (state.cancelled()) return { kind: 'cancelled' };
   if (!renewed) {
     // Token-fence failure: another worker reclaimed the row, or pauseJob

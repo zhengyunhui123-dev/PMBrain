@@ -71,6 +71,7 @@ export const deepseek: Recipe = {
     },
     chat: {
       models: ['deepseek-flash', 'deepseek-v4-flash', 'deepseek-v4-pro'],
+      thinking_by_default: true,
       supports_vision: true,
       vision_models: ['deepseek-flash', 'deepseek-v4-flash'],
       supports_tools: true,

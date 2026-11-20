@@ -1,4 +1,4 @@
-import {beforeAll,afterAll,test,expect} from 'bun:test';
+import {beforeAll,afterAll,test,expect,spyOn} from 'bun:test';
 import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,statSync,utimesSync,rmSync} from 'node:fs';
 import {createHash} from 'node:crypto';
 import {join,resolve,sep} from 'node:path';
@@ -10,13 +10,15 @@ import {WorkerPgliteEngine} from '../src/product/database/worker-engine';
 import type {BrainEngine} from '../src/core/engine';
 import {configureGateway,resetGateway,__setChatTransportForTests} from '../src/core/ai/gateway';
 import {importOfficeFile} from '../src/core/office-import';
+import * as legacyOfficeParsers from '../src/core/document/parsers/legacy-office';
 import {configPath} from '../src/core/config';
 import {DocumentRuntime} from '../src/core/document/resource-policy';
 import {readContentChunksEmbeddingDim} from '../src/core/embedding-dim-check';
+import {readDocumentChunkManifest} from '../src/core/document/chunk-manifest';
 import {PostgresEngine} from '../src/core/postgres-engine';
 import {assertSafeE2eDatabaseUrl} from './helpers/db-guard';
 import {MinionQueue} from '../src/core/minions/queue';
-import {SyncFileQueue,SYNC_FILE_QUEUE} from '../src/product/tasks/sync-file-queue';
+import {SyncFileQueue,SYNC_FILE_QUEUE,SYNC_FILE_TASK} from '../src/product/tasks/sync-file-queue';
 import {syncFileContentFingerprint} from '../src/product/tasks/checkpoint';
 import type {SyncFileInput} from '../src/product/tasks/types';
 const database=process.env.PMBRAIN_TASK_TEST_DATABASE_URL;
@@ -78,7 +80,8 @@ test('旧资料缺块和同数量坏块从已存正文修补，不重新识图�
 test('失败图片识别一批后停止并重开，复用缓存且只请求剩余一张',async()=>{
   const f=await legacyFixture('resume',2,'OriginalLegacyNativeText',4),controller=new AbortController(),count=calls,original=await engine.getPage('report.docx',{sourceId:f.sourceId});
   onModel=()=>{if(calls-count===2)controller.abort(new Error('isolated stop'));};
-  let failure:unknown;try{await importOfficeFile(engine,f.path,'report.docx',{...f.options,runtime:new DocumentRuntime({signal:controller.signal})});}catch(error){failure=error;}finally{onModel=undefined;}expect(String(failure)).toContain('isolated stop');expect(calls-count).toBe(2);
+  const runtime=new DocumentRuntime({signal:controller.signal,sample:()=>({bytes:64*1024**2,availableBytes:512*1024**2,totalBytes:8*1024**3,cpuBusyRatio:0})});
+  let failure:unknown;try{await importOfficeFile(engine,f.path,'report.docx',{...f.options,runtime});}catch(error){failure=error;}finally{onModel=undefined;}expect(String(failure)).toContain('isolated stop');expect(calls-count).toBe(2);
   const partial=await engine.getPage('report.docx',{sourceId:f.sourceId});await engine.disconnect();engine=(database?new PostgresEngine():new WorkerPgliteEngine()) as unknown as BrainEngine;await engine.connect(database?{database_url:database}:{database_path:join(root,'database')});
   expect(partial!.compiled_truth).toBe(original!.compiled_truth);
   const before=calls;await importOfficeFile(engine,f.path,'report.docx',f.options);expect(calls-before).toBe(1);const final=await engine.getPage('report.docx',{sourceId:f.sourceId});expect(final!.compiled_truth.startsWith(partial!.compiled_truth)).toBe(true);expect((final!.frontmatter.ocr_receipt as any).status).toBe('complete');
@@ -109,6 +112,80 @@ for(const documentOcr of [true,false])test(`维护队列识图${documentOcr?'开
   const [row]=await engine.executeRaw<{data:{task:{input:SyncFileInput}}}>('SELECT data FROM minion_jobs WHERE queue=$1 AND parent_job_id=$2',[SYNC_FILE_QUEUE,parent.id]);const queued=row.data.task.input;
   expect(queued.options.forceRechunk).not.toBe(true);const count=calls;expect((await importOfficeFile(engine,queued.path,queued.relativePath,queued.options)).status).toBe('skipped');expect(calls).toBe(count);expect((await engine.getPage('report.docx',{sourceId:f.sourceId}))!.compiled_truth).toBe(body);expect(await stored(f.sourceId)).toEqual(chunks);
 },60000);
+
+for (const [ext, format, parserMethod, parserName] of [
+  ['doc', 'docx', 'parseLegacyWordDocument', 'windows-word-com'],
+  ['ppt', 'pptx', 'parseLegacyPresentationDocument', 'windows-powerpoint-com'],
+] as const) test(`快速维护续跑复用已提交的旧版 ${ext}，无需再解析或重新排队`, async () => {
+  const sourceId = `legacy-${ext}-com-resume`;
+  const dir = join(root, sourceId);
+  const relativePath = `report.${ext}`;
+  const path = join(dir, relativePath);
+  mkdirSync(dir);
+  writeFileSync(path, 'synthetic Word COM input');
+  await engine.executeRaw('INSERT INTO sources(id,name,local_path) VALUES($1,$1,$2)', [sourceId, dir]);
+  const parser = spyOn(legacyOfficeParsers, parserMethod).mockResolvedValue({
+    title: 'report',
+    format,
+    sections: [{ id: 'legacy-1', type: 'paragraph', text: '正文由 Windows Office COM 提取。' }],
+    metadata: { parser: parserName, local: true, structured: false, tableCount: 0, imageCount: 0, ocrUsed: false },
+  });
+  try {
+    const options = { sourceId, noEmbed: true, documentOcr: false, includeOffice: true };
+    const info = statSync(path);
+    const input: SyncFileInput = {
+      path, relativePath, sourceRoot: dir, originalPath: path,
+      originalSize: info.size, originalMtime: info.mtimeMs, originalCtime: info.ctimeMs,
+      hash: createHash('sha256').update(readFileSync(path)).digest('hex'),
+      fingerprint: syncFileContentFingerprint(options), modelFingerprint: 'isolated',
+      quickMaintenance: true, scanValidated: true, options,
+    };
+    const parentQueue = 'legacy-word-resume';
+    const parentToken = 'legacy-word-parent-token';
+    const childToken = 'legacy-word-child-token';
+    const queue = new MinionQueue(engine);
+    const parent = await queue.add(parentQueue, {}, { queue: parentQueue });
+    await queue.claim(parentToken, 3600000, parentQueue, [parentQueue]);
+    const files = new SyncFileQueue(engine);
+    const scheduled = await files.enqueue(parent.id, parentToken, input);
+    expect(scheduled.childId).toBeDefined();
+    await files.activateDuringQuickScanBatch(parent.id, parentToken, [scheduled.childId!]);
+    const child = await queue.claim(childToken, 3600000, SYNC_FILE_QUEUE, [SYNC_FILE_TASK]);
+    expect(child?.id).toBe(scheduled.childId);
+    const childInput = (child!.data.task as { input: SyncFileInput }).input;
+    const imported = await importOfficeFile(engine, childInput.path, relativePath, options);
+    expect(imported.status).toBe('imported');
+    const page = (await engine.getPage(imported.slug, { sourceId }))!;
+    const manifest = await readDocumentChunkManifest(engine, page.id);
+    const receipt = { ...imported, pageHash: page.content_hash, chunkHash: manifest.chunk_hash };
+    expect(await queue.completeJob(child!.id, childToken, receipt)).not.toBeNull();
+
+    const chunks = await stored(sourceId);
+    const resumed = await new SyncFileQueue(engine).enqueue(parent.id, parentToken, input);
+    expect(resumed).toMatchObject({ status: 'imported', pageHash: page.content_hash });
+    expect(resumed.deferred).toBeUndefined();
+    expect(parser).toHaveBeenCalledTimes(1);
+    expect(await stored(sourceId)).toEqual(chunks);
+    expect((await queue.getJob(child!.id))?.status).toBe('completed');
+
+    writeFileSync(path, 'updated synthetic Word COM input');
+    const updatedInfo = statSync(path);
+    const changedInput = {
+      ...input, originalSize: updatedInfo.size, originalMtime: updatedInfo.mtimeMs, originalCtime: updatedInfo.ctimeMs,
+      hash: createHash('sha256').update(readFileSync(path)).digest('hex'),
+    };
+    const inspected = await files.inspect(parent.id, parentToken, { ...changedInput, scanValidated: false });
+    expect(inspected).toMatchObject({ deferred: true });
+    expect(inspected.childId).toBeUndefined();
+    expect(parser).toHaveBeenCalledTimes(1);
+    expect((await queue.getJob(child!.id))?.data.superseded).toBeUndefined();
+    const changed = await files.enqueue(parent.id, parentToken, changedInput);
+    expect(changed.deferred).toBe(true);
+    expect(changed.childId).not.toBe(child!.id);
+  } finally {
+    parser.mockRestore();
+  }
+}, 60000);
 
 test('修补分块第一批提交后中断不能标记完整，重开仅补剩余片段',async()=>{
   const text=Array.from({length:120},(_,index)=>`LegacyParagraph${index} 独立正文内容${index}。`+'需要完整保留的材料。'.repeat(20)).join('\n\n'),f=await legacyFixture('repair-resume',0,text);await seedVector(f.sourceId);

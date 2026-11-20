@@ -61,6 +61,7 @@ import { mixRoundWork, type DeepRoundWork } from '../pmbrain-adapters/deep-round
 import { upsertExtractRollup } from '../extract/rollup-writer.ts';
 import { parseLlmJson } from '../llm-json.ts';
 import {defaultMaxOutputTokens,isThinkingModel} from '../ai/model-compatibility.ts';
+import {modelTurnRequestPolicy} from '../ai/chat-request-runtime.ts';
 import { resolveCycleDate } from './cycle-date.ts';
 import {
   recordTranscriptFailureCount,
@@ -712,6 +713,7 @@ export async function runPhaseExtractAtoms(
         maxTokens:isThinkingModel(resolvedModel.model)?defaultMaxOutputTokens(resolvedModel.model):2000,
         retryLength:true,
         disableReasoning:true,
+        requestPolicy:modelTurnRequestPolicy(resolvedModel.model,300_000),
         responseSchema:{name:'atoms',schema:{type:'array',items:{type:'object'}}},
         abortSignal: opts.signal,
       });

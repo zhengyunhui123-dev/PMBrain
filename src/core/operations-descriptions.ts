@@ -66,7 +66,8 @@ export const QUERY_DESCRIPTION =
   "Use this FIRST for a natural-language factual question, paraphrase, or relationship lookup " +
   "such as '我家狗叫什么名字'. Pass the original user wording as query; do not reduce it to " +
   "guessed keywords. If an excerpt already answers the question, answer from it. If more context " +
-  "is needed, call get_page with the exact slug returned here. " +
+  "is needed, call get_page with the exact slug and the same source_id returned here. " +
+  "A remote source_id, including '__all__', cannot leave this credential's knowledge sources. " +
   "For personal/emotional questions ('what's going on with me', 'anything notable', " +
   "'how am I feeling'), prefer get_recent_salience, find_anomalies, or " +
   "get_recent_transcripts. Semantic search returns polished pages and misses " +

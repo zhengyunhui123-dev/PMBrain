@@ -72,34 +72,41 @@ export class SyncFileQueue {
         if(syncFileContentFingerprint(input.options)===file.fingerprint){job=current;break;}
       }
     }
-    if(!fixedQuickFile)await this.engine.executeRaw(`UPDATE minion_jobs SET data=jsonb_set(data,'{superseded}','true'::jsonb),
+    if(!inspectOnly&&!fixedQuickFile)await this.engine.executeRaw(`UPDATE minion_jobs SET data=jsonb_set(data,'{superseded}','true'::jsonb),
       status=CASE WHEN status IN ('paused','delayed','waiting') THEN 'cancelled' ELSE status END,updated_at=now()
       WHERE queue=$1 AND parent_job_id=$2 AND data->'task'->'input'->>'relativePath'=$3
       AND data->'task'->'input'->'options'->>'sourceId'=$4 AND data->'task'->'input'->>'hash' <> $5`,
       [SYNC_FILE_QUEUE,sessionId,file.relativePath,file.options.sourceId??'default',file.hash]);
     if (job) {
-      this.observe?.(job);
+      if(!inspectOnly)this.observe?.(job);
       if (job?.result && (job.status === 'completed' || (job.result.pageHash && (['paused','delayed','waiting'].includes(job.status)||(job.status==='cancelled'&&job.data.capacityParked===true))))) {
-        const stored = job.result as unknown as ImportResult & { pageHash?: string;chunkHash?:string };
-        if (!stored.pageHash&&(!stored.slug||!['imported','skipped'].includes(stored.status))) return stored;
+        const receipt = job.result as unknown as Omit<ImportResult, 'status'> & {
+          status: ImportResult['status'] | 'failed'; pageHash?: string; chunkHash?: string;
+        };
+        const status: ImportResult['status'] = receipt.status === 'failed' ? 'error' : receipt.status;
+        const stored = { ...receipt, status };
+        if (status === 'error' || status === 'partial' || (!stored.pageHash && !stored.slug)) return stored;
         const page = await this.completePage(stored.slug,file,stored.status==='skipped');
-        if (page && ['imported','skipped'].includes(stored.status) && page.content_hash === stored.pageHash
+        if (page && page.content_hash === stored.pageHash
           && (stored.chunkHash===page.chunkHash || (!stored.chunkHash&&isOfficeFilePath(file.relativePath)))
           && (stored.chunks===page.chunks || (stored.status==='skipped'&&stored.chunks===0))) {
           await this.validate(file);
+          if(inspectOnly)return stored;
           if (job.status !== 'completed') await this.engine.executeRaw(`UPDATE minion_jobs SET status = 'completed', data=data-'capacityParked', finished_at = now(), lock_token = NULL, lock_until = NULL WHERE id = $1 AND (status IN ('paused','delayed','waiting') OR (status='cancelled' AND data->>'capacityParked'='true'))`, [job.id]);
           if(stored.status==='skipped'){await this.validate(file);await this.remember(file,stored);}
           return stored;
         }
-        await this.engine.executeRaw(`UPDATE minion_jobs SET idempotency_key = NULL, data = jsonb_set(data, '{superseded}', 'true'::jsonb),
-          status=CASE WHEN status IN ('paused','delayed','waiting') THEN 'cancelled' ELSE status END WHERE id = $1`, [job.id]);
-        job=undefined;
+        if (inspectOnly) return { slug: '', status: 'skipped', chunks: 0, deferred: true, preparedFile: file };
+        const error = '已保存的导入结果校验不一致，补跑一次后仍未通过。请检查资料后继续任务。';
+        job = await this.settleReceiptMismatch(sessionId, token, job, error);
+        this.observe?.(job);
+        if (job.status === 'completed') return { slug: '', status: 'error', chunks: 0, error };
       } else {
         if (['dead', 'failed'].includes(job.status)) throw new Error(job.error_text ?? '文件任务执行失败');
         if(job.status==='active')return { slug: '', status: 'skipped', chunks: 0, deferred: true,childId:job.id };
       }
     }
-    if(!file.scanValidated){
+    if(!file.scanValidated && job?.data.importReceiptRetried !== true){
     const rawManifest=await this.engine.getConfig(syncFileManifestKey(file));
     const manifest=rawManifest?JSON.parse(rawManifest) as SyncFileManifest:null;
     if(manifest?.hash===file.hash && (manifest.fingerprint===file.fingerprint || file.compatibleFingerprints?.includes(manifest.fingerprint)) && !file.options.forceRechunk){
@@ -107,6 +114,7 @@ export class SyncFileQueue {
       if(page?.content_hash===manifest.pageHash && (manifest.chunks!==page.chunks || manifest.chunkHash!==page.chunkHash))file.options={...file.options,forceRechunk:true};
       if(page?.content_hash===manifest.pageHash && manifest.chunks===page.chunks && manifest.chunkHash===page.chunkHash){
         await this.validate(file);
+        if(inspectOnly)return {slug:manifest.slug,status:'skipped',chunks:0,unchanged:true};
         if(manifest.size!==file.originalSize||manifest.mtime!==file.originalMtime||manifest.chunks===undefined)await this.remember({...file,fingerprint:manifest.fingerprint},{slug:manifest.slug,status:'skipped',chunks:page.chunks,pageHash:manifest.pageHash});
         await this.retireUnchanged(job);
         return {slug:manifest.slug,status:'skipped',chunks:0,unchanged:true};
@@ -116,11 +124,14 @@ export class SyncFileQueue {
     if (!fixedQuickFile && file.options.noEmbed && !(file.options.session && isSessionExportPath(file.relativePath)) && !isCodeFilePath(file.relativePath)
       && !isImageFilePath(file.relativePath) && !(file.options.documentOcr && isOfficeFilePath(file.relativePath))) {
       const inspected = isOfficeFilePath(file.relativePath)
-        ? await (await import('../../core/office-import.ts')).importOfficeFile(this.engine,file.path,file.relativePath,{...file.options,checkOnly:true})
+        ? file.options.forceRechunk || (await lstat(file.path)).isSymbolicLink()
+          ? null
+          : await (await import('../../core/office-import.ts')).readStoredOfficeImport(this.engine,file.relativePath,file.hash,file.options)
         : await importFile(this.engine, file.path, file.relativePath, { ...file.options, checkOnly: true });
-      if (inspected.error === '同步检查：需要重新切分') file.options = {...file.options,forceRechunk:true};
-      if (inspected.status === 'skipped' && !inspected.error) {
+      if (inspected?.error === '同步检查：需要重新切分') file.options = {...file.options,forceRechunk:true};
+      if (inspected?.status === 'skipped' && !inspected.error) {
         await this.validate(file);
+        if(inspectOnly)return { ...inspected, unchanged: true };
         const current = await this.queue.getJob(sessionId);
         if (current?.status !== 'active' || current.lock_token !== token) throw new Error('同步任务已停止或租约失效');
         const page=await this.completePage(inspected.slug,file);
@@ -129,8 +140,8 @@ export class SyncFileQueue {
         return { ...inspected, unchanged: true };
       }
     }
-    if(inspectOnly)return {slug:'',status:'skipped',chunks:0,deferred:true,preparedFile:file};
     }
+    if(inspectOnly)return {slug:'',status:'skipped',chunks:0,deferred:true,preparedFile:file};
     const reusable=Boolean(job&&(['paused','delayed','waiting'].includes(job.status)||(job.status==='cancelled'&&job.data.capacityParked===true)));
     if(job && reusable){
       await this.engine.executeRaw(`UPDATE minion_jobs SET data=jsonb_set(data,'{task,input}', $2::jsonb),updated_at=now()
@@ -183,6 +194,25 @@ export class SyncFileQueue {
     this.observe?.(added);
     return { slug: '', status: 'skipped', chunks: 0, deferred: true,childId:added.id };
     } catch(error){if(!queued){releaseReservation();await unlink(path).catch(failure=>{if(failure.code!=='ENOENT')throw failure;});}throw error;}
+  }
+
+  private async settleReceiptMismatch(sessionId: number, token: string, job: MinionJob, error: string): Promise<MinionJob> {
+    const alreadyRetried = job.data.importReceiptRetried === true;
+    return this.engine.transaction(async tx => {
+      if (!alreadyRetried && ['completed', 'cancelled'].includes(job.status)) {
+        await this.ensureQuickCapacity(tx);
+      }
+      const parent = await tx.executeRaw("SELECT id FROM minion_jobs WHERE id=$1 AND status='active' AND lock_token=$2 FOR UPDATE", [sessionId, token]);
+      if (!parent.length || !this.allowed(sessionId)) throw new Error('同步任务已停止或租约失效');
+      const result = alreadyRetried ? { ...job.result, status: 'failed', error } : null;
+      const [updated] = await tx.executeRaw<Record<string, unknown>>(`UPDATE minion_jobs
+        SET status=$4, result=$5::jsonb, error_text=$6, finished_at=CASE WHEN $4='completed' THEN now() END,
+            data=jsonb_set(data-'capacityParked','{importReceiptRetried}','true'::jsonb), updated_at=now()
+        WHERE id=$1 AND status=$2 AND result=$3::jsonb AND parent_job_id=$7 RETURNING *`,
+      [job.id, job.status, job.result, alreadyRetried ? 'completed' : 'paused', result, alreadyRetried ? error : null, sessionId]);
+      if (!updated) throw new Error('同步文件任务已改变，请继续同步');
+      return rowToMinionJob(updated);
+    });
   }
 
   private async parkInactiveQuickChild(tx:BrainEngine) {
@@ -278,7 +308,7 @@ export class SyncFileQueue {
         WHERE queue = $1 AND (data->>'sessionId')::bigint = $2 AND status IN ('paused','dead','failed') AND data->>'superseded' IS DISTINCT FROM 'true'`, [SYNC_FILE_QUEUE, sessionId]);
       await tx.executeRaw(`UPDATE minion_jobs SET status = 'waiting', lock_token = NULL, lock_until = NULL, timeout_at = NULL,
         data = jsonb_set(data, '{resumeOnRestart}', 'false'::jsonb) || $2::jsonb,
-        error_text = NULL, finished_at = NULL, updated_at = now()
+        error_text = NULL, finished_at = NULL, result = NULL, updated_at = now()
         WHERE id = $1 AND ($3::text IS NULL OR status = $3)`,
       [sessionId, timing ? { deepTiming: timing.value } : {}, timing?.status ?? null]);
     });
@@ -309,8 +339,9 @@ export class SyncFileQueue {
     const manifest=await readDocumentChunkManifest(this.engine,row.id);
     if(row.hasBody&&!manifest.chunks)return null;
     if(isOfficeFilePath(file.relativePath)){
-      const checked=await (await import('../../core/office-import.ts')).importOfficeFile(this.engine,file.path,file.relativePath,{...file.options,forceRechunk:false,checkOnly:true});
-      if(checked.status!=='skipped'||checked.error)return null;
+      if((await lstat(file.path)).isSymbolicLink())return null;
+      const checked=await (await import('../../core/office-import.ts')).readStoredOfficeImport(this.engine,file.relativePath,file.hash,file.options,slug);
+      if(!checked)return null;
     }
     return {...row,chunks:manifest.chunks,chunkHash:manifest.chunk_hash};
   }

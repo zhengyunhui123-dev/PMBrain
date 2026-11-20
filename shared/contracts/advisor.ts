@@ -23,12 +23,19 @@ export const AdvisorProductViewSchema = z.object({
   suggestions: z.array(AdvisorProductSuggestionSchema),
   generated_at: z.string(),
   worst: AdvisorSeveritySchema.nullable(),
+  readiness: z.array(z.object({
+    key: z.string(),
+    label: z.string(),
+    state: z.string(),
+    text: z.string(),
+  }).passthrough()).optional(),
 }).passthrough();
 
 export const AdvisorReportSchema = z.object({
   version: z.string(),
   generated_at: z.string(),
   worst: AdvisorSeveritySchema.nullable(),
+  failed_collectors: z.array(z.string()).optional(),
   findings: z.array(z.object({
     id: z.string(),
     severity: AdvisorSeveritySchema,

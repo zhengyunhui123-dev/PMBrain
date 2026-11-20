@@ -19,6 +19,39 @@ describe('normalizeChineseQuery', () => {
     expect(view.until).toEqual(new Date(2026, 6, 20));
   });
 
+  test('最近一次是上一次发生的事，不是最近 30 天', () => {
+    const now = new Date(2026, 10, 14, 12, 0, 0);
+    for (const query of ['项目最近一次验收的结论是什么？', '上一次验收结论', '最新一次进展', '最后一次交付']) {
+      const view = normalizeChineseQuery(query, now);
+      expect(view.since).toBeUndefined();
+      expect(view.until).toBeUndefined();
+    }
+    const once = normalizeChineseQuery('项目最近一次验收的结论是什么？', now);
+    expect(once.normalized).toContain('验收');
+    expect(once.normalized).not.toContain('最近');
+  });
+
+  test('明确写出的最近 7 天和最近 30 天仍然是时间窗', () => {
+    const now = new Date(2026, 10, 14, 12, 0, 0);
+    const month = normalizeChineseQuery('最近30天的验收', now);
+    expect(month.since).toEqual(new Date(2026, 9, 16));
+    expect(month.until).toEqual(new Date(2026, 10, 15));
+    expect(month.normalized).toContain('验收');
+    const week = normalizeChineseQuery('最近7天的会议', now);
+    expect(week.since).toEqual(new Date(2026, 10, 8));
+    expect(week.until).toEqual(new Date(2026, 10, 15));
+  });
+
+  test('最近 7 天和最后一次可以同时成立', () => {
+    const now = new Date(2026, 10, 14, 12, 0, 0);
+    const view = normalizeChineseQuery('项目最近 7 天最后一次验收', now);
+    expect(view.since).toEqual(new Date(2026, 10, 8));
+    expect(view.until).toEqual(new Date(2026, 10, 15));
+    expect(view.normalized).toContain('验收');
+    expect(view.normalized).not.toContain('最后一次');
+    expect(view.normalized).not.toContain('7');
+  });
+
   test('leaves non-Chinese queries as a single normalized variant', () => {
     expect(normalizeChineseQuery('  Project   status  ')).toEqual({
       normalized: 'Project status',

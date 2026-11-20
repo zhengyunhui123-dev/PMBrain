@@ -133,8 +133,18 @@ function AdvisorHealthCard({
       </div>
       {error && <p className="overview-health-error">{error}</p>}
       {notice && <p className="overview-health-notice">{notice}</p>}
-      {!error && advisor && advisor.suggestions.length === 0 && (
+      {!error && advisor && advisor.suggestions.length === 0 && advisor.status_label !== '未完成检查' && (
         <p className="overview-health-empty">知识库看起来很健康，没有需要马上处理的事项。</p>
+      )}
+      {advisor?.status_label === '未完成检查' && (
+        <p className="overview-health-empty">有检查没有完成，现在不能判断知识库是否健康。</p>
+      )}
+      {advisor?.readiness && advisor.readiness.length > 0 && (
+        <ul className="overview-health-list">
+          {advisor.readiness.map((item) => (
+            <li key={item.key}><span>{item.label}：{item.text}</span></li>
+          ))}
+        </ul>
       )}
       {advisor && advisor.suggestions.length > 0 && (
         <ul className="overview-health-list">

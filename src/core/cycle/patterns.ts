@@ -33,7 +33,6 @@ import type { Page, PageType } from '../types.ts';
 import {
   dreamModelDetails,
   resolveDreamModel,
-  resolveSubagentExecutionMode,
 } from './model-routing.ts';
 import type { ResolvedModel } from '../model-config.ts';
 import { runSubagentsInline } from './inline-drain.ts';
@@ -69,8 +68,7 @@ export async function runPhasePatterns(
       return skipped('disabled', 'dream.patterns.enabled is false');
     }
 
-    const executionMode = await resolveSubagentExecutionMode(engine, config.resolvedModel.model);
-    const modelDetails = dreamModelDetails(config.resolvedModel, executionMode);
+    const modelDetails = dreamModelDetails(config.resolvedModel, 'gateway_tool_loop');
 
     // Gather reflections within lookback window.
     let reflections = await gatherReflections(engine, config.lookbackDays, opts.sourceId);
@@ -133,10 +131,12 @@ export async function runPhasePatterns(
       prompt: buildPatternsPrompt(reflections, config.minEvidence),
       model: config.resolvedModel.model,
       max_turns: 30,
+      turn_timeout_ms: 300_000,
       allowed_slug_prefixes: allowedSlugPrefixes,
       ...(opts.sourceId ? { source_id: opts.sourceId } : {}),
     };
     const submitOpts: Partial<MinionJobInput> = {
+      max_attempts: 1,
       max_stalled: 3,
       timeout_ms: Math.min(30 * 60 * 1000, remainingMs),
       queue: childQueueName,
@@ -160,6 +160,7 @@ export async function runPhasePatterns(
     );
 
     let outcome: string;
+    let outcomeError: string | undefined;
     try {
       const final = await waitForCompletion(queue, job.id, {
         timeoutMs: remainingMs,
@@ -169,6 +170,7 @@ export async function runPhasePatterns(
       });
       throwIfAborted(opts.signal, '[dream] patterns completion');
       outcome = final.status;
+      outcomeError = final.error_text ?? undefined;
     } catch (e) {
       if (e instanceof TimeoutError) outcome = 'timeout';
       else throw e;
@@ -187,7 +189,7 @@ export async function runPhasePatterns(
     const reverseWriteCount = await reverseWriteRefs(engine, opts.brainDir, writtenRefs, opts.signal);
 
     if (outcome !== 'completed') {
-      return { ...ok(`pattern detection did not complete (${outcome})`, { ...modelDetails, child_outcome: outcome, job_id: job.id }), status: 'warn' };
+      return { ...ok(`pattern detection did not complete (${outcome})`, { ...modelDetails, child_outcome: outcome, job_id: job.id, stop_reason: 'failure' }), status: 'warn', error: makeError('InternalError', 'PATTERNS_CHILD_FAIL', outcomeError ?? `pattern detection job ${job.id}: ${outcome}`) };
     }
     if(opts.incremental)await engine.setConfig(evidenceKey, new Date(newestEvidence).toISOString());
 

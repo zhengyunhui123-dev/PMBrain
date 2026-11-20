@@ -18,10 +18,54 @@ test('实体整理关闭 MiMo 思考并预留最后一轮验收，普通对话�
   const result=await toolLoop({model:'mimo:mimo-v2.6-flash',system:'Return the entity receipt.',initialMessages:[{role:'user',content:'原始资料'}],tools:[{name:'search',description:'entity identity',inputSchema:{type:'object',properties:{query:{type:'string'}},required:['query']}}],toolHandlers:new Map([['search',{execute:async()=>[],idempotent:true}]]),maxTurns:2,disableReasoning:true,finalizeOnLastTurn:true,prepareFinalMessages:async()=>[{role:'user',content:'原始资料和持久化写入清单'}]});
   expect(result.stopReason).toBe('end');expect(result.totalTurns).toBe(2);
   expect(requests[0].thinking).toEqual({type:'disabled'});expect(requests[0].tools).toHaveLength(1);
+  expect(requests[0].max_tokens).toBeUndefined();expect(requests[0].max_completion_tokens).toBe(32000);
   expect(requests[1].thinking).toEqual({type:'disabled'});expect(requests[1].tools).toBeUndefined();
+  expect(requests[1].max_tokens).toBeUndefined();expect(requests[1].max_completion_tokens).toBe(32000);
   expect(requests[1].messages.filter((message:any)=>message.role!=='system')).toEqual([{role:'user',content:'原始资料和持久化写入清单'}]);
   await chat({model:'mimo:mimo-v2.6-flash',messages:[{role:'user',content:'普通对话'}]});
   expect(requests[2].thinking).toBeUndefined();
+});
+
+test('实体模型没有首个响应时按本轮时限停止，不再一直等到任务被队列掐掉',async()=>{
+  let calls=0;
+  server=Bun.serve({port:0,fetch(){calls+=1;return new Promise(()=>{});}});
+  configureGateway({generative_enabled:true,chat_model:'mimo:mimo-v2.6-flash',base_urls:{mimo:server.url.origin+'/v1'},env:{MIMO_API_KEY:'isolated-test-only'}});
+  const started=Date.now();
+  await expect(toolLoop({model:'mimo:mimo-v2.6-flash',system:'只返回 JSON',initialMessages:[{role:'user',content:'原文'}],tools:[],toolHandlers:new Map(),maxTurns:1,disableReasoning:true,turnTimeoutMs:1_200})).rejects.toThrow(/首个响应|没有收到数据|等待期限/);
+  expect(Date.now()-started).toBeLessThan(5_000);
+  expect(calls).toBe(1);
+});
+
+test('实体模型按流式返回完整 JSON 时会保存结果',async()=>{
+  const body='{"entities":[],"relations":[],"no_entities":true}';
+  server=Bun.serve({port:0,fetch(){
+    return new Response([
+      `data: ${JSON.stringify({choices:[{index:0,delta:{content:body}}]})}`,
+      `data: ${JSON.stringify({choices:[{index:0,delta:{},finish_reason:'stop'}],usage:{prompt_tokens:20,completion_tokens:8,total_tokens:28}})}`,
+      'data: [DONE]',
+      '',
+    ].join('\n\n'),{headers:{'content-type':'text/event-stream'}});
+  }});
+  configureGateway({generative_enabled:true,chat_model:'mimo:mimo-v2.6-flash',base_urls:{mimo:server.url.origin+'/v1'},env:{MIMO_API_KEY:'isolated-test-only'}});
+  const result=await toolLoop({model:'mimo:mimo-v2.6-flash',system:'只返回 JSON',initialMessages:[{role:'user',content:'原文'}],tools:[],toolHandlers:new Map(),maxTurns:1,disableReasoning:true,turnTimeoutMs:5_000});
+  expect(result.stopReason).toBe('end');
+  expect(result.finalText).toContain('no_entities');
+});
+
+test('MiMo 只把答案放在思考通道时，仍把完整 JSON 交给实体保存',async()=>{
+  const body='{"entities":[],"relations":[],"no_entities":true}';
+  server=Bun.serve({port:0,fetch(){
+    return new Response([
+      `data: ${JSON.stringify({choices:[{index:0,delta:{reasoning_content:body}}]})}`,
+      `data: ${JSON.stringify({choices:[{index:0,delta:{},finish_reason:'stop'}],usage:{prompt_tokens:20,completion_tokens:8,total_tokens:28}})}`,
+      'data: [DONE]',
+      '',
+    ].join('\n\n'),{headers:{'content-type':'text/event-stream'}});
+  }});
+  configureGateway({generative_enabled:true,chat_model:'mimo:mimo-v2.6-flash',base_urls:{mimo:server.url.origin+'/v1'},env:{MIMO_API_KEY:'isolated-test-only'}});
+  const result=await toolLoop({model:'mimo:mimo-v2.6-flash',system:'只返回 JSON',initialMessages:[{role:'user',content:'原文'}],tools:[],toolHandlers:new Map(),maxTurns:1,disableReasoning:true,turnTimeoutMs:5_000});
+  expect(result.stopReason).toBe('end');
+  expect(result.finalText).toContain('no_entities');
 });
 
 test('接近预算时提前收口验收，保留轮数上限且不再暴露工具',async()=>{

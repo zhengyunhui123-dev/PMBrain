@@ -79,10 +79,10 @@ describe('computeEffectiveDate precedence chain (default order)', () => {
     expect(r.date?.toISOString().startsWith('2024-06-15')).toBe(true);
   });
 
-  test('fallback to updated_at when chain exhausted', () => {
+  test('no content date does not use the import time', () => {
     const r = run({});
-    expect(r.source).toBe('fallback');
-    expect(r.date?.toISOString()).toBe(baseUpdated.toISOString());
+    expect(r.source).toBe('ingest');
+    expect(r.date).toBeNull();
   });
 });
 
@@ -144,10 +144,10 @@ describe('computeEffectiveDate parse failure fall-through', () => {
     expect(r.date?.toISOString().startsWith('2024-06-15')).toBe(true);
   });
 
-  test('filename without date prefix → fallback', () => {
+  test('filename without a content date does not use the import time', () => {
     const r = run({ filename: 'no-date-here' });
-    expect(r.source).toBe('fallback');
-    expect(r.date?.toISOString()).toBe(baseUpdated.toISOString());
+    expect(r.source).toBe('ingest');
+    expect(r.date).toBeNull();
   });
 });
 
@@ -163,8 +163,9 @@ describe('computeEffectiveDate range validation [1990, NOW + 1y]', () => {
     expect(r.source).toBe('date');
   });
 
-  test('out-of-range filename date drops to fallback', () => {
+  test('out-of-range filename date does not use the import time', () => {
     const r = run({ filename: '1850-01-01-ancient' });
-    expect(r.source).toBe('fallback');
+    expect(r.source).toBe('ingest');
+    expect(r.date).toBeNull();
   });
 });

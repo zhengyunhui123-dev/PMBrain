@@ -19,7 +19,7 @@ import { normalizeAliasList } from '../search/alias-normalize.ts';
 import { alignCapturedEntityGraph } from './entity-graph-align.ts';
 import { lineGrammarOptions } from '../line-grammar.ts';
 import { locateIngestSkillsDir, readIngestContract,readEntityCaptureContract, pruneEntityIngestLinks,ingestAbortKind } from '../pmbrain-adapters/entity-ingest-workflow.ts';
-import { captureScopeKey,captureChunkKey,planCaptureBodies,sourceTimelineDates } from '../pmbrain-adapters/entity-capture-plan.ts';
+import { captureScopeKey,captureChunkKey,planCaptureBodies,sourceTimelineDates,SINGLE_PASS_CAPTURE_CONTRACT } from '../pmbrain-adapters/entity-capture-plan.ts';
 import { captureReceiptProof,reuseCaptureReceipt,quickCaptureReceipt,type CaptureReceipt } from '../pmbrain-adapters/entity-capture-receipts.ts';
 import { runCaptureWindow,CaptureAdmission,withCaptureWrite } from '../pmbrain-adapters/entity-capture-window.ts';
 import { pendingCaptureCandidates, publishCaptureManifest } from '../pmbrain-adapters/entity-capture-manifest.ts';
@@ -35,6 +35,7 @@ import {
   captureDegradedReason,
   captureFailureDisposition,
   captureReportLine,
+  entityCaptureJobTimeoutMs,
   deltaCaptureNeedles,
   isOllamaModel,
   rankCaptureCandidates,
@@ -98,6 +99,7 @@ export interface CaptureEntitiesOpts {
   signal?: AbortSignal;
   yieldDuringPhase?: () => Promise<void>;
   deadlineAtMs?: number | null;
+  deferEmbedding?: boolean;
   privateQueueOwnerJobId?: number | null;
   maxPages?: number;
   slugs?: string[];
@@ -152,7 +154,7 @@ export function buildEntityCapturePrompt(
   const chunkIndex = isChunk ? page.chunkIndex : 0;
   const chunkCount = isChunk ? page.chunkCount : 1;
   const candidateBlock = candidates.length === 0
-    ? '这一段没有检索到相关的已有实体。创建前仍必须 search。'
+    ? (singlePass ? '本段没有检索到相关已有实体，程序在保存时再次校验身份。' : '这一段没有检索到相关的已有实体。创建前仍必须 search。')
     : candidates.map(candidate => {
       const aliases = candidate.aliases.length > 0 ? candidate.aliases.join('、') : '无';
       return `- ${candidate.sourceId}:${candidate.slug} | ${candidate.type} | ${candidate.title} | aliases: ${aliases}`;
@@ -719,7 +721,7 @@ export async function runPhaseCaptureEntities(
   const batchCapture=opts.batchCapture??opts.handler==null;
   const singlePass=batchCapture&&!!opts.quickEntitiesOnly;
   const jobTurns=singlePass?(opts.roundWork?2:1):maxDocumentTurns;
-  const configuredJobTimeout=readTokenCap(await engine.getConfig('dream.entity_capture.job_timeout_ms'),jobTurns*(turnTimeoutMs*2+30_000));
+  const configuredJobTimeout=readTokenCap(await engine.getConfig('dream.entity_capture.job_timeout_ms'),entityCaptureJobTimeoutMs(turnTimeoutMs,jobTurns,singlePass));
   const declaredOutputLimit=await engine.getConfig('dream.entity_capture.model_max_output_tokens');
   const modelOutputLimit=declaredOutputLimit?readTokenCap(declaredOutputLimit,defaultMaxOutputTokens(chosen.model)):undefined;
   const nonce = Date.now();
@@ -817,6 +819,8 @@ export async function runPhaseCaptureEntities(
   });
   reportProgress();
   let directLinks = 0;
+  let pendingReview = 0;
+  let itemFailures = 0;
   const recognizedEntities=new Map<string,{slug:string;sourceId:string}>(cachedEntities);
   const unresolvedReferences:unknown[]=[...cachedWarnings];
   let inputTokens = 0;
@@ -870,10 +874,10 @@ export async function runPhaseCaptureEntities(
       WHERE j.status='completed' AND j.result->>'ingest_verified'='true' AND j.result ? 'capture_proof'
         AND j.data->'ingest_context'->>'sourceId'=$1
         AND j.data->'ingest_context'->>'chunkBody'=$2
-        AND left(j.data->>'system',length($3))=$3
+        AND (left(j.data->>'system',length($3))=$3 OR left(j.data->>'system',length($4))=$4)
         AND p.deleted_at IS NULL AND NOT s.archived AND p.compiled_truth=j.data->'ingest_context'->>'body'
         AND p.id::text=j.data->'ingest_context'->>'pageId' AND s.incarnation::text=j.data->'ingest_context'->>'sourceIncarnation'
-      ORDER BY j.id DESC LIMIT 16`,[chunk.sourceId,chunk.chunkBody,baseContract]);
+      ORDER BY j.id DESC LIMIT 16`,[chunk.sourceId,chunk.chunkBody,baseContract,singlePass?SINGLE_PASS_CAPTURE_CONTRACT:baseContract]);
     for(const row of rows){
       const context={slug:chunk.slug,sourceId:chunk.sourceId,body:chunk.body,chunkBody:chunk.chunkBody,pageId:chunk.pageId,sourceIncarnation:chunk.sourceIncarnation,quickEntitiesOnly:true};
       const receipt=quickCaptureReceipt(row.receipt,chunk.sourceId);
@@ -1007,8 +1011,9 @@ export async function runPhaseCaptureEntities(
             turn_timeout_ms:turnTimeoutMs,
             model_output_limit:modelOutputLimit,
             no_self_fix: true,
-            system: singlePass?`${systemContract}\n本次只返回一个完整的实体、事实、关系和时间线 JSON；程序负责查重、校验、持久化和验收，不请求工具或后续模型轮次。`:batchCapture?`${systemContract}\n本次按批量事实增量执行：候选目录已由程序提供，只有实际歧义才 search。优先一次调用 capture_entities 提交本段全部实体及证据关系；每批最多32个实体，仍有实体时 has_more:true 并继续分批，不得遗漏。全部准备好后由程序验收，不再逐个 put_page 或调用模型写总结。有明确日期的时间线使用保留的时间线工具，最后 complete_ingest。`:systemContract,
-            ingest_context: {slug:chunk.slug,sourceId:chunk.sourceId,body:chunk.body,chunkBody:chunk.chunkBody,pageId:chunk.pageId,sourceIncarnation:chunk.sourceIncarnation,compact_contract:true,batch_capture:batchCapture,single_pass:singlePass,repair_single_pass:singlePass&&!!opts.roundWork,quickEntitiesOnly:opts.quickEntitiesOnly,acknowledged:acknowledged.map(entity=>`${entity.sourceId}:${entity.slug}`),turn_entity_refs:[...new Set([...related,...acknowledged].map(entity=>`${entity.sourceId}:${entity.slug}`))]},
+            system: singlePass?SINGLE_PASS_CAPTURE_CONTRACT:batchCapture?`${systemContract}\n本次按批量事实增量执行：候选目录已由程序提供，只有实际歧义才 search。优先一次调用 capture_entities 提交本段全部实体及证据关系；每批最多32个实体，仍有实体时 has_more:true 并继续分批，不得遗漏。全部准备好后由程序验收，不再逐个 put_page 或调用模型写总结。有明确日期的时间线使用保留的时间线工具，最后 complete_ingest。`:systemContract,
+            system_no_tool_preamble: singlePass,
+            ingest_context: {slug:chunk.slug,sourceId:chunk.sourceId,body:chunk.body,chunkBody:chunk.chunkBody,pageId:chunk.pageId,sourceIncarnation:chunk.sourceIncarnation,compact_contract:true,batch_capture:batchCapture,single_pass:singlePass,repair_single_pass:singlePass&&!!opts.roundWork,quickEntitiesOnly:opts.quickEntitiesOnly,defer_embedding:opts.deferEmbedding===true,acknowledged:acknowledged.map(entity=>`${entity.sourceId}:${entity.slug}`),turn_entity_refs:[...new Set([...related,...acknowledged].map(entity=>`${entity.sourceId}:${entity.slug}`))]},
             usage_limits: {
               input: maxDocumentInput,
               output: maxDocumentOutput,
@@ -1123,6 +1128,8 @@ export async function runPhaseCaptureEntities(
           }
           const result=job.result as any;
           directLinks+=reused?0:Number(result?.ingest_links_created??0);
+          pendingReview+=Number(result?.ingest_pending_review??0);
+          itemFailures+=Number(result?.ingest_item_failures??0);
           for(const ref of result?.ingest_entities??[])recognizedEntities.set(JSON.stringify([ref.sourceId,ref.slug]),ref);
           unresolvedReferences.push(...(result?.ingest_unresolved??[]));
           if (job.status !== 'completed' || result?.ingest_verified!==true || (result?.stop_reason && result.stop_reason!=='end_turn')) {
@@ -1248,8 +1255,7 @@ export async function runPhaseCaptureEntities(
     const stopReason = (relationError?'relation_failure':budgetStop??(failureStop?failureReason:windowDeferred&&pagesRemaining>0?'window':'completed')) as CaptureStopReason;
     const isolatedOutputFailures = !!opts.roundWork && !fatalFailure && !relationError && !opts.signal?.aborted
       && pageFailures.length > 0 && pageFailures.every(failure => failure.kind === 'truncated' || failure.kind === 'lease_lost'
-        || failure.kind === 'parse' || failure.kind === 'ingest_validation'
-          && /ingest entity evidence missing|ingest no_entities conflicts/.test(failure.reason));
+        || failure.kind === 'parse' || failure.kind === 'ingest_validation');
     const degradedOpen = failureStop && captureDegradedReason(failureReason) && !fatalFailure;
     const cleanStatus: PhaseResult['status'] = failureStop
       ? (writtenSlugs.length > 0 || pagesProcessed > 0 || degradedOpen || isolatedOutputFailures ? 'warn' : 'fail')
@@ -1294,6 +1300,7 @@ export async function runPhaseCaptureEntities(
       peak_active_chunks:peakChunks,
       pages_remaining: pagesRemaining,
       pages_failed: failedPages,
+      fatal_failure: fatalFailure || !!relationError,
       ...(isolatedOutputFailures && { isolated_output_failures: true }),
       page_failures:pageFailures,
       chunks_failed: failedChunks,
@@ -1308,6 +1315,8 @@ export async function runPhaseCaptureEntities(
       report_line: reportLine,
       ollama,
       entities_written: entitiesCreated,
+      entities_pending_review: pendingReview,
+      entities_failed: itemFailures,
       relations_created: relationsCreated,
       relations_removed: relationsRemoved,
       direct_links_created: directLinks+(toolLinks?.n??0)+batchLinks,

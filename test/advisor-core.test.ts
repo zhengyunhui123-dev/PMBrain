@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import { buildAdvisorProductView } from '../src/core/advisor/product.ts';
 import { COLLECTORS, rankFindings, runAdvisor } from '../src/core/advisor/run.ts';
 import { collectUsageShape } from '../src/core/advisor/collect-usage-shape.ts';
 import { collectStalledJobs } from '../src/core/advisor/collect-stalled-jobs.ts';
@@ -62,6 +63,11 @@ describe('runAdvisor resilience', () => {
     };
     const report = await runAdvisor(ctx(engine));
     expect(Array.isArray(report.findings)).toBe(true);
+    expect(report.failed_collectors).toEqual(expect.arrayContaining(['usage-shape', 'stalled-jobs']));
+    const view = buildAdvisorProductView(report, 95);
+    expect(view.status_label).toBe('未完成检查');
+    expect(view.readiness.find(item => item.key === 'sync')?.text).toBe('未完成检查');
+    expect(view.readiness.find(item => item.key === 'organize')?.text).toBe('未完成检查');
   });
 
   test('drops workspace-dependent findings over MCP', async () => {
@@ -159,9 +165,9 @@ describe('collectors', () => {
     expect(out.map((f) => f.id)).not.toContain('low_embed_coverage');
   });
 
-  test('stalled jobs collector tolerates absent table', async () => {
+  test('stalled jobs collector reports a read failure instead of an empty success', async () => {
     const engine = { executeRaw: async () => { throw new Error('missing'); } };
-    expect(await collectStalledJobs.collect(ctx(engine as never))).toEqual([]);
+    await expect(collectStalledJobs.collect(ctx(engine as never))).rejects.toThrow('missing');
   });
 
   test('PGLite leftover active jobs after a killed process are reaped instead of shown as stuck', async () => {

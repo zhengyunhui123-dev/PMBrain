@@ -61,6 +61,7 @@ export async function runSubagentsInline(
       data: job.data,
       attempts_made: job.attempts_made,
       signal: combineAbortSignals(abort.signal, signal),
+      lockToken,
       deadlineAtMs: job.timeout_at?.getTime() ?? null,
       shutdownSignal: shutdown.signal,
       updateProgress: async progress => {

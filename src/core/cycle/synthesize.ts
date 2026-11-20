@@ -55,7 +55,6 @@ import type { ResolvedModel } from '../model-config.ts';
 import {
   dreamModelDetails,
   resolveDreamModel,
-  resolveSubagentExecutionMode,
 } from './model-routing.ts';
 import {
   buildLinkManifest,
@@ -346,8 +345,7 @@ export async function runPhaseSynthesize(
     const config = await loadSynthConfig(engine);
     const summaryDate = await resolveCycleDate(engine, { explicitDate: opts.date });
     const { outputRoot, dualWrite } = await loadDreamWriteSettings(engine, opts.brainDir);
-    const executionMode = await resolveSubagentExecutionMode(engine, config.resolvedModel.model);
-    const synthesisModelDetails = dreamModelDetails(config.resolvedModel, executionMode);
+    const synthesisModelDetails = dreamModelDetails(config.resolvedModel, 'gateway_tool_loop');
     const verdictModelDetails = dreamModelDetails(config.resolvedVerdictModel, 'verdict_chat');
     const modelDetails = {
       ...synthesisModelDetails,
@@ -681,6 +679,7 @@ export async function runPhaseSynthesize(
           ),
           model: subagentModel,
           max_turns: 30,
+          turn_timeout_ms: 300_000,
           allowed_slug_prefixes: allowedSlugPrefixes,
           ...(opts.sourceId ? { source_id: opts.sourceId } : {}),
         };
@@ -697,6 +696,7 @@ export async function runPhaseSynthesize(
           start,
         );
         const submitOpts: Partial<MinionJobInput> = {
+          max_attempts: 1,
           max_stalled: 3,
           on_child_fail: 'continue',
           idempotency_key,
@@ -718,8 +718,8 @@ export async function runPhaseSynthesize(
           chunkInfo.set(child.id, { idx: i, hash6 });
         }
       }
+      transcriptJobs.set(t, jobsForTranscript);
       if (opts.roundWork) {
-        transcriptJobs.set(t, jobsForTranscript);
         await runSubagentsInline(engine, queue, childQueueName, renewPrivateQueueLease, undefined, undefined, opts.signal);
       }
     }
@@ -737,7 +737,7 @@ export async function runPhaseSynthesize(
 
     // Wait for every child to reach a terminal state. Tick yieldDuringPhase
     // every 5 min so the cycle lock TTL refreshes.
-    const childOutcomes: Array<{ jobId: number; status: string }> = [];
+    const childOutcomes: Array<{ jobId: number; status: string; error?: string }> = [];
     for (const jobId of childIds) {
       try {
         const job = await waitForCompletion(queue, jobId, {
@@ -747,7 +747,7 @@ export async function runPhaseSynthesize(
           onPoll: renewPrivateQueueLease,
         });
         throwIfAborted(opts.signal, '[dream] synthesize completion');
-        childOutcomes.push({ jobId, status: job.status });
+        childOutcomes.push({ jobId, status: job.status, ...(job.error_text ? { error: job.error_text } : {}) });
       } catch (e) {
         if (e instanceof TimeoutError) {
           childOutcomes.push({ jobId, status: 'timeout' });
@@ -813,7 +813,7 @@ export async function runPhaseSynthesize(
     }
 
     // Write completion timestamp ON SUCCESS only.
-    if (!opts.roundWork || completedJobs.size) await engine.setConfig('dream.synthesize.last_completion_ts', new Date().toISOString());
+    if (completedJobs.size > 0 && completedJobs.size === childIds.length) await engine.setConfig('dream.synthesize.last_completion_ts', new Date().toISOString());
 
     const ms = Date.now() - start;
     const submittedTranscripts = attempted - skipReports.length;
@@ -821,11 +821,11 @@ export async function runPhaseSynthesize(
     const newTranscripts = completedTranscripts.filter(isFresh).length;
     const roundRemaining = worthProcessing.length - attempted + triageStats.deferred + transcriptJobs.size - completedTranscripts.length
       + skipReports.filter(item => item.reason.startsWith('oversize_after_split:')).length;
-    const report = ok(`${submittedTranscripts} transcript(s) synthesized in ${(ms / 1000).toFixed(1)}s`, {
+    const report = ok(`${completedTranscripts.length}/${submittedTranscripts} transcript(s) synthesized in ${(ms / 1000).toFixed(1)}s`, {
       ...modelDetails,
       transcripts_discovered: rawTranscripts.length,
       transcripts_unique: transcripts.length,
-      transcripts_processed: submittedTranscripts,
+      transcripts_processed: completedTranscripts.length,
       ...(opts.roundWork && {
         round_synthesis_remaining: roundRemaining,
         round_synthesis_fresh: newTranscripts,
@@ -852,6 +852,12 @@ export async function runPhaseSynthesize(
       verdicts,
     });
     if (opts.roundWork && roundRemaining) report.status = 'warn';
+    const failedChild = childOutcomes.find(item => item.status !== 'completed');
+    if (failedChild) {
+      report.status = 'warn';
+      report.error = makeError('InternalError', 'SYNTH_CHILD_FAIL', failedChild.error ?? `synthesis job ${failedChild.jobId}: ${failedChild.status}`);
+      report.details.stop_reason = 'failure';
+    }
     return report;
   } catch (e) {
     return failed(makeError('InternalError', 'SYNTH_PHASE_FAIL',

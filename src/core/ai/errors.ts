@@ -58,6 +58,11 @@ function parameterRejected(error:unknown,pattern:RegExp):boolean{
   return (signals.status===400||signals.status===422)&&pattern.test(signals.text);
 }
 
+export function isChatCertificateError(error: unknown): boolean {
+  const value = errorSignals(error);
+  return /CERT_|UNABLE_TO_VERIFY|SELF_SIGNED|certificate.*(?:verification|verify|expired|invalid)/i.test(`${value.codes} ${value.names} ${value.text}`);
+}
+
 export function isStructuredOutputRejection(error:unknown):boolean{return parameterRejected(error,/response_format|json_schema|structured[ _-]?outputs?/i);}
 export function isReasoningControlRejection(error:unknown):boolean{return parameterRejected(error,/enable_thinking|chat_template_kwargs|reasoning_effort|thinking(?:Config|Budget)?[^\n]*(?:unsupported|unknown|not supported|invalid)/i);}
 export function isToolCallingRejection(error:unknown):boolean{return parameterRejected(error,/(?:tools?|function calling)[^\n]*(?:unsupported|unknown|not supported|not allowed)|(?:unsupported|unknown|not supported)[^\n]*(?:tools?|function calling)/i);}

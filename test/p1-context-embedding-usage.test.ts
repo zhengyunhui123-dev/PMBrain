@@ -8,11 +8,20 @@ import { makeEngineChatUsageSink } from '../src/core/ai/chat-usage.ts';
 import { runMigrateEmbeddings } from '../src/commands/migrate-embeddings.ts';
 
 let engine: PGLiteEngine;
+let chunkEmbedDim = 0;
 
 beforeAll(async () => {
   engine = new PGLiteEngine();
   await engine.connect({});
   await engine.initSchema();
+  const [column] = await engine.executeRaw<{ atttypmod: number }>(
+    `SELECT atttypmod FROM pg_attribute
+       WHERE attrelid = 'content_chunks'::regclass AND attname = 'embedding'`,
+  );
+  chunkEmbedDim = Number(column?.atttypmod);
+  if (!Number.isInteger(chunkEmbedDim) || chunkEmbedDim <= 0) {
+    throw new Error(`content_chunks.embedding dimension unavailable: ${column?.atttypmod}`);
+  }
 }, 60_000);
 
 afterAll(async () => engine.disconnect());
@@ -98,7 +107,7 @@ describe('P1 Context/embedding/usage lifecycle', () => {
       chunk_index: 0,
       chunk_text: 'stable content',
       chunk_source: 'compiled_truth',
-      embedding: new Float32Array(1536).fill(0.01),
+      embedding: new Float32Array(chunkEmbedDim).fill(0.01),
       model: 'test:model',
       token_count: 2,
     }], { sourceId: 'default' });
@@ -108,7 +117,7 @@ describe('P1 Context/embedding/usage lifecycle', () => {
         WHERE p.slug = 'embedded' AND p.source_id = 'default'`,
     );
     expect(row?.embedded_text_hash).toHaveLength(32);
-    expect(row?.embedding_signature).toBe('test:model:1536');
+    expect(row?.embedding_signature).toBe(`test:model:${chunkEmbedDim}`);
     await engine.executeRaw(`UPDATE content_chunks SET chunk_text = 'changed elsewhere'`);
     expect(await engine.countStaleChunks({ sourceId: 'default' })).toBe(1);
   }, 20_000);

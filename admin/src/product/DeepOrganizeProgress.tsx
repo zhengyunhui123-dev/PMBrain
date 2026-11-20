@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { FileText } from 'lucide-react';
 import type { ConsoleRun } from '../lib/shared';
-import { DEEP_ORGANIZE_STAGES, applyDeepSyncFileCounts, deepOrganizeElapsed, deepOrganizePercent, deepOrganizeRecordedStages, deepOrganizeTotals, deepStageElapsed, deepStageTitle } from '../../../shared/deep-organize-progress';
+import { DEEP_ORGANIZE_STAGES, applyDeepSyncFileCounts, deepOrganizeElapsed, deepOrganizeOutcome, deepOrganizePercent, deepOrganizeRecordedStages, deepOrganizeTotals, deepStageElapsed, deepStageTitle } from '../../../shared/deep-organize-progress';
 import { taskStatus, taskStopping } from './task-presentation';
 import { DatabaseSummary, elapsedText } from './MaintenanceProgress';
 import { ModelSetupNotice } from './ModelSetupNotice';
@@ -26,6 +26,7 @@ export function DeepOrganizeProgress({ run, link = true }: { run: ConsoleRun; li
   const contentStages = DEEP_ORGANIZE_STAGES.slice(2, 6);
   const contentTotals = deepOrganizeTotals({ ...round, stages: round.stages.filter(stage => contentStages.some(spec => spec.id === stage.id)) });
   const percent = deepOrganizePercent(round);
+  const outcome = deepOrganizeOutcome(round);
   const title = taskStopping(run) ? '正在停止任务' : deepStageTitle(round);
   const legacyIndex = round.stage === 'index';
   const spec = DEEP_ORGANIZE_STAGES.find(stage => stage.id === (legacyIndex ? 'review' : round.stage));
@@ -55,8 +56,9 @@ export function DeepOrganizeProgress({ run, link = true }: { run: ConsoleRun; li
     <section className="mpr-summary" aria-label="整轮总计"><div className="mpr-heading"><h3>{title}<span className={`product-task-state state-${run.status}`}>{taskStatus(run)}</span></h3><span className="mpr-time">总耗时<b>{elapsedText(elapsed)}</b></span></div>
       <dl className="mpr-totals deep"><div><dt>同步资料</dt><dd>{round.scan.complete ? (syncing ? syncFiles?.completed ?? totals.files : totals.files).toLocaleString() : '确定中'}</dd></div><div><dt>新建 / 维护知识成果</dt><dd>{totals.newKnowledge.toLocaleString()} / {totals.maintainedKnowledge.toLocaleString()}</dd></div><div><dt>写入实体</dt><dd>{totals.entities.toLocaleString()}</dd></div><div><dt>新增及补齐关联</dt><dd>{totals.links.toLocaleString()}</dd></div></dl>
       {totals.unclassifiedKnowledge > 0 && <p className="mpr-note">历史记录另有 {totals.unclassifiedKnowledge} 个知识点，未区分新建与维护。</p>}
-      <div className="mpr-progress-label"><span>深度整理整体进度 · {deepOrganizeRecordedStages(round)} / {DEEP_ORGANIZE_STAGES.length} 个阶段已记录</span><b>{percent}%</b></div>
-      <div className="mpr-overall" role="progressbar" aria-label="深度整理整体进度" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}><i style={{ width: `${percent}%` }} /></div>
+      <div className="mpr-progress-label"><span>阶段进度 · {deepOrganizeRecordedStages(round)} / {DEEP_ORGANIZE_STAGES.length} 个阶段已记录</span><b>{percent}%</b></div>
+      <div className="mpr-overall" role="progressbar" aria-label="阶段进度" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}><i style={{ width: `${percent}%` }} /></div>
+      {outcome && <p className="mpr-note">{outcome}。完成检查只核对本轮结构，不代表前面的整理全部成功。剩余资料不是失败份数。</p>}
       <p className="mpr-note">阶段完成后保存记录并计入总计。已保存内容的向量由空闲时的自动向量化任务补齐。</p>
       {phaseLogs.length > 0 && <ol className="mpr-note" aria-label="阶段日志">{phaseLogs.map((entry, index) => <li key={`${entry.at}:${entry.stage}:${entry.event}:${index}`}>{entry.event === 'start' ? '开始' : '结束'} {DEEP_ORGANIZE_STAGES.find(stage => stage.id === entry.stage)?.title ?? entry.stage}{entry.event === 'finish' && entry.durationMs != null ? ` · ${elapsedText(entry.durationMs)}` : ''}{entry.result ? ` · ${entry.result}` : ''}</li>)}</ol>}
       {budget && <p className="mpr-note">本次费用 {yuan(budget.spentCny)} / {yuan(budget.capCny)}{budget.reason ? ` · ${budget.reason}` : ''}</p>}
@@ -66,7 +68,7 @@ export function DeepOrganizeProgress({ run, link = true }: { run: ConsoleRun; li
         return <li key={stage.id} className={state}><span>{saved ? saved.status === 'failed' || saved.status === 'partial' ? '!' : '✓' : index + 1}</span>{stage.title}</li>;
       })}</ol>
     </section>
-    {showCurrent && <section className="mpr-current" aria-label="当前阶段"><h4>{spec?.title ?? title}<span>{syncResult ?? (legacyIndex ? undefined : round.current?.result) ?? spec?.detail ?? '等待开始'}</span></h4>
+    {showCurrent && <section className="mpr-current" aria-label="当前阶段"><h4>{spec?.title ?? title}<span>{syncResult ?? (legacyIndex ? undefined : round.current?.result) ?? outcome ?? spec?.detail ?? (round.stage === 'done' ? '本轮已结束' : '等待开始')}</span></h4>
       {file && <div className="mpr-document"><FileText size={15} />{file}</div>}
       {spec && <p>{spec.detail}</p>}
       {round.stage === 'sync' && round.scan.complete && <p>本轮清单已固定，未变化 {round.scan.unchanged.toLocaleString()} 份；途中新增的资料留到下一轮。</p>}

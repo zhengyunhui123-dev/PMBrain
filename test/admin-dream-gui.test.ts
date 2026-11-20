@@ -49,6 +49,29 @@ function quickRun(report: Record<string, unknown>, status: ConsoleRun['status'] 
 }
 
 describe('Dream GUI product contract', () => {
+  test('整理结果分开显示新增、更新、待重新核验和冲突', () => {
+    const outcome = buildDreamOutcome(completedRun({
+      status: 'completed',
+      phases: [{
+        phase: 'synthesize_concepts',
+        status: 'ok',
+        summary: 'concepts',
+        details: {
+          concepts_written: 2,
+          concept_slugs: ['concepts/acceptance'],
+          concepts_new: 1,
+          concepts_updated: 1,
+          concepts_pending_verification: 1,
+          concepts_conflict: 1,
+        },
+      }],
+    }));
+    expect(outcome.extractionItems).toContain('新增概念：1 个。');
+    expect(outcome.extractionItems).toContain('更新概念：1 个，新的表述已替换旧表述，历史仍保留。');
+    expect(outcome.extractionItems).toContain('待重新核验：1 个旧结论失去了有效证据，原文仍保留。');
+    expect(outcome.extractionItems).toContain('冲突：1 个结论与现有证据不一致，旧表述仍保留。');
+  });
+
   test('search index failure shows a rebuild button instead of a dead end', () => {
     expect(dream).toContain('SearchIndexRepairCard');
     expect(dream).toContain('重建搜索索引');

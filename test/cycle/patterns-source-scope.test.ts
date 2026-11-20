@@ -5,12 +5,14 @@ import type { BrainEngine } from '../../src/core/engine.ts';
 import { assertSafeE2eDatabaseUrl } from '../helpers/db-guard.ts';
 import { runPhasePatterns } from '../../src/core/cycle/patterns.ts';
 import { resetPgliteState } from '../helpers/reset-pglite.ts';
+import { configureGateway, resetGateway } from '../../src/core/ai/gateway.ts';
 
 const testUrl=process.env.PMBRAIN_RELATION_TEST_DATABASE_URL;
 let engine: BrainEngine;
 
 beforeAll(async () => {
   if(testUrl)assertSafeE2eDatabaseUrl(testUrl);
+  configureGateway({ env: {}, generative_enabled: false, embedding_dimensions: 1536 });
   engine = testUrl?new PostgresEngine():new PGLiteEngine();
   await engine.connect(testUrl?{database_url:testUrl}:{});
   await engine.initSchema();
@@ -18,6 +20,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await engine.disconnect();
+  resetGateway();
 });
 
 beforeEach(async () => {
@@ -73,7 +76,11 @@ describe('patterns Source scope', () => {
     const stamp=await engine.getConfig('dream.patterns.last_evidence.personal');expect(stamp).not.toBeNull();
     expect((await runPhasePatterns(engine,opts)).details.reason).toBe('no_new_evidence');expect(calls).toBe(1);
     await engine.executeRaw("UPDATE pages SET updated_at=updated_at+interval '1 second' WHERE source_id='personal' AND slug='wiki/personal/reflections/pattern-live'");
-    const failed=await runPhasePatterns(engine,{...opts,_handler:async()=>{throw new Error('isolated pattern failure');}});
+    let failedCalls=0;
+    const failed=await runPhasePatterns(engine,{...opts,_handler:async ctx=>{failedCalls++;expect(ctx.data.turn_timeout_ms).toBe(300_000);throw new Error('isolated pattern failure');}});
+    expect(failedCalls).toBe(1);
+    expect(failed.error?.message).toContain('isolated pattern failure');
+    expect(failed.details.stop_reason).toBe('failure');
     expect(failed.status).toBe('warn');expect(await engine.getConfig('dream.patterns.last_evidence.personal')).toBe(stamp);
     expect((await runPhasePatterns(engine,opts)).status).toBe('ok');expect(calls).toBe(2);
   },120000);
