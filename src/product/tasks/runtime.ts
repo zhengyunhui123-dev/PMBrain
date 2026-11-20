@@ -70,8 +70,9 @@ function deepRunTiming(job: MinionJob, endedAt: Date | null): DeepRunTiming {
 
 function toRun(job: MinionJob, stopping = false): ConsoleRun {
   const progress = (job.progress ?? {}) as Progress;
-  const savedResult = job.result ?? progress.result;
-  const failure = String(job.data.kind).startsWith('dream_') ? maintenanceFailure(savedResult) : null;
+  const settled = !['waiting', 'active', 'delayed', 'waiting-children'].includes(job.status);
+  const savedResult = settled ? job.result ?? progress.result : undefined;
+  const failure = settled && String(job.data.kind).startsWith('dream_') ? maintenanceFailure(savedResult) : null;
   const heldPartial = failure === null && !!savedResult && typeof savedResult === 'object' && (savedResult as { status?: string }).status === 'partial';
   const adapter = new TaskProgressAdapter(String(job.data.kind), progress.product);
   if (!progress.product) adapter.write(progress.output ?? '');

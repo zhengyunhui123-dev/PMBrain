@@ -16,6 +16,7 @@ type Relation = { from: string; to: string; link_type: string; evidence: string 
 type State = { version: 1; payload_hash: string; completed: Record<string, Step>; pending: Record<string, Held>; failed: Record<string, Held> };
 const stable = (value: unknown): unknown => Array.isArray(value) ? value.map(stable) : value && typeof value === 'object'
   ? Object.fromEntries(Object.entries(value).sort(([a],[b])=>a.localeCompare(b)).map(([key,child])=>[key,stable(child)])) : value;
+const repairableIngest = /ingest entity evidence missing|ingest no_entities conflicts|ingest ambiguous existing entity|ingest reuse existing entity|ingest verify existing entity/;
 const heldReason = (error: UnrecoverableError) => /verify existing entity/.test(error.message)
   ? '名称与已有实体相近，需要确认是同一对象还是有证据的新对象'
   : /ambiguous existing entity|reuse existing entity|pending entity merge/.test(error.message)
@@ -132,6 +133,10 @@ export function captureBatchTool(put: ToolDef, context: EntityIngestContext, che
           if(state.completed[key])throw error;
           const kind=isolateIngestItem(error);
           if(kind==='stop')throw error;
+          if(kind==='failed'&&context.repair_single_pass&&error instanceof UnrecoverableError&&repairableIngest.test(error.message)){
+            const [turns]=await ctx.engine.executeRaw<{used:number}>(`SELECT count(*)::int used FROM subagent_messages WHERE job_id=$1 AND role='assistant' AND NOT jsonb_path_exists(content_blocks,'$[*] ? (@.type == "text" && @.truncated == true)')`,[ctx.jobId]);
+            if((turns?.used??0)<=1)throw error;
+          }
           const bucket=kind==='pending'?state.pending:state.failed;
           bucket[key]={slug:identity(entity.slug),reason:error instanceof UnrecoverableError?heldReason(error):'实体保存失败'};
           await ctx.engine.transaction(tx=>persist(tx,{}));

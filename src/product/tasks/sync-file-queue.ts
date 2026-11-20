@@ -308,7 +308,7 @@ export class SyncFileQueue {
         WHERE queue = $1 AND (data->>'sessionId')::bigint = $2 AND status IN ('paused','dead','failed') AND data->>'superseded' IS DISTINCT FROM 'true'`, [SYNC_FILE_QUEUE, sessionId]);
       await tx.executeRaw(`UPDATE minion_jobs SET status = 'waiting', lock_token = NULL, lock_until = NULL, timeout_at = NULL,
         data = jsonb_set(data, '{resumeOnRestart}', 'false'::jsonb) || $2::jsonb,
-        error_text = NULL, finished_at = NULL, updated_at = now()
+        error_text = NULL, finished_at = NULL, result = NULL, updated_at = now()
         WHERE id = $1 AND ($3::text IS NULL OR status = $3)`,
       [sessionId, timing ? { deepTiming: timing.value } : {}, timing?.status ?? null]);
     });

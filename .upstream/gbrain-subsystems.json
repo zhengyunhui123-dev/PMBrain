@@ -677,7 +677,7 @@
       "path": "src/core/ai/gateway.ts",
       "upstream_path": "src/core/ai/gateway.ts",
       "mode": "adapted",
-      "sha256": "28d3c8af95730a8b0f236cacf0fb32bf37f7bbe572d6c3a719c100d5eab15c78",
+      "sha256": "51e739b394e83a31776b195516d9c5d5dfb243b76142e9d1f245afe02f4ef577",
       "upstream_sha256": "622b81db5282117c6e2b32b566e2e35c36117400d416051011dbcc0e8e9c565f"
     },
     {
@@ -754,7 +754,7 @@
       "path": "src/core/cycle/synthesize-concepts.ts",
       "upstream_path": "src/core/cycle/synthesize-concepts.ts",
       "mode": "adapted",
-      "sha256": "9e4aeb9a9f2084951e2ff4033f796e57707503419cd5e72bfaf19e7e7a53e891",
+      "sha256": "5332c6b27f862527b7fc1932bf06daa8b2ce74d9803f261c7bc3374c79d065ad",
       "upstream_sha256": "7146c5c44544059ca135f9df65f39bd1af480eff87c401b4845d0f9fe6df621e"
     },
     {
