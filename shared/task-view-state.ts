@@ -80,7 +80,7 @@ export function taskViewState(run: TaskViewRun): TaskViewState | null {
   if (!live && run.product?.stage?.includes('AI 提炼未执行')) return 'ai_skipped';
   if (run.kind !== 'import_path' && run.status === 'completed' && taskIsPartial(run)) return 'partial';
   if (run.kind.startsWith('dream_') && run.status === 'completed' && !taskWasSkipped(run)) return 'round_done';
-  if (run.kind === 'import_path' && taskIsPartial(run)) return 'partial';
+  if (run.kind === 'import_path' && !live && run.status !== 'cancelled' && taskIsPartial(run)) return 'partial';
   if (run.kind === 'import_path' && run.status === 'completed') return 'imported';
   return JOB_STATE[run.status] ?? null;
 }

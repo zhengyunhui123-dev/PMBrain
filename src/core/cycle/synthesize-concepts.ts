@@ -212,6 +212,33 @@ async function markUnsupportedConcepts(
   return marked;
 }
 
+async function holdFailedConceptRewrite(
+  engine: BrainEngine,
+  sourceId: string,
+  slug: string,
+  baseline: { title?: string | null; compiled_truth?: string | null; timeline?: string | null; frontmatter?: unknown } | null | undefined,
+  reason: string,
+): Promise<boolean> {
+  if (!baseline) return false;
+  const frontmatter = frontmatterRecord(baseline.frontmatter);
+  if (!dreamConceptEvidence(frontmatter) || frontmatter.pmbrain_review_status === CONCLUSION_PENDING) return false;
+  const tags = await engine.getTags(slug, { sourceId });
+  const markdown = serializeMarkdown(
+    {
+      ...frontmatter,
+      pmbrain_concept_complete: false,
+      pmbrain_review_status: CONCLUSION_PENDING,
+      pmbrain_review_label: CONCLUSION_PENDING_LABEL,
+      pmbrain_review_reason: reason,
+    },
+    baseline.compiled_truth ?? '',
+    baseline.timeline ?? '',
+    { type: 'concept', title: baseline.title ?? slug, tags },
+  );
+  await importFromContent(engine, slug, markdown, { noEmbed: true, sourceId });
+  return true;
+}
+
 interface AtomGroup {
   conceptSlug: string;
   atomTitles: string[];
@@ -373,9 +400,10 @@ export async function runPhaseSynthesizeConcepts(
     currentEvidence.set(pageSlug, keys);
   }
   const rewritingSlugs = new Set(atomGroups.map(group => conceptPageSlug(group.conceptSlug)));
-  const conceptsPending = !opts.dryRun && opts._atoms === undefined
+  let conceptsPending = !opts.dryRun && opts._atoms === undefined
     ? await markUnsupportedConcepts(engine, opts.sourceId ?? 'default', currentEvidence, rewritingSlugs)
     : 0;
+  let conceptsRewriteHeld = 0;
 
   if (atomGroups.length === 0) {
     return {
@@ -457,6 +485,7 @@ export async function runPhaseSynthesizeConcepts(
     try{const value:unknown=JSON.parse((await engine.getConfig(retryKey))??'{}');if(value&&typeof value==='object'&&!Array.isArray(value))retry=value as typeof retry;}catch{}
     if((group.tier==='T1'||group.tier==='T2')&&retry.hash===retryHash&&Number(retry.attempts)>=3){
       failures.push({concept:group.conceptSlug,error:'concept_retry_held: unchanged evidence and model failed repeatedly'});
+      if(!opts.dryRun&&await holdFailedConceptRewrite(engine,outputSourceId,outputSlug,baseline,'concept_retry_held')){conceptsPending++;conceptsRewriteHeld++;}
       continue;
     }
     attempted++;
@@ -520,7 +549,10 @@ export async function runPhaseSynthesizeConcepts(
       deterministicConcepts++;
     }
 
-    if(!complete)continue;
+    if(!complete){
+      if(!opts.dryRun&&await holdFailedConceptRewrite(engine,outputSourceId,outputSlug,baseline,'concept_rewrite_failed')){conceptsPending++;conceptsRewriteHeld++;}
+      continue;
+    }
 
     if (!opts.dryRun) {
       const section='\n\n## 知识综合\n\n';
@@ -701,6 +733,7 @@ export async function runPhaseSynthesizeConcepts(
       concepts_new: conceptsNew,
       concepts_updated: conceptsUpdated,
       concepts_pending_verification: conceptsPending,
+      concepts_rewrite_held: conceptsRewriteHeld,
       concepts_conflict: failures.filter(row => /conflict|preservation_hold/.test(row.error)).length,
       ...(opts.roundWork && { round_fresh_processed: freshProcessed, round_older_processed: conceptsWritten - freshProcessed, round_remaining: unexamined + deferredConcepts + failures.length, round_time_reached: roundTimeReached }),
       concepts_cached:cachedConcepts,

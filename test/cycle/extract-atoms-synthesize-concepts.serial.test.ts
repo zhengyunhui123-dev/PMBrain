@@ -593,6 +593,72 @@ describe('v0.41 T6: runPhaseSynthesizeConcepts via stubbed chat', () => {
     expect(read.compiled_truth).toBe(body);
   });
 
+  test('证据还够重写时，模型失败保留原文并标成待重新核验，成功重写后恢复仍有效', async () => {
+    const atoms = (body: string) => Array.from({ length: 5 }, (_, index) => ({
+      slug: `atoms/rewrite-${index}`,
+      title: `Rewrite ${index}`,
+      body: `${body} ${index}`,
+      concept_refs: ['rewrite-theme'],
+    }));
+    const created = await runPhaseSynthesizeConcepts(engine, {
+      _atoms: atoms('original'),
+      _chat: stubChat('original narrative'),
+    });
+    expect(created.details?.concepts_new).toBe(1);
+    const original = await engine.getPage('concepts/rewrite-theme');
+    const body = original?.compiled_truth ?? '';
+    expect(original?.frontmatter.pmbrain_review_label).toBe('仍有效');
+    let calls = 0;
+    const failed = await runPhaseSynthesizeConcepts(engine, {
+      _atoms: atoms('corrected'),
+      _chat: async () => {
+        calls += 1;
+        throw new Error('concept_length');
+      },
+    });
+    expect(calls).toBe(1);
+    expect(failed.status).toBe('warn');
+    expect(failed.details?.concepts_updated ?? 0).toBe(0);
+    expect(failed.details?.concepts_rewrite_held).toBe(1);
+    expect(failed.details?.concepts_pending_verification).toBe(1);
+    const held = await engine.getPage('concepts/rewrite-theme');
+    expect(held?.compiled_truth).toBe(body);
+    expect(held?.frontmatter.pmbrain_review_label).toBe('待重新核验');
+    expect(held?.frontmatter.pmbrain_concept_complete).toBe(false);
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      await runPhaseSynthesizeConcepts(engine, {
+        _atoms: atoms('corrected'),
+        _chat: async () => {
+          calls += 1;
+          throw new Error('concept_length');
+        },
+      });
+    }
+    const beforeHold = calls;
+    const exhausted = await runPhaseSynthesizeConcepts(engine, {
+      _atoms: atoms('corrected'),
+      _chat: async () => {
+        calls += 1;
+        throw new Error('concept_length');
+      },
+    });
+    expect(calls).toBe(beforeHold);
+    expect(exhausted.details?.concepts_rewrite_held ?? 0).toBe(0);
+    const stillHeld = await engine.getPage('concepts/rewrite-theme');
+    expect(stillHeld?.compiled_truth).toBe(body);
+    expect(stillHeld?.frontmatter.pmbrain_review_label).toBe('待重新核验');
+    const rewritten = await runPhaseSynthesizeConcepts(engine, {
+      _atoms: atoms('corrected-again'),
+      _chat: stubChat('corrected narrative'),
+    });
+    expect(rewritten.details?.concepts_updated).toBe(1);
+    const page = await engine.getPage('concepts/rewrite-theme');
+    expect(page?.compiled_truth).toContain('corrected narrative');
+    expect(page?.compiled_truth).not.toBe(body);
+    expect(page?.frontmatter.pmbrain_review_label).toBe('仍有效');
+    expect(page?.frontmatter.pmbrain_concept_complete).not.toBe(false);
+  });
+
   test('只把展示给模型的片段写成证据，超过 5 条时不把没展示的也连上', async () => {
     await engine.executeRaw(
       `INSERT INTO sources (id, name)

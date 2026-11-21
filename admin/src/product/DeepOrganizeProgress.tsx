@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { FileText } from 'lucide-react';
 import type { ConsoleRun } from '../lib/shared';
-import { DEEP_ORGANIZE_STAGES, applyDeepSyncFileCounts, deepOrganizeElapsed, deepOrganizeOutcome, deepOrganizePercent, deepOrganizeRecordedStages, deepOrganizeTotals, deepStageElapsed, deepStageTitle } from '../../../shared/deep-organize-progress';
+import { DEEP_ORGANIZE_STAGES, applyDeepSyncFileCounts, deepOrganizeElapsed, deepOrganizeFinishedStages, deepOrganizeOutcome, deepOrganizePercent, deepOrganizeRecordedStages, deepOrganizeTotals, deepStageElapsed, deepStageTitle } from '../../../shared/deep-organize-progress';
 import { taskStatus, taskStopping } from './task-presentation';
 import { DatabaseSummary, elapsedText } from './MaintenanceProgress';
 import { ModelSetupNotice } from './ModelSetupNotice';
@@ -56,7 +56,7 @@ export function DeepOrganizeProgress({ run, link = true }: { run: ConsoleRun; li
     <section className="mpr-summary" aria-label="整轮总计"><div className="mpr-heading"><h3>{title}<span className={`product-task-state state-${run.status}`}>{taskStatus(run)}</span></h3><span className="mpr-time">总耗时<b>{elapsedText(elapsed)}</b></span></div>
       <dl className="mpr-totals deep"><div><dt>同步资料</dt><dd>{round.scan.complete ? (syncing ? syncFiles?.completed ?? totals.files : totals.files).toLocaleString() : '确定中'}</dd></div><div><dt>新建 / 维护知识成果</dt><dd>{totals.newKnowledge.toLocaleString()} / {totals.maintainedKnowledge.toLocaleString()}</dd></div><div><dt>写入实体</dt><dd>{totals.entities.toLocaleString()}</dd></div><div><dt>新增及补齐关联</dt><dd>{totals.links.toLocaleString()}</dd></div></dl>
       {totals.unclassifiedKnowledge > 0 && <p className="mpr-note">历史记录另有 {totals.unclassifiedKnowledge} 个知识点，未区分新建与维护。</p>}
-      <div className="mpr-progress-label"><span>阶段进度 · {deepOrganizeRecordedStages(round)} / {DEEP_ORGANIZE_STAGES.length} 个阶段已记录</span><b>{percent}%</b></div>
+      <div className="mpr-progress-label"><span>{round.stage === 'done' ? `已完成阶段 · ${deepOrganizeFinishedStages(round)} / ${DEEP_ORGANIZE_STAGES.length}` : `阶段进度 · ${deepOrganizeRecordedStages(round)} / ${DEEP_ORGANIZE_STAGES.length} 个阶段已记录`}</span><b>{percent}%</b></div>
       <div className="mpr-overall" role="progressbar" aria-label="阶段进度" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}><i style={{ width: `${percent}%` }} /></div>
       {outcome && <p className="mpr-note">{outcome}。完成检查只核对本轮结构，不代表前面的整理全部成功。剩余资料不是失败份数。</p>}
       <p className="mpr-note">阶段完成后保存记录并计入总计。已保存内容的向量由空闲时的自动向量化任务补齐。</p>

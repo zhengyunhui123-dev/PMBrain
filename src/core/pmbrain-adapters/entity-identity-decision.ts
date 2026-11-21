@@ -1,7 +1,9 @@
 import type { BrainEngine } from '../engine.ts';
+import type { Page } from '../types.ts';
 import type { LinkPageMetadata } from '../link-reconciliation.ts';
 import { legalEntityCore } from '../cycle/entity-capture-budget.ts';
 import { UnrecoverableError } from '../minions/types.ts';
+import { memoryPageIsCurrent } from './memory-projections.ts';
 
 const ENTITY_TYPES = ['person', 'company', 'organization', 'entity', 'project', 'concept'];
 const BLOCKED_LEGAL_CORES = new Set(['系统', '项目', '模型', '平台', '方案', '功能', '问题', '数据', '内容', '工作', '研究', '产品', '用户', '技术', '公司', '大学', '银行', '科技', '信息', '网络', '国际', '中国', '发展', '建设', '投资', '控股', '集团']);
@@ -41,25 +43,70 @@ function brief(page: LinkPageMetadata): IdentityCandidate {
   };
 }
 
+const candidateSelect = `SELECT p.slug, p.source_id, p.type, p.title, p.knowledge_revision::text AS knowledge_revision,
+       COALESCE(jsonb_agg(COALESCE(a.alias_text, a.alias_norm)) FILTER (WHERE a.slug IS NOT NULL), p.frontmatter->'aliases') AS aliases
+  FROM pages p
+  LEFT JOIN page_aliases a ON a.slug=p.slug AND a.source_id=p.source_id`;
+
+const candidateGroup = `GROUP BY p.slug, p.source_id, p.type, p.title, p.knowledge_revision, p.frontmatter`;
+
 export async function loadIngestCandidates(engine: Pick<BrainEngine, 'executeRaw'>, sourceIds: string[]): Promise<LinkPageMetadata[]> {
   return engine.executeRaw<LinkPageMetadata>(
-    `SELECT p.slug, p.source_id, p.type, p.title, p.knowledge_revision::text AS knowledge_revision,
-      COALESCE((SELECT jsonb_agg(COALESCE(a.alias_text, a.alias_norm)) FROM page_aliases a WHERE a.slug=p.slug AND a.source_id=p.source_id), p.frontmatter->'aliases') AS aliases
-      FROM pages p WHERE p.deleted_at IS NULL AND p.source_id = ANY($1::text[]) AND p.type = ANY($2::text[])
+    `${candidateSelect}
+      WHERE p.deleted_at IS NULL AND p.source_id = ANY($1::text[]) AND p.type = ANY($2::text[])
+      ${candidateGroup}
       ORDER BY p.source_id, p.slug`,
     [[...new Set(sourceIds)], ENTITY_TYPES],
   );
 }
 
-export async function ingestCandidatesChanged(engine: Pick<BrainEngine, 'executeRaw'>, pages: readonly LinkPageMetadata[], sourceIds: string[]): Promise<boolean> {
-  const rows = await engine.executeRaw<{ source_id: string; slug: string; knowledge_revision: string }>(
-    `SELECT source_id, slug, knowledge_revision::text AS knowledge_revision
-       FROM pages WHERE deleted_at IS NULL AND source_id = ANY($1::text[]) AND type = ANY($2::text[])`,
-    [[...new Set(sourceIds)], ENTITY_TYPES],
+export async function refreshIngestCandidates(engine: Pick<BrainEngine, 'executeRaw'>, pages: readonly LinkPageMetadata[], sourceIds: string[]): Promise<LinkPageMetadata[]> {
+  const ids = [...new Set(sourceIds)];
+  const revisions = pages.map(page => page.knowledge_revision);
+  const [probe] = await engine.executeRaw<{ n: number | string; same: number | string }>(
+    `SELECT count(*)::int AS n,
+            count(*) FILTER (WHERE knowledge_revision::text = ANY($3::text[]))::int AS same
+       FROM pages
+      WHERE deleted_at IS NULL AND source_id = ANY($1::text[]) AND type = ANY($2::text[])`,
+    [ids, ENTITY_TYPES, revisions],
   );
-  if (rows.length !== pages.length) return true;
-  const current = new Map(pages.map(page => [`${page.source_id}:${page.slug}`, page.knowledge_revision]));
-  return rows.some(row => current.get(`${row.source_id}:${row.slug}`) !== row.knowledge_revision);
+  const total = Number(probe?.n ?? -1);
+  const same = Number(probe?.same ?? -1);
+  if (total === pages.length && same === pages.length) return pages as LinkPageMetadata[];
+  const delta = await engine.executeRaw<LinkPageMetadata>(
+    `${candidateSelect}
+      WHERE p.deleted_at IS NULL AND p.source_id = ANY($1::text[]) AND p.type = ANY($2::text[])
+        AND NOT (p.knowledge_revision::text = ANY($3::text[]))
+      ${candidateGroup}`,
+    [ids, ENTITY_TYPES, revisions],
+  );
+  const index = new Map(pages.map((page, position) => [`${page.source_id}:${page.slug}`, position]));
+  const next = [...pages];
+  let revised = 0;
+  for (const row of delta) {
+    const key = `${row.source_id}:${row.slug}`;
+    const at = index.get(key);
+    if (at === undefined) {
+      index.set(key, next.length);
+      next.push(row);
+    } else {
+      revised += 1;
+      next[at] = row;
+    }
+  }
+  if (pages.length - same - revised !== 0 || next.length !== total) return loadIngestCandidates(engine, sourceIds);
+  return next;
+}
+
+export async function ingestSlugExists(engine: Pick<BrainEngine, 'executeRaw'>, slug: string, sourceId: string): Promise<boolean> {
+  const [row] = await engine.executeRaw<{ id: number | string; slug: string; frontmatter: Record<string, unknown> | string | null }>(
+    `SELECT id, slug, frontmatter FROM pages WHERE slug=$1 AND source_id=$2 AND deleted_at IS NULL LIMIT 1`,
+    [slug, sourceId],
+  );
+  if (!row) return false;
+  const frontmatter = typeof row.frontmatter === 'string' ? JSON.parse(row.frontmatter) as Record<string, unknown> : row.frontmatter ?? {};
+  if (!row.slug.startsWith('conversations/pmbrain/') || frontmatter.pmbrain_memory !== true) return true;
+  return memoryPageIsCurrent(engine as BrainEngine, { id: Number(row.id), slug: row.slug, frontmatter } as Page);
 }
 
 export function decideCapturedIdentity(input: {

@@ -60,7 +60,7 @@ test('同步和实体阶段用真实回执汇总，未完成的阶段不计入�
     stages: [{ ...sync, status: 'completed' }, { id: 'check', status: 'skipped', durationMs: 0, result: '跳过', detail: '跳过' }],
   };
   expect(deepOrganizePercent(round)).toBe(29);
-  expect(deepOrganizePercent({ ...round, stage: 'done', stages: DEEP_ORGANIZE_STAGES.map(stage => ({ id: stage.id, status: stage.id === 'entities' ? 'partial' as const : 'completed' as const, durationMs: 0, result: '', detail: '' })) })).toBe(99);
+  expect(deepOrganizePercent({ ...round, stage: 'done', stages: DEEP_ORGANIZE_STAGES.map(stage => ({ id: stage.id, status: stage.id === 'entities' ? 'partial' as const : 'completed' as const, durationMs: 0, result: '', detail: '' })) })).toBe(86);
   expect(deepOrganizeTotals({ ...round, stages: [sync, entities] })).toMatchObject({ files: 18, knowledge: 0, entities: 4, links: 9 });
 });
 
@@ -99,7 +99,7 @@ test('深度整理详情按七个阶段展示，同步失败使用文件队列�
   expect(html).toContain('¥5.00');
 });
 
-test('本轮结束后分开显示成功、待核对、失败和尚未处理，部分完成仍是 99%', () => {
+test('本轮结束后分开显示成功、待核对、失败和尚未处理，未完成阶段不显示成 99%', () => {
   const round: DeepRoundProgress = {
     stage: 'done',
     scan: { scanned: 2000, unchanged: 200, complete: true },
@@ -112,7 +112,7 @@ test('本轮结束后分开显示成功、待核对、失败和尚未处理，�
       ...(stage.id === 'entities' ? { entities: 4, links: 9, pendingReview: 2, itemFailed: 1, remaining: 1752 } : {}),
     })),
   };
-  expect(deepOrganizePercent(round)).toBe(99);
+  expect(deepOrganizePercent(round)).toBe(86);
   expect(deepOrganizeOutcome(round)).toBe('本轮已结束：成功 4，待核对 2，失败 1，尚未处理 1752');
   expect(deepOrganizeOutcome({ ...round, stage: 'entities' })).toBeNull();
   const html = renderToStaticMarkup(createElement(DeepOrganizeProgress, {
@@ -127,5 +127,6 @@ test('本轮结束后分开显示成功、待核对、失败和尚未处理，�
   expect(html).toContain('剩余资料不是失败份数');
   expect(html).toContain('完成检查只核对本轮结构');
   expect(html).not.toContain('等待开始');
-  expect(html).toContain('7 / 7 个阶段已记录');
+  expect(html).toContain('已完成阶段 · 6 / 7');
+  expect(html).toContain('86%');
 });
