@@ -159,9 +159,10 @@ export function activityLine(messages: Array<{ role: string; text?: string; stat
   if (assistant.savedSkill) return '已存成技能';
   if (assistant.savedPlaybook) return '已存成做法';
   for (const call of [...(assistant.toolCalls ?? [])].reverse()) {
-    if (call.status !== 'complete' || (call.name !== 'assistant_create' && call.name !== 'assistant_update') || !call.output) continue;
+    if (call.status !== 'complete' || (call.name !== 'assistant_create' && call.name !== 'assistant_update' && call.name !== 'assistant_delete') || !call.output) continue;
     try {
-      const output = JSON.parse(call.output) as { name?: string; created?: boolean; updated?: boolean };
+      const output = JSON.parse(call.output) as { name?: string; created?: boolean; updated?: boolean; removed?: boolean };
+      if (output.name && output.removed) return clip(`已删除${output.name}`);
       if (output.name && (output.created || output.updated)) return clip(`已准备好${output.name}`);
     } catch { continue; }
   }
@@ -188,12 +189,13 @@ function parseOutputs(calls: HonestyCall[] | undefined, names: string[]): Record
   return rows;
 }
 
-function assistantPersisted(calls: HonestyCall[] | undefined, kind?: 'created' | 'updated'): boolean {
-  for (const output of parseOutputs(calls, ['assistant_create', 'assistant_update'])) {
+function assistantPersisted(calls: HonestyCall[] | undefined, kind?: 'created' | 'updated' | 'removed'): boolean {
+  for (const output of parseOutputs(calls, ['assistant_create', 'assistant_update', 'assistant_delete'])) {
     if (typeof output.name !== 'string') continue;
     if (kind === 'created' && output.created) return true;
     if (kind === 'updated' && output.updated) return true;
-    if (!kind && (output.created || output.updated)) return true;
+    if (kind === 'removed' && output.removed) return true;
+    if (!kind && (output.created || output.updated || output.removed)) return true;
   }
   return false;
 }
@@ -229,6 +231,10 @@ function claimsUnverifiedAssistantCreate(text: string): boolean {
 
 function claimsUnverifiedAssistantUpdate(text: string): boolean {
   return /(?:助手)?(?:已更新成功|已调整成功)|配置已更新|已更新配置/.test(compactText(text));
+}
+
+function claimsUnverifiedAssistantDelete(text: string): boolean {
+  return /(?:已删除|已经删除|删除成功).{0,20}助手|助手.{0,12}(?:已删除|已经删除|删除成功)/.test(compactText(text));
 }
 
 function claimsUnverifiedSkill(text: string): boolean {
@@ -280,7 +286,7 @@ function rewriteUnverifiedSave(text: string, calls?: HonestyCall[]): string {
 export function visibleAssistantText(text: string, calls?: HonestyCall[], honesty?: WorkbenchHonesty): string {
   if (!honesty?.recap && fileActionIssue(text, calls)) return '本轮没有对应的文件操作成功回执，不能确认文件已改动。请查看工作过程中的实际结果。';
   for (const call of calls ?? []) {
-    if (call.status !== 'complete' || !call.output || (call.name !== 'assistant_create' && call.name !== 'assistant_update')) continue;
+    if (call.status !== 'complete' || !call.output || (call.name !== 'assistant_create' && call.name !== 'assistant_update' && call.name !== 'assistant_delete')) continue;
     try {
       const output = JSON.parse(call.output) as { id?: string; name?: string; revision?: number; created?: boolean; updated?: boolean };
       if (!output.name || !(output.created || output.updated)) continue;
@@ -299,6 +305,9 @@ export function visibleAssistantText(text: string, calls?: HonestyCall[], honest
   if (honesty?.recap) return text;
   if (!assistantPersisted(calls, 'updated') && claimsUnverifiedAssistantUpdate(text)) {
     return '助手配置还没有真正改掉。请说明要改什么，确认后再保存。';
+  }
+  if (!assistantPersisted(calls, 'removed') && claimsUnverifiedAssistantDelete(text)) {
+    return '助手还没有真正删除。请回复「确认删除」后才会从左侧列表去掉。对话记录和工作成果仍会保留。';
   }
   if (!submitReceipt(calls) && claimsUnverifiedSubmit(text)) {
     return '任务还没有真正交给专用助手。任务中心里看不到这次提交。';

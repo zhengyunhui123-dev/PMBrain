@@ -108,11 +108,13 @@ export async function runWorkbenchTools(input: WorkbenchAnswerInput & {
     } }],
   ]);
   if(input.native&&input.sourceId&&input.conversationId)for(const [name,handler] of nativeMemoryHandlers(input.engine,input.sourceId,input.conversationId,input.native,row=>{let index=citations.findIndex(item=>item.kind==='memory'&&item.factId===row.factId&&item.sourceId===row.sourceId);if(index<0){index=citations.length;citations.push(row);}return index+1;},reads,input.grantedMemoryTools??[]))handlers.set(name,handler);
-  const userText = input.messages.filter(row=>row.role==='user').at(-1)?.text ?? '';
+  const latestUser = input.messages.filter(row=>row.role==='user').at(-1);
+  const userText = latestUser?.text ?? '';
+  const collaborationInbound = Boolean(latestUser?.collaborationFrom);
   const requireCitation = !isDirectoryStep(userText) && (classifyTurn(userText) === 'chat' || taskRequiresEvidence(userText, input.task));
   if (input.agents && input.agent && input.conversationId && input.messageId) {
     const current = () => input.agents!.store.workbench.get(input.conversationId!).messages.some(row => row.id === input.messageId && row.status === 'running');
-    for (const [name, handler] of agentHandlers(input.agents, { environment: input.environment, agent: input.agent, userText, conversationId: input.conversationId, messageId: input.messageId, citations, cite: row => citation(row.sourceId, row.slug, row.title, row.snippet), active: current, workingDirectory: () => input.task?.directory, managedPaths: () => input.task?.managedPaths ?? [], rememberManaged: (path, from) => { if (!input.task) return; const current = input.task.managedPaths ?? []; input.task.managedPaths = [...new Set([...(from ? current.filter(item => item !== from) : current), path])]; } })) handlers.set(name, handler.idempotent ? { ...handler, execute: async (raw, abort, execution) => {
+    for (const [name, handler] of agentHandlers(input.agents, { environment: input.environment, agent: input.agent, userText, collaborationInbound, conversationId: input.conversationId, messageId: input.messageId, citations, cite: row => citation(row.sourceId, row.slug, row.title, row.snippet), active: current, workingDirectory: () => input.task?.directory, managedPaths: () => input.task?.managedPaths ?? [], rememberManaged: (path, from) => { if (!input.task) return; const current = input.task.managedPaths ?? []; input.task.managedPaths = [...new Set([...(from ? current.filter(item => item !== from) : current), path])]; } })) handlers.set(name, handler.idempotent ? { ...handler, execute: async (raw, abort, execution) => {
       const output = await handler.execute(raw, abort, execution);
       const trimmed = trimToolOutput(output, allocation.limit(execution?.toolCallId ?? '')) as Record<string, unknown>;
       if (trimmed && Array.isArray(trimmed.results) && output && typeof output === 'object' && 'results' in output && Array.isArray(output.results) && trimmed.results.length < output.results.length) trimmed.nextOffset = Number('offset' in output ? output.offset : 0) + trimmed.results.length;
@@ -170,7 +172,7 @@ export async function runWorkbenchTools(input: WorkbenchAnswerInput & {
       return parsed;
     } });
   }
-  const tools=[...(input.knowledge?KNOWLEDGE_TOOLS:[]),...(input.native?workbenchMemoryTools(userText,input.knowledge,input.grantedMemoryTools??[]):[]),...(input.agents && input.agent ? agentTools(input.agent,userText,input.agents,input.environment) : [])];
+  const tools=[...(input.knowledge?KNOWLEDGE_TOOLS:[]),...(input.native?workbenchMemoryTools(userText,input.knowledge,input.grantedMemoryTools??[]):[]),...(input.agents && input.agent ? agentTools(input.agent,userText,input.agents,input.environment,{ collaborationInbound }) : [])];
   let history = input.history;
   let checkedCompletion = false;
   let checkedDirectory = false;
@@ -197,7 +199,7 @@ export async function runWorkbenchTools(input: WorkbenchAnswerInput & {
   const gatheredEvidence = () => citations.length > 0 || [...calls.values(), ...(input.settledTools ?? [])].some(call => call.status === 'complete' && ['knowledge_search', 'knowledge_read', 'memory_recall'].includes(call.name));
   while (requestCount < 8) {
     segment = '';
-    const result = await input.loop({ model: input.model, system: input.system, initialMessages: history, tools, toolHandlers: handlers, toolConcurrency: 4, maxTurns: 8 - requestCount, maxTokens: input.context.outputTokens, abortSignal: signal, temperature: input.temperature, reportLengthStop: true, recordUnknownTools: true,
+    const result = await input.loop({ model: input.model, system: input.system, initialMessages: history, tools, toolHandlers: handlers, toolConcurrency: 4, maxTurns: 8 - requestCount, maxTokens: input.context.outputTokens, abortSignal: signal, temperature: input.temperature, ...(typeof input.topP === 'number' ? { topP: input.topP } : {}), reportLengthStop: true, recordUnknownTools: true,
       preserveHistory:true,disableReasoning:true,finalizeOnLastTurn:true,finalPrompt:'本轮资料收集已结束。现在直接根据已获得的资料给出有引用的中文回答；证据不足的部分明确说明，不再调用工具，不编造资料。',fitRequest:fitProviderRequest,contextWindow:input.contextWindow,
       parseToolText:normalizeToolText,toolTextPreview,
       validateCompletion:async(answer,canContinue)=>{
@@ -301,7 +303,7 @@ export async function runWorkbenchTools(input: WorkbenchAnswerInput & {
     }
     stopReason = result.stopReason === 'end' ? 'end' : 'other'; break;
   }
-  for (const name of ['assistant_create', 'assistant_update', 'artifact_save', 'artifact_revise', 'task_submit', 'local_mkdir', ...WORKSPACE_MUTATIONS]) {
+  for (const name of ['assistant_create', 'assistant_update', 'assistant_delete', 'artifact_save', 'artifact_revise', 'task_submit', 'assistant_collaborate', 'docx_edit', 'local_mkdir', ...WORKSPACE_MUTATIONS]) {
     const last = [...calls.values()].filter(call => call.name === name).at(-1);
     if (last?.status === 'error' && !modelAnswerText(composed + segment).trim()) throw new Error(last.error ?? '助手操作未完成');
   }
@@ -318,7 +320,7 @@ export async function runWorkbenchTools(input: WorkbenchAnswerInput & {
     input.progress('正在根据已查到的资料写回答');
     segment = ''; visibleSegment = '';
     const writePrompt = evidenceWritePrompt();
-    const written = await input.loop({ model: input.model, system: input.system, initialMessages: [...lastMessages, { role: 'user', content: writePrompt }], tools: [], toolHandlers: handlers, toolConcurrency: 1, maxTurns: 1, maxTokens: input.context.outputTokens, abortSignal: signal, temperature: input.temperature, reportLengthStop: true, recordUnknownTools: true,
+    const written = await input.loop({ model: input.model, system: input.system, initialMessages: [...lastMessages, { role: 'user', content: writePrompt }], tools: [], toolHandlers: handlers, toolConcurrency: 1, maxTurns: 1, maxTokens: input.context.outputTokens, abortSignal: signal, temperature: input.temperature, ...(typeof input.topP === 'number' ? { topP: input.topP } : {}), reportLengthStop: true, recordUnknownTools: true,
       preserveHistory:true,disableReasoning:true,finalizeOnLastTurn:true,finalPrompt:writePrompt,fitRequest:fitProviderRequest,contextWindow:input.contextWindow,
       parseToolText:normalizeToolText,toolTextPreview,
       jsonToolFallback:false,jsonFinalAnswer:false,

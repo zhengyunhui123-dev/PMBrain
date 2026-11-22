@@ -2456,6 +2456,7 @@ export interface ChatOpts {
   retryLength?: boolean;
   /** Sampling temperature. The LongMemEval judge pins 0 (official scorer). */
   temperature?: number;
+  topP?: number;
   abortSignal?: AbortSignal;
   /**
    * Anthropic-specific: cache the system prompt + last tool def. Silently
@@ -2852,6 +2853,7 @@ async function chatOnce(opts: ChatOpts): Promise<ChatResult> {
       maxOutputTokens,
       ...(getTaskBudgetTracker()?{maxRetries:0}:opts.maxRetries===undefined?{}:{maxRetries:opts.maxRetries}),
       ...(opts.temperature !== undefined ? { temperature: opts.temperature } : {}),
+      ...(opts.topP !== undefined ? { topP: opts.topP } : {}),
       abortSignal: chatAbortSignal(opts),
       providerOptions: Object.keys(providerOptions).length > 0 ? providerOptions : undefined,
       output:opts.responseSchema&&!rejected.has('schema')&&recipe.touchpoints.chat?.supports_structured_outputs!==false&&recipe.implementation==='openai-compatible'?{
@@ -3230,6 +3232,7 @@ export interface ToolLoopOpts {
   preserveHistory?: boolean;
   finalPrompt?: string;
   temperature?: number;
+  topP?: number;
   onTextDelta?: (delta: string) => void;
   onTextReset?: (model: string) => void;
   beforeModelCall?: (input: { turnIdx: number; messages: readonly ChatMessage[]; finalTurn?: boolean;maxTokens:number }) => void | { messages: ChatMessage[]; maxTokens?: number; contextWindow?: number; system?: string; toolChoice?: ChatOpts['toolChoice'] } | Promise<void | { messages: ChatMessage[]; maxTokens?: number; contextWindow?: number; system?: string; toolChoice?: ChatOpts['toolChoice'] }>;
@@ -3430,6 +3433,7 @@ export async function toolLoop(opts: ToolLoopOpts): Promise<ToolLoopResult> {
         abortSignal: opts.abortSignal,
         cacheSystem: opts.cacheSystem,
         ...(opts.temperature !== undefined ? { temperature: opts.temperature } : {}),
+        ...(opts.topP !== undefined ? { topP: opts.topP } : {}),
         ...(!jsonToolCalls&&opts.onTextDelta ? { onTextDelta:(delta:string)=>{rawText+=delta;const visible=opts.toolTextPreview?.(rawText)??rawText;if(!visible.startsWith(visibleText)){opts.onTextReset?.(model);opts.onTextDelta?.(visible);}else opts.onTextDelta?.(visible.slice(visibleText.length));visibleText=visible;} } : {}),
         ...(opts.onTextReset ? { onTextReset:(model:string)=>{rawText='';visibleText='';opts.onTextReset?.(model);} } : {}),
       });

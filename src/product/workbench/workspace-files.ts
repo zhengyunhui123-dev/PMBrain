@@ -1,5 +1,6 @@
-import { createHash, randomUUID } from 'node:crypto';
-import { constants, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { constants, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { docxSafetyError, patchDocxParagraph, readDocxParagraphs } from './docx-edit';
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { TextDecoder } from 'node:util';
 import { atomicWriteFileSync } from '../../core/atomic-write';
@@ -35,7 +36,7 @@ function requireHash(bytes: Buffer, hash: unknown) {
   if (typeof hash !== 'string' || !/^[a-f0-9]{64}$/.test(hash) || digest(bytes) !== hash) throw new Error('文件已改变或未核对哈希，请重新读取后再操作');
 }
 function textBytes(path: string, bytes: Buffer) {
-  if (!TEXT_EXTENSIONS.has(extname(path).toLowerCase()) || bytes.includes(0)) throw new Error('只支持 UTF-8 文本文件；Office、PDF 和其他二进制文件请使用对应成果工具');
+  if (!TEXT_EXTENSIONS.has(extname(path).toLowerCase()) || bytes.includes(0)) throw new Error('只支持 UTF-8 文本文件。Word 请用 docx_read 和 docx_edit 按段落原位修改；PDF 和其他二进制文件请使用成果工具');
   try { new TextDecoder('utf-8', { fatal: true }).decode(bytes); } catch { throw new Error('文件不是有效的 UTF-8 文本，未改动原文件'); }
   return bytes.toString('utf8');
 }
@@ -76,6 +77,19 @@ export function workspaceFileHandlers(context: WorkbenchAgentTools, input: { age
     if (!readFileSync(join(directory, 'original')).equals(before)) throw new Error('文件备份校验失败，未修改原文件');
     writeFileSync(join(directory, 'receipt.json'), JSON.stringify(record), { flag: 'wx', mode: 0o600 });
     return backupId;
+  };
+  const writeBytes = (path: string, bytes: Buffer) => {
+    if (bytes.length > MAX_BYTES) throw new Error('写入后文件不能超过 32MB');
+    const temporary = join(dirname(path), `.${basename(path)}.${randomBytes(8).toString('hex')}.tmp`);
+    try {
+      writeFileSync(temporary, bytes, { mode: 0o600 });
+      if (!readFileSync(temporary).equals(bytes)) throw new Error('写入校验失败');
+      renameSync(temporary, path);
+    } catch (error) {
+      if (existsSync(temporary)) unlinkSync(temporary);
+      throw error;
+    }
+    if (!fileBytes(path).equals(bytes)) throw new Error('文件写入后的读回校验失败');
   };
   const write = (path: string, before: Buffer | null, after: Buffer, mode: string) => {
     if (after.length > MAX_BYTES) throw new Error('写入后文件不能超过 32MB');
@@ -154,6 +168,36 @@ export function workspaceFileHandlers(context: WorkbenchAgentTools, input: { age
         if (existsSync(path)) throw new Error('先前删除的文件已经重新出现，请重新核对');
       } else requireHash(fileBytes(path), raw.hash);
       return raw;
+    },
+    readDocx: async (raw: Record<string, unknown>) => {
+      const path = await target(raw.path, true, false);
+      if (extname(path).toLowerCase() !== '.docx') throw new Error('请指定 .docx 文件');
+      const bytes = fileBytes(path);
+      const read = await readDocxParagraphs(bytes);
+      return { path, hash: read.hash, paragraphs: read.paragraphs };
+    },
+    editDocx: async (raw: Record<string, unknown>) => {
+      const index = raw.paragraphIndex;
+      if (!Number.isInteger(index) || Number(index) < 0) throw new Error('段落编号无效');
+      if (typeof raw.oldText !== 'string' || typeof raw.newText !== 'string' || typeof raw.baseHash !== 'string') throw new Error('请提供段落原文、替换内容和文件哈希');
+      const path = await target(raw.path);
+      if (extname(path).toLowerCase() !== '.docx') throw new Error('请指定 .docx 文件');
+      const before = fileBytes(path);
+      const blocked = await docxSafetyError(before);
+      if (blocked) throw new Error(blocked);
+      requireHash(before, raw.baseHash);
+      const after = await patchDocxParagraph(before, { paragraphIndex: Number(index), oldText: raw.oldText, newText: raw.newText });
+      requireHash(fileBytes(path), digest(before));
+      const backupId = backup(path, before, 'edit', digest(after));
+      try {
+        writeBytes(path, after);
+        const check = await readDocxParagraphs(fileBytes(path));
+        if (check.paragraphs[Number(index)]?.text !== raw.newText) throw new Error('原位修改后读回不一致');
+        return { path, hash: check.hash, backupId, edited: true, verified: true, paragraphIndex: Number(index), replacements: 1 };
+      } catch (error) {
+        if (existsSync(path) && !fileBytes(path).equals(before)) writeBytes(path, before);
+        throw error;
+      }
     },
   };
 }

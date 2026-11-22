@@ -3,6 +3,7 @@ import { api } from '../api';
 import { markdownTableCellSources, parseMarkdownTable } from '../lib/markdown-table';
 import { LoadingBlock } from './console-shared';
 import { inlineSourceSegments, type SourceSegment } from '../../../src/product/workbench/artifact-quote';
+import { knowledgePageHash } from '../workbench/conversation-display';
 
 interface DocsArticle {
   id: string;
@@ -51,6 +52,7 @@ function CitationMark({ index, citation, segment }: { index: number; citation: M
   };
   const where = [citation.sourceId, citation.slug].filter(Boolean).join(' / ');
   const source = segment ? { 'data-source-start': segment.sourceStart, 'data-source-end': segment.sourceEnd, 'data-visible-start': segment.visibleStart, 'data-visible-end': segment.visibleEnd } : {};
+  const page = knowledgePageHash(citation);
   return <button
     type="button"
     className="wb-cite"
@@ -60,6 +62,7 @@ function CitationMark({ index, citation, segment }: { index: number; citation: M
     onMouseLeave={() => setCard(null)}
     onFocus={event => show(event.currentTarget)}
     onBlur={() => setCard(null)}
+    onClick={() => { if (page) window.location.hash = page; }}
   >
     {index}
     {card && <span className="wb-cite-card" style={{ top: card.top, left: card.left }} role="tooltip">

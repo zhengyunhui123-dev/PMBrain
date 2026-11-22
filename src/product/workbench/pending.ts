@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { WorkbenchPending } from '../../../shared/workbench';
-import { readyToCreateAssistant } from './agent-tools';
+import { readyToCreateAssistant, readyToDeleteAssistant } from './agent-tools';
 
 const bareAgreement = /^(?:可以|好|好的|行|嗯|执行)$/;
 const pureCreateConfirm = /^(?:确认创建|就按这个创建|直接创建|可以创建|创建吧|开始创建|同意创建|就这样建|就这么建|现在就创建|不用问了|不用确认)$/;
@@ -17,9 +17,14 @@ function proposesAssistant(text: string): boolean {
   return !!target?.[1]?.includes('助手');
 }
 
+function proposesDelete(text: string): boolean {
+  if (/(?:不用|不要|别再|别|取消|停止).{0,6}(?:删除|去掉|移除)/.test(text)) return false;
+  return /(?:删除|去掉|移除).{0,12}助手|把.{0,24}助手.{0,8}(?:删除|去掉|移除)/.test(text);
+}
+
 function pendingIsCurrent(pending: WorkbenchPending, input: { assistantId?: string; assistantRevision?: number; taskId?: string }, choiceFingerprint: string): boolean {
   if (pending.assistantRevision === undefined || pending.assistantRevision !== input.assistantRevision) return false;
-  if (pending.kind === 'assistant-create') return input.assistantId === 'main';
+  if (pending.kind === 'assistant-create' || pending.kind === 'assistant-delete') return input.assistantId === 'main';
   return pending.fingerprint === choiceFingerprint;
 }
 
@@ -56,9 +61,13 @@ export function decidePending(input: {
   }
   if (pending?.kind === 'assistant-create' && proposesAssistant(normalized) === false && /(?:不用|不要|别再|别|取消|停止).{0,6}(?:创建|建立|新增)/.test(normalized)) return { action: 'continue', clearPending: true };
   if (pending?.kind === 'assistant-create' && bareAgreement.test(normalized)) return { action: 'hold', text: '创建助手还需要明确说确认创建、就按这个创建或直接创建。', pending };
+  if (pending?.kind === 'assistant-delete' && proposesDelete(normalized) === false && /(?:不用|不要|别再|别|取消|停止).{0,6}(?:删除|去掉|移除)/.test(normalized)) return { action: 'continue', clearPending: true };
+  if (pending?.kind === 'assistant-delete' && bareAgreement.test(normalized)) return { action: 'hold', text: '删除助手还需要明确说确认删除或直接删除。对话记录和工作成果仍会保留。', pending };
   if (!pending && input.usedConfirm && pureCreateConfirm.test(normalized)) return { action: 'hold', text: '刚才的创建确认已经用过。要再创建一个助手，请把新的名称和职责再说一次。', ...dropStale };
   if (readyToCreateAssistant(text) && pending?.kind === 'assistant-create') return { action: 'continue', usedConfirm: pending.fingerprint };
   if (readyToCreateAssistant(text)) return { action: 'continue', ...dropStale };
+  if (readyToDeleteAssistant(text) && pending?.kind === 'assistant-delete') return { action: 'continue', usedConfirm: pending.fingerprint };
+  if (readyToDeleteAssistant(text) && pending?.kind !== 'assistant-create') return { action: 'continue', ...dropStale };
   const wantsRevise = reviseCue.test(normalized) && !replacementCue.test(normalized);
   if (wantsRevise && !input.currentArtifactId && !pending && options.length > 1) {
     const next: WorkbenchPending = { kind: 'artifact-choice', fingerprint: choiceFingerprint, prompt: text, options, createdAt: input.now, ...stamp };
@@ -67,6 +76,9 @@ export function decidePending(input: {
   }
   if (input.assistantId === 'main' && proposesAssistant(normalized) && !readyToCreateAssistant(text)) {
     return { action: 'continue', pending: { kind: 'assistant-create', fingerprint: pendingFingerprint([text, String(input.assistantRevision ?? '')]), prompt: text, createdAt: input.now, ...stamp } };
+  }
+  if (input.assistantId === 'main' && proposesDelete(normalized) && !readyToDeleteAssistant(text)) {
+    return { action: 'continue', pending: { kind: 'assistant-delete', fingerprint: pendingFingerprint([text, String(input.assistantRevision ?? '')]), prompt: text, createdAt: input.now, ...stamp } };
   }
   return { action: 'continue', ...dropStale };
 }

@@ -13,6 +13,7 @@ import {
   suggestedChatModel,
 } from '../admin/src/product/home-model.ts';
 import { rememberedChatModel } from '../admin/src/workbench/chat-model.ts';
+import { conversationDateLabel, knowledgePageHash } from '../admin/src/workbench/conversation-display.ts';
 
 const root = join(import.meta.dir, '..');
 const read = (path: string) => readFileSync(join(root, path), 'utf8');
@@ -145,6 +146,18 @@ describe('首页按有没有知识库区分，并接上现有能力', () => {
     expect(message).toContain('evidenceGap');
     expect(message).toContain('playbookNotice');
     expect(read('admin/src/workbench/AgentCards.tsx')).toContain('已准备好「{name}」');
+    expect(read('admin/src/workbench/AgentSettings.tsx')).toContain('删除这个助手');
+    expect(read('admin/src/workbench/AgentSettings.tsx')).toContain('确认删除');
+    expect(workbench).toContain('wb-welcome-avatar');
+    expect(workbench).toContain('wb-date-line');
+    expect(message).toContain('wb-message-time');
+    expect(message).toContain('knowledgePageHash');
+    expect(read('admin/src/product/HomePage.tsx')).toContain('打开知识助手查看');
+    expect(conversationDateLabel('2026-11-21T02:00:00', new Date('2026-11-21T08:00:00'))).toBe('今天');
+    expect(conversationDateLabel('2026-11-20T18:00:00', new Date('2026-11-21T08:00:00'))).toBe('昨天');
+    expect(knowledgePageHash({ sourceId: 'work', slug: 'projects/review' })).toBe('data?source=work&slug=projects%2Freview');
+    expect(knowledgePageHash({ kind: 'memory', sourceId: 'work', slug: 'memory/fact-1' })).toBeNull();
+    expect(knowledgePageHash({ sourceId: null, slug: 'D:\\\\notes\\\\a.md' })).toBeNull();
   });
 
   test('菜单默认折叠且保留手动展开，两个 MCP 页对调，对话模型记住上次选择，停止按钮是蓝色', () => {

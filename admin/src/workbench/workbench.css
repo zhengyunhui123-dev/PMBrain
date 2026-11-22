@@ -57,7 +57,25 @@
 .wb-messages { overflow: auto; flex: 1; min-height: 0; scroll-behavior: auto; }
 .wb-message-column { max-width: 950px; padding: 24px 30px; margin: auto; }
 .wb-welcome { padding-top: clamp(45px,12vh,130px); text-align: center; }
-.wb-welcome > div:first-child { display: inline-flex; padding: 17px; background: var(--product-panel); border-radius: 16px; }
+.wb-welcome > div:first-child, .wb-welcome-avatar { display: inline-flex; align-items: center; justify-content: center; padding: 0; width: 52px; height: 52px; background: var(--product-panel); border-radius: 16px; font-size: 20px; font-weight: 650; }
+.wb-welcome-avatar[data-kind="main"] { background: #395d62; color: #c8e9e7; }
+.wb-welcome-avatar[data-kind="specialist"] { background: #697be0; color: #fff; }
+.wb-date-line { text-align: center; color: var(--product-muted); font-size: 11px; letter-spacing: .02em; margin: 8px 0 22px; }
+.wb-message-time { display: block; font-size: 11px; color: var(--product-muted); margin-top: 8px; }
+.wb-user .wb-message-time { text-align: right; }
+.wb-answer-actions { display: flex; align-items: center; gap: 3px; margin: 12px 0 0 -5px; }
+.knowledge-workbench .wb-answer-action { height: 28px; border: 0; border-radius: 6px; background: transparent; color: var(--product-muted); font-size: 11px; padding: 0 7px; }
+.knowledge-workbench .wb-answer-action:hover { color: var(--product-text); background: var(--product-hover, var(--product-panel)); }
+.wb-cite-icon { display: grid; place-items: center; width: 27px; height: 27px; color: var(--accent, #8999f5); border-radius: 7px; background: var(--accent-surface, #30364c); flex: none; }
+.wb-cite-copy { flex: 1; display: grid; gap: 3px; min-width: 0; }
+.wb-cite-copy strong { font-size: 12px; color: var(--product-text); font-weight: 580; }
+.wb-cite-copy small { font-size: 11px; color: var(--product-muted); }
+.wb-cite-chevron { color: var(--product-muted); }
+.wb-citations[open] .wb-cite-chevron { transform: rotate(180deg); }
+.knowledge-workbench .wb-cite-open { display: grid; gap: 3px; width: 100%; justify-content: flex-start; text-align: left; border: 0; background: transparent; padding: 0; }
+.knowledge-workbench .wb-cite-open:hover b { color: var(--accent, #8999f5); }
+.wb-danger, .knowledge-workbench .wb-danger { background: #aa4c50; color: #fff; border-color: #aa4c50; }
+.knowledge-workbench .wb-danger-link { border: 0; background: transparent; color: #aa4c50; padding: 0; height: auto; }
 .wb-welcome h1 { font-size: 26px; font-weight: 600; margin: 22px 0 10px; }
 .wb-welcome p { color: var(--product-muted); font-size: 14px; }
 .wb-suggestions { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; margin-top: 38px; }
@@ -308,9 +326,14 @@ html[data-theme="dark"] .knowledge-workbench button.wb-cite:hover, html[data-the
   html[data-theme="dark"] .design-refresh .wb-user .wb-message-body > .docs-markdown { background: #393f55; color: var(--product-text); }
   .design-refresh .wb-user .wb-message-body > header { margin: 0 4px 8px; }
   .design-refresh .wb-message-body > footer button { border: 0; padding: 4px 7px; color: var(--product-muted); }
-  .design-refresh .wb-citations { padding: 0; border-radius: 10px; background: color-mix(in srgb, var(--accent, #aeb9ff) 3%, transparent); }
-  .design-refresh .wb-citations > summary { padding: 14px 12px; }
+  .design-refresh .wb-citations { padding: 0; border-radius: 10px; background: color-mix(in srgb, var(--accent, #aeb9ff) 3%, transparent); overflow: hidden; }
+  .design-refresh .wb-citations > summary { display: flex; align-items: center; gap: 10px; min-height: 49px; padding: 0 12px; list-style: none; }
+  .design-refresh .wb-citations > summary::-webkit-details-marker { display: none; }
   .design-refresh .wb-citations > div { margin: 0; padding: 10px 12px; border-top: 1px solid var(--product-line); }
+  .design-refresh .wb-date-line { margin-bottom: 26px; }
+  .design-refresh .wb-message-time { margin-top: 8px; }
+  .design-refresh .wb-answer-actions { margin: 12px 0 0 -5px; }
+  .design-refresh .wb-welcome-avatar { width: 52px; height: 52px; }
   .design-refresh .wb-compose-area { width: calc(100% - 86px); max-width: 790px; margin: 0 auto; padding: 0 0 20px; flex: none; }
   .design-refresh .wb-composer { border-color: color-mix(in srgb, var(--product-line) 65%, var(--product-muted)); border-radius: 15px; background: var(--product-raised, var(--product-panel)); box-shadow: 0 8px 30px #0001; padding: 14px 13px 10px; }
   .design-refresh .wb-composer:focus-within { border-color: var(--accent-strong, #8999f5); }

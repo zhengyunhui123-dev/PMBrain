@@ -36,6 +36,18 @@ test('skill compatibility exposes missing tools and rejects automatic brain writ
   expect(compatibleSkill({ frontmatter: { tools: ['put_page'], mutating: true } }).supported).toBe(false);
 });
 
+test('specialist assistants can be removed while conversations and artifacts stay', () => {
+  const root = fixture();
+  const store = new WorkbenchAgentStore(new WorkbenchStore(root));
+  const agent = store.create({ name: '周报助手', systemPrompt: '只写有依据的工作', workflow: '查本周工作' });
+  expect(() => store.remove('main')).toThrow('主助手不能删除');
+  const removed = store.remove(agent.id);
+  expect(removed).toEqual({ removed: true, id: agent.id, name: '周报助手' });
+  expect(store.list().some(item => item.id === agent.id)).toBe(false);
+  expect(() => store.get(agent.id)).toThrow('助手不存在');
+  expect(() => store.remove(agent.id)).toThrow('助手不存在');
+});
+
 test('native Chinese skill names persist while path-shaped names are rejected', () => {
   const store = new WorkbenchAgentStore(new WorkbenchStore(fixture()));
   const agent = store.create({ name: '方案助手', skills: ['library__方案写作'] });

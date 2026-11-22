@@ -106,8 +106,13 @@ export async function summarizeConversation(input: Parameters<WorkbenchSummarize
   return result.text.trim();
 }
 
+function libraryReadStopped(error: unknown, signal: AbortSignal): boolean {
+  if (signal.aborted || (error instanceof Error && error.name === 'AbortError')) throw error;
+  return true;
+}
+
 export function knowledgeWorkbenchAnswer(engine: BrainEngine, dependencies: { search: typeof runAdminKnowledgeSearch; answer: typeof chat; loop?: typeof toolLoop; summarize?: WorkbenchSummarizer; recall?: typeof recallWorkbenchMemory } = { search: workbenchKnowledgeSearch, answer: chat, loop: toolLoop, recall: recallWorkbenchMemory }, native?: WorkbenchNative, agents?: WorkbenchAgentTools): WorkbenchAnswer {
-  return async ({ environment, agent, messageId, sourceId, conversationId, messages, summary, taskNotes, task, taskMethod, priorCitations, model, knowledge, systemPrompt, temperature, contextWindow, contextThreshold = .8, signal, attachmentSupplement, visualAttachments, settledTools, progress, onDelta, onReplace, onTool, onContext, onRequestEvent, contextSummarizer, onSkillRun, continueSkillRunId }) => {
+  return async ({ environment, agent, messageId, sourceId, conversationId, messages, summary, taskNotes, task, taskMethod, priorCitations, model, knowledge, systemPrompt, temperature, topP, contextWindow, contextThreshold = .8, signal, attachmentSupplement, visualAttachments, settledTools, progress, onDelta, onReplace, onTool, onContext, onRequestEvent, contextSummarizer, onSkillRun, continueSkillRunId }) => {
     signal.throwIfAborted();
     const outputReserve=requestOutputTokens(model,contextWindow);
     const budget = contextBudget(contextWindow, contextThreshold,outputReserve);
@@ -120,16 +125,21 @@ export function knowledgeWorkbenchAnswer(engine: BrainEngine, dependencies: { se
     const askEvidence = taskRequiresEvidence(latestUser?.text ?? '', task);
     const grantedMemoryTools = agents && native && /确认执行/.test(latestUser?.text ?? '') ? authorizedWriteTools(latestUser?.text ?? '', await agentRoutingCards(agents)) : [];
     const nativeTools=native?workbenchMemoryTools(latestUser?.text??'',knowledge,grantedMemoryTools):[];
-    const tools=[...(knowledge?KNOWLEDGE_TOOLS:[]),...nativeTools,...(agents && agent ? agentTools(agent, latestUser?.text ?? '', agents, environment) : [])];
+    const tools=[...(knowledge?KNOWLEDGE_TOOLS:[]),...nativeTools,...(agents && agent ? agentTools(agent, latestUser?.text ?? '', agents, environment, { collaborationInbound: Boolean(latestUser?.collaborationFrom) }) : [])];
     const useTools=!!dependencies.loop&&tools.length>0;
     const toolTokens = useTools ? estimateTokens(JSON.stringify(tools)) + estimateTokens(TOOL_INSTRUCTION) : 0;
-    const corePreface = sourceId ? await sessionMemoryPreface(engine, sourceId) : '';
+    let libraryMiss = false;
+    let corePreface = '';
+    if (sourceId) {
+      try { corePreface = await sessionMemoryPreface(engine, sourceId); }
+      catch (error) { if (libraryReadStopped(error, signal)) libraryMiss = true; }
+    }
     let turnSkills: Array<{ name: string; displayName: string }> | undefined;
     let skillNote: string | undefined;
     let draftedNotice: string | undefined;
     let draftPreview = '';
     const judge = agents && agent && dependencies.answer === chat && skillModelEligible(model) ? (request: { text: string; catalog: string }) => judgeSkillWithModel(dependencies.answer, model, signal, request) : undefined;
-    if (judge && wantsSkillDraft(latestUser?.text ?? '') && conversationId && agents?.store?.workbench?.root) {
+    if (!latestUser?.collaborationFrom && judge && wantsSkillDraft(latestUser?.text ?? '') && conversationId && agents?.store?.workbench?.root) {
       const base = skillDraftFromRequest(latestUser?.text ?? '');
       const center = new SkillCenter(agents.store.workbench.root, () => PRODUCT_SKILLS.map(skill => ({ ...skill })));
       if (base) {
@@ -141,7 +151,7 @@ export function knowledgeWorkbenchAnswer(engine: BrainEngine, dependencies: { se
         if (draftedNotice && improved && draftedNotice !== '已有同名技能') draftPreview = `\n<skill_draft>\n${draftedNotice}\n${improved.draft.steps.slice(0, 2000)}\n这只是待确认草稿，不要声称已经保存。\n</skill_draft>`;
       }
     }
-    const persona = (systemPrompt?.trim() || '你是 PMBrain 知识工作台助手。用中文清晰回答，理解并延续会话上下文。') + (agents && agent ? await agentInstructions(agents, agent, { userText: latestUser?.text ?? '', taskNotes, taskActive: !!task, ...(taskMethod === undefined ? {} : { taskMethod }), ...(judge ? { judge } : {}), ...(continueSkillRunId ? { continueRunId: continueSkillRunId } : {}), onSkills: plan => { turnSkills = plan.skills; skillNote = plan.note; if (!plan.runId || !agents.store?.workbench?.root) return; onSkillRun?.(plan.runId); new SkillCenter(agents.store.workbench.root, () => []).settle(plan.runId, { status: 'running' }); } }) : '');
+    const persona = (systemPrompt?.trim() || '你是 PMBrain 知识工作台助手。用中文清晰回答，理解并延续会话上下文。') + (agents && agent ? await agentInstructions(agents, agent, { userText: latestUser?.text ?? '', collaborationInbound: Boolean(latestUser?.collaborationFrom), taskNotes, taskActive: !!task, ...(taskMethod === undefined ? {} : { taskMethod }), ...(judge ? { judge } : {}), ...(continueSkillRunId ? { continueRunId: continueSkillRunId } : {}), onSkills: plan => { turnSkills = plan.skills; skillNote = plan.note; if (!plan.runId || !agents.store?.workbench?.root) return; onSkillRun?.(plan.runId); new SkillCenter(agents.store.workbench.root, () => []).settle(plan.runId, { status: 'running' }); } }) : '');
     const storedCurrent = task?.currentArtifactId && agents ? agents.store.artifacts().find(item => item.id === task.currentArtifactId && (!agent || item.agentId === agent.id) && (!conversationId || item.conversationId === conversationId)) : undefined;
     const brief = compileTaskBrief(currentWorkspaceTask(task, environment), askEvidence, storedCurrent ? { id: storedCurrent.id, revision: storedCurrent.revision ?? 1, title: storedCurrent.title, format: storedCurrent.format, hash: storedCurrent.hash } : undefined);
     const environmentPrompt = turnEnvironmentPrompt(environment, !!agent);
@@ -159,7 +169,9 @@ export function knowledgeWorkbenchAnswer(engine: BrainEngine, dependencies: { se
     const questions = messages.filter(item => item.role === 'user').slice(-4).map(item => retrievalText(item)).filter(Boolean);
     const query = retrievalQuery(messages, task).trim();
     if (sourceId && query && dependencies.recall) {
-      const memories = await dependencies.recall(engine, { sourceId, query: questions.at(-1) || query, sessionId: conversationId, window: messages.filter((item): item is WorkbenchMessage & { role: 'user' | 'assistant' } => item.role === 'user' || item.role === 'assistant').slice(-4).map(item => ({ role: item.role, text: retrievalText(item) })), budget: Math.min(1500, Math.floor(evidenceTokens / 2)) });
+      let memories: Awaited<ReturnType<typeof recallWorkbenchMemory>> = [];
+      try { memories = await dependencies.recall(engine, { sourceId, query: questions.at(-1) || query, sessionId: conversationId, window: messages.filter((item): item is WorkbenchMessage & { role: 'user' | 'assistant' } => item.role === 'user' || item.role === 'assistant').slice(-4).map(item => ({ role: item.role, text: retrievalText(item) })), budget: Math.min(1500, Math.floor(evidenceTokens / 2)) }); }
+      catch (error) { if (libraryReadStopped(error, signal)) libraryMiss = true; }
       const stable = memories.filter(item => item.kind === 'memory' && /· (偏好|决定)/.test(item.title));
       if (!knowledge) preferences = memories.map(memory => `- ${memory.title}：${memory.snippet}`).join('\n');
       else if (askEvidence) preferences = stable.map(memory => `- ${memory.title}：${memory.snippet}`).join('\n');
@@ -172,9 +184,12 @@ export function knowledgeWorkbenchAnswer(engine: BrainEngine, dependencies: { se
     if (knowledge) {
       progress('正在检索知识库');
       const sourceIds = agent?.id !== 'main' ? agent?.sourceIds : undefined;
-      const result = query
-        ? await dependencies.search(engine, { query, mode: 'semantic', limit: 6, ...(sourceIds ? { sourceIds } : {}) })
-        : { results: [] };
+      let result: { results: Awaited<ReturnType<typeof runAdminKnowledgeSearch>>['results'] } = { results: [] };
+      try {
+        result = query
+          ? await dependencies.search(engine, { query, mode: 'semantic', limit: 6, ...(sourceIds ? { sourceIds } : {}) })
+          : { results: [] };
+      } catch (error) { if (libraryReadStopped(error, signal)) libraryMiss = true; }
       const pages = new Set<string>();
       const hits = result.results.filter(hit => {
         if (sourceIds && (!hit.source_id || !sourceIds.includes(hit.source_id))) return false;
@@ -187,7 +202,9 @@ export function knowledgeWorkbenchAnswer(engine: BrainEngine, dependencies: { se
         const remaining = evidenceTokens - estimateTokens(evidence);
         if (remaining < 128) break;
         const allowance = Math.floor(remaining / (hits.length - position));
-        const page = hit.source_id ? await engine.getPage(hit.slug, { sourceId: hit.source_id }) : null;
+        let page: Awaited<ReturnType<BrainEngine['getPage']>> = null;
+        try { page = hit.source_id ? await engine.getPage(hit.slug, { sourceId: hit.source_id }) : null; }
+        catch (error) { if (libraryReadStopped(error, signal)) { libraryMiss = true; continue; } }
         const content = page ? `${page.compiled_truth}\n${page.timeline}` : hit.snippet;
         const known=citations.findIndex(item=>item.sourceId===hit.source_id&&item.slug===hit.slug);
         const index=known<0?citations.length:known;
@@ -208,6 +225,7 @@ export function knowledgeWorkbenchAnswer(engine: BrainEngine, dependencies: { se
         evidence += `${header}${excerptRange()}${excerpt}${offset()>0||nextOffset()!==null?'\n（节选）':''}\n`;
       }
     }
+    if (libraryMiss) onContext?.('这次没能检索知识库，已按当前对话继续回答；知识库、整理和维护不受影响');
     const summaryBlock = summary?.trim() ? (askEvidence ? `\n更早对话的摘要只说明以前说过什么，不是本期工作事实，不要据此写完成项。\n<summary>\n${summary.trim()}\n</summary>` : `\n更早对话的摘要如下，请延续其中的事实，不要向用户复述这份摘要。\n<summary>\n${summary.trim()}\n</summary>`) : '';
     const projectedMessages=messages.map(item=>referenceProjection(item,citations));
     const referenced=new Set([...`${summary??''}\n${evidence}\n${projectedMessages.map(item=>item.text).join('\n')}`.matchAll(/\[(\d+)\]/g)].map(match=>Number(match[1])));
@@ -248,7 +266,7 @@ export function knowledgeWorkbenchAnswer(engine: BrainEngine, dependencies: { se
     }
     const initial = await context.prepare(modelHistory);
     const skillFields = () => ({ ...(turnSkills?.length ? { skills: turnSkills } : {}), ...(skillNote ? { skillNote } : {}), ...(draftedNotice ? { skillNotice: draftedNotice } : {}) });
-    if (useTools) return { ...await runWorkbenchTools({ environment, native, agents, agent, messageId, sourceId, conversationId, engine, search: dependencies.search, loop: dependencies.loop!, messages, summary, task, model, knowledge, systemPrompt, temperature, contextWindow, contextThreshold, signal, attachmentSupplement, ...(settledTools?.length ? { settledTools } : {}), progress, onDelta, onReplace, onTool, onRequestEvent, system, budget, citations, unreadEvidence, context, history: initial.messages, ...(grantedMemoryTools.length ? { grantedMemoryTools } : {}) }), ...skillFields() };
+    if (useTools) return { ...await runWorkbenchTools({ environment, native, agents, agent, messageId, sourceId, conversationId, engine, search: dependencies.search, loop: dependencies.loop!, messages, summary, task, model, knowledge, systemPrompt, temperature, ...(typeof topP === 'number' ? { topP } : {}), contextWindow, contextThreshold, signal, attachmentSupplement, ...(settledTools?.length ? { settledTools } : {}), progress, onDelta, onReplace, onTool, onRequestEvent, system, budget, citations, unreadEvidence, context, history: initial.messages, ...(grantedMemoryTools.length ? { grantedMemoryTools } : {}) }), ...skillFields() };
     let composed = '';
     let stopReason: 'end' | 'length' | 'other' = 'end';
     let answeredModel = model;
@@ -267,6 +285,7 @@ export function knowledgeWorkbenchAnswer(engine: BrainEngine, dependencies: { se
         model, abortSignal: signal, maxTokens: prepared.maxTokens, contextWindow: prepared.contextWindow, system:prepared.system, messages: prepared.messages, fitRequest: fitProviderRequest,
         disableReasoning:true,requestPolicy:assistantRequestPolicy(model),onRequestEvent:event=>{onRequestEvent?.(event);const stage=requestStage(event);if(stage)progress(stage);},
         ...(typeof temperature === 'number' ? { temperature } : {}),
+        ...(typeof topP === 'number' ? { topP } : {}),
         onTextDelta: delta => { if (!delta) return;rawSegment+=delta;const next=toolTextPreview(rawSegment);if(!next.startsWith(segment))onReplace?.(composed+next,answeredModel);else onDelta?.(next.slice(segment.length));segment=next; },
         onTextReset: nextModel => { segment = '';rawSegment='';onReplace?.(composed, nextModel); },
       });
@@ -314,11 +333,11 @@ export function registerWorkbenchRoutes(app: express.Express, requireAdmin: Requ
   const search = workbenchSearchDuringTasks(options.productTasks, workbenchKnowledgeSearch);
   const recall = (...args: Parameters<typeof recallWorkbenchMemory>) => options.databaseAvailable?.() === false ? Promise.resolve([]) : recallWorkbenchMemory(args[0], vectorizing() ? { ...args[1], lexicalOnly: true } : args[1]);
   const service = new WorkbenchService(store, currentModels, options.answer ?? knowledgeWorkbenchAnswer(engine, { search, answer: chat, loop: toolLoop, recall }, options.productTasks?{tasks:options.productTasks,store}:undefined, agents), options.summarize ?? summarizeConversation, undefined, hooks);
-  options.productTasks?.attachForegroundCheck?.(() => service.hasActiveTurns());
   const coordinator = typeof options.productTasks?.attachWorkbenchAssistant === 'function'
     ? new WorkbenchAgentCoordinator(agentStore, service, options.productTasks, engine)
     : undefined;
   if (coordinator) { agents.submit = (id, prompt, key) => coordinator.submit(id, prompt, key); coordinator.start(); }
+  agents.collaborate = input => service.collaborate(input);
   const base = '/admin/api/workbench';
   const handler = (action: (req: express.Request) => unknown): RequestHandler => async (req, res) => {
     try { res.json(await action(req)); }
@@ -359,6 +378,7 @@ export function registerWorkbenchRoutes(app: express.Express, requireAdmin: Requ
   app.delete(`${base}/skill-center/:name`, requireAdmin, handler(async req => workbenchSkillCenter(agents).remove(skillName(req))));
   app.post(`${base}/agents`, requireAdmin, express.json({ limit: '64kb' }), handler(async req => { await validateAgent(agents, req.body ?? {}); return agentStore.create(req.body ?? {}); }));
   app.put(`${base}/agents/:id`, requireAdmin, express.json({ limit: '64kb' }), handler(async req => { await validateAgent(agents, req.body ?? {}, agentStore.get(id(req))); return agentStore.update(id(req), req.body ?? {}); }));
+  app.delete(`${base}/agents/:id`, requireAdmin, handler(req => agentStore.remove(id(req))));
   app.get(`${base}/artifacts`, requireAdmin, handler(() => ({ artifacts: agentStore.artifacts().map(({ content: _content, ...item }) => item) })));
   app.get(`${base}/artifacts/:id`, requireAdmin, handler(req => { const item = agentStore.artifact(id(req)); return req.query.download === '1' ? { data: readFileSync(item.path).toString('base64'), mime: item.format === 'docx' ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' : 'text/markdown;charset=utf-8', filename: `${item.title.replace(/[\\/:*?"<>|]/g, '_')}.${item.format === 'docx' ? 'docx' : 'md'}` } : item; }));
   app.get(`${base}/artifacts/:id/download`, requireAdmin, (req, res) => { try { const item = agentStore.artifact(id(req)); res.download(item.path, `${item.title.replace(/[\\/:*?"<>|]/g, '_')}.${item.format === 'docx' ? 'docx' : 'md'}`); } catch (error) { res.status(400).json({ error: String(error) }); } });

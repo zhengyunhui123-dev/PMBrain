@@ -2,13 +2,14 @@ import { expect, test } from 'bun:test';
 import { existsSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { agentInstructions, readyToCreateAssistant } from '../src/product/workbench/agent-tools';
+import { agentInstructions, readyToCreateAssistant, readyToDeleteAssistant } from '../src/product/workbench/agent-tools';
 import { WorkbenchAgentStore } from '../src/product/workbench/agents';
 import { planContext } from '../src/product/workbench/context';
 import { activityLine, EVIDENCE_GAP_TEXT, needsCurrentEvidence, scheduledTaskPrompt, visibleAssistantText, wantsSavedPlaybook, wantsSavedSkill } from '../src/product/workbench/playbook';
 import { knowledgeWorkbenchAnswer } from '../src/product/workbench/routes';
 import { WorkbenchService } from '../src/product/workbench/service';
 import { WorkbenchStore } from '../src/product/workbench/store';
+import { decidePending } from '../src/product/workbench/pending';
 import { classifyTurn, learnTurn, taskNeedsSkill } from '../src/product/workbench/turn-policy';
 import { mergeRosterFromTools, rosterStatus } from '../shared/workbench-agents';
 import { defaultAssistant, type WorkbenchMessage } from '../shared/workbench';
@@ -106,6 +107,18 @@ test('只说创建一个助手时还不能创建，明确确认后才可以', ()
   expect(readyToCreateAssistant('确认创建')).toBe(true);
   expect(readyToCreateAssistant('就按这个创建周报助手')).toBe(true);
   expect(readyToCreateAssistant('直接创建报销助手')).toBe(true);
+});
+
+test('只说删除一个助手时还不能删除，明确确认后才可以', () => {
+  expect(readyToDeleteAssistant('删除周报助手')).toBe(false);
+  expect(readyToDeleteAssistant('把报销助手去掉')).toBe(false);
+  expect(readyToDeleteAssistant('确认删除')).toBe(true);
+  expect(readyToDeleteAssistant('直接删除周报助手')).toBe(true);
+  expect(visibleAssistantText('周报助手已删除，左侧看不到它了。')).toContain('还没有真正删除');
+  expect(visibleAssistantText('已删除周报助手。', [{ name: 'assistant_delete', status: 'complete', output: JSON.stringify({ id: 'weekly', name: '周报助手', removed: true }) }])).toContain('已删除周报助手');
+  const held = decidePending({ text: '可以', pending: { kind: 'assistant-delete', fingerprint: 'x', prompt: '删除周报助手', createdAt: '2026-11-21T00:00:00.000Z', assistantRevision: 1 }, artifacts: [], now: '2026-11-21T00:00:00.000Z', assistantId: 'main', assistantRevision: 1 });
+  expect(held.action).toBe('hold');
+  expect(held.text).toContain('确认删除');
 });
 
 test('助手定义每轮可用，是否开展工作仍由当前请求决定', async () => {
@@ -337,6 +350,7 @@ test('工具真正创建后，左侧列表可以立刻补上助手', () => {
   expect(created[0]?.name).toBe('写作助手');
   expect(created[0]?.emoji).toBe('写');
   expect(mergeRosterFromTools(created, [{ name: 'assistant_create', status: 'complete', output: JSON.stringify({ id: created[0]!.id, name: '写作助手', created: true }) }])).toHaveLength(1);
+  expect(mergeRosterFromTools(created, [{ name: 'assistant_delete', status: 'complete', output: JSON.stringify({ id: created[0]!.id, name: '写作助手', removed: true }) }])).toHaveLength(0);
 });
 
 test('已保存做法每轮可用，生成本周周报才要求本期核对', async () => {

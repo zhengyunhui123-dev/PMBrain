@@ -232,7 +232,7 @@ test('对话变长后，更早的轮次压缩成摘要并继续发给模型，�
   expect(seen[1]?.messages.length).toBeLessThanOrEqual(24);
 });
 
-test('摘要失败时停止回答并保留历史与摘要进度', async () => {
+test('摘要失败时仍用最近对话回答，不推进摘要进度，完整记录保留', async () => {
   const seen: Array<{ messages: string[]; summary?: string }> = [];
   const service = new WorkbenchService(new WorkbenchStore(root()), () => [{ id: 'ollama:local', name: '本地' }], async input => {
     seen.push({ messages: input.messages.map(message => message.text), summary: input.summary });
@@ -248,8 +248,11 @@ test('摘要失败时停止回答并保留历史与摘要进度', async () => {
   (service as unknown as { store: WorkbenchStore }).store.save(seeded);
   service.send(thread.id, { text: '最新问题' });
   await service.settled(thread.id);
-  expect(seen).toHaveLength(0);
-  expect(service.get(thread.id).messages.at(-1)?.error).toContain('摘要失败');
+  expect(seen).toHaveLength(1);
+  expect(seen[0]?.messages).not.toContain('问题0');
+  expect(seen[0]?.messages).toContain('最新问题');
+  expect(service.get(thread.id).messages.at(-1)?.status).toBe('complete');
+  expect(service.get(thread.id).messages.at(-1)?.contextNote).toContain('没能压缩');
   expect(service.get(thread.id).summaryUntil).toBeUndefined();
   expect(service.get(thread.id).messages[0].text).toBe('问题0');
 });

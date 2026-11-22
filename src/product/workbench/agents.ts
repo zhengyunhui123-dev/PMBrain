@@ -125,6 +125,17 @@ export class WorkbenchAgentStore {
     if (id === 'main') this.workbench.saveAssistant(next);
     state.agents = [...state.agents.filter(row => row.id !== id), next]; this.write(state); return next;
   }
+  remove(id: string): { removed: true; id: string; name: string } {
+    if (id === 'main') throw new Error('主助手不能删除');
+    const state = this.read();
+    const agent = state.agents.find(row => row.id === id);
+    if (!agent) throw new Error('助手不存在');
+    state.agents = state.agents.filter(row => row.id !== id);
+    const { [id]: _schedule, ...schedules } = state.schedules;
+    state.schedules = schedules;
+    this.write(state);
+    return { removed: true, id, name: agent.name };
+  }
   artifacts(): WorkbenchArtifact[] { return this.read().artifacts; }
   artifact(id: string): WorkbenchArtifact {
     const artifact = this.artifacts().find(row => row.id === id);

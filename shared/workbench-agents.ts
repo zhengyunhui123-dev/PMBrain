@@ -71,10 +71,15 @@ export function rosterStatus(agentId: string, rows: Array<{ assistantId?: string
 export function mergeRosterFromTools(agents: WorkbenchAgent[], calls: Array<{ name: string; status: string; output?: string }>, now = new Date().toISOString()): WorkbenchAgent[] {
   let next = agents;
   for (const call of calls) {
-    if (call.status !== 'complete' || !call.output || (call.name !== 'assistant_create' && call.name !== 'assistant_update')) continue;
-    let output: { id?: unknown; name?: unknown; created?: unknown; updated?: unknown; revision?: unknown; skills?: unknown; sourceIds?: unknown; readDirectories?: unknown; workspaceDirectory?: unknown; deliveryFormat?: unknown };
+    if (call.status !== 'complete' || !call.output || (call.name !== 'assistant_create' && call.name !== 'assistant_update' && call.name !== 'assistant_delete')) continue;
+    let output: { id?: unknown; name?: unknown; created?: unknown; updated?: unknown; removed?: unknown; revision?: unknown; skills?: unknown; sourceIds?: unknown; readDirectories?: unknown; workspaceDirectory?: unknown; deliveryFormat?: unknown };
     try { output = JSON.parse(call.output); } catch { continue; }
-    if (typeof output.id !== 'string' || typeof output.name !== 'string' || !(output.created || output.updated)) continue;
+    if (typeof output.id !== 'string') continue;
+    if (call.name === 'assistant_delete' && output.removed) {
+      next = next.filter(agent => agent.id !== output.id);
+      continue;
+    }
+    if (typeof output.name !== 'string' || !(output.created || output.updated)) continue;
     const deliveryFormat = output.deliveryFormat === 'markdown' || output.deliveryFormat === 'docx' ? output.deliveryFormat : undefined;
     const patch: Partial<WorkbenchAgent> = {
       name: output.name,
