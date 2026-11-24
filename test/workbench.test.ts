@@ -40,7 +40,8 @@ test('知识助手回答里的角标在悬停时显示对应引用', () => {
   const message = readFileSync(new URL('../admin/src/workbench/Message.tsx', import.meta.url), 'utf8');
   const article = readFileSync(new URL('../admin/src/pages/Documentation.tsx', import.meta.url), 'utf8');
   const css = readFileSync(new URL('../admin/src/workbench/workbench.css', import.meta.url), 'utf8');
-  expect(message).toContain("citations={message.role === 'assistant' ? message.citations : undefined}");
+  expect(message).toContain('<MarkdownArticle markdown={visibleText} citations={message.citations} />');
+  expect(message).toContain('<MarkdownArticle markdown={visibleText} />');
   expect(article).toContain('role="tooltip"');
   expect(article).toContain('citation.snippet');
   expect(css).toContain('.wb-cite-card');
@@ -336,11 +337,11 @@ test('模型因为长度停下时会自动续写，检索只做一次', async ()
 test('续写遇到空内容或非长度停止时不再循环，连续八次长度上限会停下来', async () => {
   const empty = knowledgeWorkbenchAnswer({} as any, {
     search: async () => { throw new Error('不应检索'); },
-    answer: async input => ({ text: input.messages.some((message: any) => message.content === '请从中断处接着写完，不要重复已经写过的内容。') ? '' : '甲', model: 'm', stopReason: 'length' }) as any,
+    answer: async input => ({ text: input.messages.some((message: any) => typeof message.content === 'string' && message.content.startsWith('请从中断处接着写完。')) ? '' : '甲', model: 'm', stopReason: 'length' }) as any,
   });
   const stopped = await empty({ model: 'm', knowledge: false, signal: new AbortController().signal, progress: () => {}, messages: [{ id: '1', role: 'user', text: '写', status: 'complete', createdAt: '' }] });
   expect(stopped.text).toBe('甲');
-  expect(stopped.stopReason).toBe('end');
+  expect(stopped.stopReason).toBe('length');
   let calls = 0;
   const capped = knowledgeWorkbenchAnswer({} as any, {
     search: async () => ({ results: [] } as any),

@@ -18,6 +18,7 @@ import { completedDirectories, completedDirectory, listWorkbenchArtifacts } from
 import { compactRule, isDirectoryStep, learnTurn, mergeTaskRules } from './turn-policy';
 import { buildTurnEnvironment, selectedDirectory, type TurnEnvironment } from './agent-runtime';
 import { taskRequiresEvidence } from './task-context';
+import { assistantSetupAction, runAssistantSetup, type AssistantSetupHooks } from './assistant-setup';
 
 function periodCitationCount(citations: WorkbenchCitation[]) {
   return citations.filter(item => item.origin !== 'prior-artifact').length;
@@ -158,7 +159,7 @@ export class WorkbenchService {
   constructor(private store: WorkbenchStore, private models: () => WorkbenchModel[], private answer: WorkbenchAnswer, private summarize?: WorkbenchSummarizer, private attachmentIo?: {
     ocr?: (bytes: Buffer, mime: string, signal: AbortSignal) => Promise<string>;
     office?: (bytes: Buffer, name: string, signal: AbortSignal) => Promise<string>;
-  }, private memoryHooks?: WorkbenchMemoryHooks) {
+  }, private memoryHooks?: WorkbenchMemoryHooks, private assistantSetup?: AssistantSetupHooks) {
     for (const row of store.summaries()) {
       if (!row.generating) continue;
       const conversation = store.get(row.id);
@@ -365,6 +366,7 @@ export class WorkbenchService {
     const turnKnowledge = conversation.knowledge && !isDirectoryStep(currentUser?.text ?? '');
     if (currentUser) currentUser.turnId = turnId;
     const agentBefore = structuredClone(new WorkbenchAgentStore(this.store).get(conversation.assistantId ?? 'main'));
+    const setupAction = this.assistantSetup ? assistantSetupAction(conversation, currentUser, agentBefore, input.retry === true) : undefined;
     let assistant = agentBefore;
     let turnScope: ReturnType<typeof learnTurn>['scope'] | undefined;
     let ruleNotice = carriedNotice;
@@ -376,7 +378,7 @@ export class WorkbenchService {
     let savedPlaybook = carriedPlaybook;
     let skillNotice = carriedSkillNotice;
     let savedSkill = carriedSkill;
-    if (!input.retry) {
+    if (!input.retry && !setupAction) {
       const spoken = [...conversation.messages].reverse().find(message => message.role === 'user');
       if (spoken?.collaborationFrom) turnScope = 'once';
       else if (spoken?.text) {
@@ -491,6 +493,15 @@ export class WorkbenchService {
       let skillRunId = input.skillRunId;
       try {
         const userTurn = [...conversation.messages].reverse().find(message => message.role === 'user');
+        if (setupAction && userTurn && this.assistantSetup) {
+          opened = true;
+          acceptReady(conversation);
+          await runAssistantSetup({
+            action: setupAction, agent: assistant, user: userTurn, reply, conversation, model, signal: session.signal,
+            hooks: this.assistantSetup, store: new WorkbenchAgentStore(this.store), save: () => saveSoon(true), onRequestEvent: reportRequest,
+          });
+          return;
+        }
         const decision = decidePending({
           retry: input.retry,
           text: userTurn?.text ?? '',
@@ -502,6 +513,7 @@ export class WorkbenchService {
           assistantId: assistant.id,
           assistantRevision: assistant.revision,
           taskId: conversation.task?.id,
+          assistantSetupManaged: !!this.assistantSetup,
         });
         if (decision.action === 'hold') {
           reply.text = decision.text ?? '';
@@ -512,7 +524,7 @@ export class WorkbenchService {
           acceptReady(conversation);
           return;
         }
-        const confirmation = decision.usedConfirm ?? (input.retry && conversation.pending?.kind === 'assistant-create' ? conversation.pending.fingerprint : undefined);
+        const confirmation = decision.usedConfirm ?? (!this.assistantSetup && input.retry && conversation.pending?.kind === 'assistant-create' ? conversation.pending.fingerprint : undefined);
         if (decision.pending) conversation.pending = decision.pending;
         else if (decision.clearPending || (openedTask && !confirmation)) delete conversation.pending;
         if (decision.currentArtifactId && conversation.task) conversation.task = { ...conversation.task, currentArtifactId: decision.currentArtifactId };
@@ -696,9 +708,10 @@ export class WorkbenchService {
           const spoken = [...conversation.messages].reverse().find(message => message.role === 'user');
           let knowledge = result.knowledge ?? (turnKnowledge ? (citations.length ? 'used' : 'none') : 'off');
           let text = visibleAssistantText(result.text, reply.toolCalls, { savedSkill: reply.savedSkill });
+          const incomplete = result.stopReason === 'length';
           const evidenceTask = taskRequiresEvidence(spoken?.text ?? '', conversation.task);
           const citedNow = periodCitationCount(citations);
-          const evidenceGap = evidenceTask && knowledge !== 'off' && citedNow === 0;
+          const evidenceGap = !incomplete && evidenceTask && knowledge !== 'off' && citedNow === 0;
           if (evidenceGap) { text = EVIDENCE_GAP_TEXT; knowledge = 'none'; reply.evidenceGap = true; }
           else delete reply.evidenceGap;
           reply.contextManifest = {
@@ -725,6 +738,12 @@ export class WorkbenchService {
           reply.knowledge = knowledge;
           if (result.stopReason) reply.stopReason = result.stopReason;
           if (result.skillNotice) reply.skillNotice = result.skillNotice;
+          if (incomplete) {
+            reply.status = 'error';
+            reply.errorCode = 'answer_incomplete';
+            reply.error = '这次续写尚未生成完整回答。已写出的正文和资料已保存，可以重新生成。';
+            return;
+          }
           reply.status = 'complete';
           if (conversation.task && evidenceGap) conversation.task = { ...conversation.task, openItems: [...new Set([...(conversation.task.openItems ?? []), '本期材料还没齐'])].slice(-8) };
           else if (conversation.task && citedNow && conversation.task.openItems?.includes('本期材料还没齐')) {
@@ -798,11 +817,12 @@ export class WorkbenchService {
     }
     const live = this.get(conversation.id);
     const reply = [...live.messages].reverse().find(message => message.role === 'assistant');
-    if (!reply || reply.status !== 'complete') throw new Error(reply?.error || (reply?.status === 'cancelled' ? '协作已取消' : '协作失败'));
+    const incomplete = reply?.stopReason === 'length' && Boolean(reply.text.trim());
+    if (!reply || reply.status !== 'complete' && !incomplete) throw new Error(reply?.error || (reply?.status === 'cancelled' ? '协作已取消' : '协作失败'));
     const full = reply.text ?? '';
     const artifacts = new WorkbenchAgentStore(this.store).artifacts().filter(item => item.conversationId === conversation.id && item.messageId === reply.id).map(item => ({ id: item.id, title: item.title, format: item.format }));
     const note = [reply.stopReason === 'length' ? '对方输出尚未写完' : '', reply.evidenceGap ? '对方完成了回答，但没有找到本期资料' : ''].filter(Boolean).join('；');
-    return { assistantId: target.id, assistantName: target.name, conversationId: conversation.id, status: reply.status, text: full.slice(0, 8000), truncated: full.length > 8000, artifacts, collaborated: true, ...(reply.stopReason === 'length' ? { incomplete: true } : {}), ...(note ? { note } : {}) };
+    return { assistantId: target.id, assistantName: target.name, conversationId: conversation.id, status: reply.status, text: full.slice(0, 8000), truncated: full.length > 8000, artifacts, collaborated: !incomplete, ...(incomplete ? { incomplete: true } : {}), ...(note ? { note } : {}) };
   }
 
   private applyEditedAttachments(_conversationId: string, target: WorkbenchMessage, listed: WorkbenchMessage['attachments'], hydrated: boolean) {

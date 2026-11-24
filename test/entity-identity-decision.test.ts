@@ -37,7 +37,7 @@ test('身份问题留在当前实体，数据库、权限和丢锁仍然停止�
 
 test('实体目录没有变化时继续用已读名单', async () => {
   let calls = 0;
-  const engine = { async executeRaw() { calls += 1; return [{ n: 1, same: 1 }]; } };
+  const engine = { async executeRaw<T>() { calls += 1; return [{ n: 1, same: 1 }] as T[]; } };
   const loaded = [existing];
   const pages = await refreshIngestCandidates(engine, loaded, ['vault']);
   expect(pages).toBe(loaded);
@@ -49,10 +49,10 @@ test('本批刚写下的实体只补那一页，不把全部别名再读一遍',
   const created = { slug: 'projects/new', source_id: 'vault', type: 'project', title: '新项目', aliases: ['新'], knowledge_revision: '33333333-3333-4333-8333-333333333333' };
   const sql: string[] = [];
   const engine = {
-    async executeRaw(query: string) {
+    async executeRaw<T>(query: string) {
       sql.push(query);
-      if (query.includes('AS same')) return [{ n: 2, same: 1 }];
-      if (query.includes('NOT (p.knowledge_revision')) return [created];
+      if (query.includes('AS same')) return [{ n: 2, same: 1 }] as T[];
+      if (query.includes('NOT (p.knowledge_revision')) return [created] as T[];
       throw new Error('不应重读全部实体');
     },
   };
@@ -65,9 +65,9 @@ test('有实体被删掉时才重新读取整本目录', async () => {
   const kept = { ...existing, knowledge_revision: '11111111-1111-4111-8111-111111111111' };
   const sql: string[] = [];
   const engine = {
-    async executeRaw(query: string) {
+    async executeRaw<T>(query: string) {
       sql.push(query);
-      if (query.includes('AS same')) return [{ n: 0, same: 0 }];
+      if (query.includes('AS same')) return [{ n: 0, same: 0 }] as T[];
       if (query.includes('NOT (p.knowledge_revision')) return [];
       return [];
     },

@@ -6,7 +6,7 @@ import { TextDecoder } from 'node:util';
 import { atomicWriteFileSync } from '../../core/atomic-write';
 import type { WorkbenchAgentTools } from './agent-tools';
 import type { TurnEnvironment } from './agent-runtime';
-import { selectedDirectory } from './agent-runtime';
+import { selectedDirectory, workspaceAllowsWriting } from './agent-runtime';
 
 export const WORKSPACE_MUTATIONS = ['local_write', 'local_edit', 'local_delete', 'local_move', 'local_restore'];
 const TEXT_EXTENSIONS = new Set(['.md', '.markdown', '.txt', '.csv', '.tsv', '.json', '.jsonl', '.yaml', '.yml', '.html', '.css', '.xml', '.log', '.js', '.ts', '.tsx', '.jsx', '.py', '.sh', '.ps1', '.toml', '.ini']);
@@ -46,7 +46,7 @@ export function workspaceFileHandlers(context: WorkbenchAgentTools, input: { age
   const agent = () => context.store.get(input.agentId);
   const target = async (raw: unknown, existing = true, writing = true) => {
     if (typeof raw !== 'string' || !isAbsolute(raw)) throw new Error('请提供工作目录内的完整文件路径');
-    if (writing && agent().workspaceAccess !== 'read-write') throw new Error('请在工作目录旁将文件权限设为「读写文件」后继续');
+    if (writing && !workspaceAllowsWriting(agent(), input.environment)) throw new Error('请在对话上方选择要操作的工作目录');
     const root = realpathSync(selectedDirectory(input.environment));
     const path = resolve(raw); safeParts(root, path);
     const parent = dirname(path);
@@ -61,7 +61,7 @@ export function workspaceFileHandlers(context: WorkbenchAgentTools, input: { age
     if (sourceRoots.some(p => inside(p, path)) && !generated) throw new Error('不能修改知识来源中的原始资料或 Wiki，请使用独立工作目录');
     const indexed = await context.engine.executeRaw<{ source_path: string }>('SELECT source_path FROM pages WHERE source_path=$1 LIMIT 1', [path]);
     if (indexed.length && !generated) throw new Error('该文件是已登记的知识原始资料，不能通过文件工具修改');
-    if (writing && agent().workspaceAccess !== 'read-write') throw new Error('工作目录读写权限已被撤销');
+    if (writing && !workspaceAllowsWriting(agent(), input.environment)) throw new Error('工作目录已改变，请在当前目录重新执行');
     if (input.environment.workspace?.origin === 'profile' && canonical(agent().workspaceDirectory ?? '') !== root) throw new Error('工作目录已改变，请在当前目录重新执行');
     if (lstatSync(root).isSymbolicLink() || !inside(root, realpathSync(parent))) throw new Error('工作目录已改变或目标越界');
     safeParts(root, path);

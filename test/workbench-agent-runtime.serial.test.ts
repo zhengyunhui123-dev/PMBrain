@@ -45,7 +45,7 @@ beforeAll(async () => {
   for (const key of keys) delete process.env[key]; process.env.PMBRAIN_HOME = root; process.env.GBRAIN_HOME = root;
   mkdirSync(join(root, '.pmbrain')); mkdirSync(directory); writeFileSync(path, work);
   writeFileSync(join(root, '.pmbrain', 'config.json'), JSON.stringify({ engine: 'pglite', model_usage: { generative_enabled: false, embedding_enabled: false } }));
-  engine = postgresUrl ? new PostgresEngine() : new WorkerPgliteEngine() as unknown as BrainEngine; await engine.connect(postgresUrl ? { database_url: postgresUrl } : {}); await engine.initSchema();
+  engine = postgresUrl ? new PostgresEngine() : new WorkerPgliteEngine() as unknown as BrainEngine; await engine.connect(postgresUrl ? { database_url: postgresUrl } : { database_path: join(root, 'database') }); await engine.initSchema();
   if (postgresUrl) await engine.executeRaw("DELETE FROM minion_jobs WHERE queue='pmbrain-product'");
   if (postgresUrl) config.engine = 'postgres';
   modelServer = Bun.serve({ port: 0, async fetch(req) {
@@ -54,9 +54,10 @@ beforeAll(async () => {
     const create = input.messages.some((message: any) => message.role === 'user' && String(message.content).includes('创建周报助手'));
     const delegate = input.messages.some((message: any) => message.role === 'user' && String(message.content).includes('交给周报助手'));
     let tool: { name: string; arguments: Record<string, unknown> } | undefined;
+    let draft: Record<string, unknown> | undefined;
     if (create && !assistantCreateSent) {
       assistantCreateSent = true;
-      tool = { name: 'assistant_create', arguments: { name: '周报助手', systemPrompt: '只写有依据的工作', workflow: '读取工作记录，按完成和推进中写周报', readDirectories: [directory], skills: ['weekly-report'], sourceIds: ['default'] } };
+      draft = { name: '周报助手', systemPrompt: '只写有依据的工作', workflow: '读取工作记录，按完成和推进中写周报', readDirectories: [directory], skills: ['weekly-report'], sourceIds: ['default'] };
     } else if (delegate && !delegatedTaskSent) {
       delegatedTaskSent = true;
       tool = { name: 'task_submit', arguments: { assistantId: agent.id, prompt: '读取工作记录，写周报并保存 Word' } };
@@ -67,7 +68,7 @@ beforeAll(async () => {
       assistantTaskStep = 2;
       tool = { name: 'artifact_save', arguments: { title: '周报', content: '# 已完成\n完成需求评审 [1]\n# 下周计划\n计划上线 [1]' } };
     }
-    const delta = tool ? { tool_calls: [{ index: 0, id: `tool-${fixtureToolCall++}`, type: 'function', function: { name: tool.name, arguments: JSON.stringify(tool.arguments) } }] } : { content: delegate ? '任务已提交，请到任务对话查看进展。' : create ? '周报助手已经创建。' : '周报文件已经保存。' };
+    const delta = tool ? { tool_calls: [{ index: 0, id: `tool-${fixtureToolCall++}`, type: 'function', function: { name: tool.name, arguments: JSON.stringify(tool.arguments) } }] } : { content: draft ? JSON.stringify(draft) : delegate ? '任务已提交，请到任务对话查看进展。' : '周报文件已经保存。' };
     const payload = { id: 'fixture', object: 'chat.completion.chunk', created: 1, model: 'chat', choices: [{ index: 0, delta, finish_reason: tool ? 'tool_calls' : 'stop' }], usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } };
     return new Response(`data: ${JSON.stringify(payload)}\n\ndata: [DONE]\n\n`, { headers: { 'content-type': 'text/event-stream' } });
   } });
@@ -78,7 +79,7 @@ afterAll(async () => { slow = false; if (server) await new Promise<void>(resolve
 
 test('authenticated conversation creation configures rules, skill and file access, then survives reopening', async () => {
   const conversation = await request('/conversations', { knowledge: false });
-  await request(`/conversations/${conversation.id}/messages`, { text: `确认创建周报助手，读取 ${directory}，只写有依据的工作`, knowledge: false });
+  await request(`/conversations/${conversation.id}/messages`, { text: `确认创建周报助手，读取 "${directory}"，使用技能 weekly-report，只写有依据的工作`, knowledge: false });
   for (let count = 0; count < 200; count++) { const value = await request(`/conversations/${conversation.id}`); if (value.messages.at(-1)?.status !== 'running') break; await Bun.sleep(30); }
   agent = (await request('/agents')).agents.find((row: any) => row.name === '周报助手');
   expect(agent.skills).toEqual(['weekly-report']); expect(agent.readDirectories).toEqual([directory]);

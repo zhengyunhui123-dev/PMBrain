@@ -7,6 +7,24 @@ test('small model windows reserve actual output once and leave useful input spac
   const context=new RequestContext({contextWindow:8192,model:'ollama:qwen3.6:latest',system:'',tools:[],signal:new AbortController().signal});
   expect(context.outputTokens).toBeLessThanOrEqual(2048);expect(context.budget).toBeGreaterThan(4000);expect(context.budget+context.outputTokens).toBeLessThan(8192);
 });
+test('synthesis preserves the real model window, output reserve and latest inputs before older history', async () => {
+  const older = '不相关的旧历史'.repeat(900);
+  const source = '【本轮证据】项目需求评审已明确在三月完成。'.repeat(45);
+  const runtime = new RequestContext({
+    contextWindow: 4096, system: '工具说明'.repeat(900), answerSystem: '根据本轮材料续写',
+    systemContext: { prefix: '<knowledge>', content: source, suffix: '</knowledge>' },
+    tools: [{ name: 'read', description: '工具描述'.repeat(800), inputSchema: { type: 'object' } }],
+    signal: new AbortController().signal,
+  });
+  const result = await runtime.prepare([
+    { role: 'user', content: older }, { role: 'assistant', content: '旧回复' },
+    { role: 'user', content: '本轮请写交付全文' }, { role: 'assistant', content: '已写内容的尾部' }, { role: 'user', content: '续写剩余正文' },
+  ], 1024, true, 3);
+  expect(result.contextWindow).toBe(4096);
+  expect(result.maxTokens).toBe(1024);
+  expect(result.system).toContain('项目需求评审已明确在三月完成');
+  expect(result.messages.map(message => message.content)).toEqual(['本轮请写交付全文', '已写内容的尾部', '续写剩余正文']);
+});
 test('an unavailable local model is a connection failure, while certificate rejection is preserved',()=>{
   expect(contextFailure(new Error('Unable to connect. Is the computer able to access the url?')).code).toBe('model_connection_lost');
   expect(contextFailure(new Error('unknown certificate verification error')).message).toContain('certificate verification');

@@ -1,3 +1,5 @@
+import type { WorkbenchAssistantDraft } from './workbench-agents';
+
 export interface WorkbenchCitation { sourceId: string | null; slug: string; title: string; snippet: string; kind?: 'memory'; origin?: 'prior-artifact'; factId?: number; entitySlug?: string | null; conversationId?: string; messageId?: string; memoryHash?: string }
 export interface WorkbenchMemory {
   sourceId: string;
@@ -105,6 +107,10 @@ export interface WorkbenchPending {
   createdAt: string;
   assistantRevision?: number;
   taskId?: string;
+  draft?: WorkbenchAssistantDraft;
+  draftId?: string;
+  reviewMessageId?: string;
+  confirmedMessageId?: string;
 }
 export interface WorkbenchTask {
   id: string;

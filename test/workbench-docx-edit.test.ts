@@ -40,7 +40,7 @@ function fixture() {
   const agents = new WorkbenchAgentStore(store);
   const engine = { executeRaw: async (sql: string) => sql.includes('source_path') ? [] : [{ id: 'default', local_path: library }] } as any;
   const context = { store: agents, engine, config: () => ({ engine: 'pglite' as const, desktop: { knowledge_directory: library } }) };
-  const agent = agents.create({ name: '文件助手', workspaceDirectory: work, workspaceAccess: 'read-write', readDirectories: [work] });
+  const agent = agents.create({ name: '文件助手', workspaceDirectory: work, readDirectories: [work] });
   const handlers = (text = '请修改这段') => agentHandlers(context, { agent, userText: text, conversationId: 'conversation', messageId: 'turn', citations: [], cite: () => 1, active: () => true });
   const run = (name: string, input: unknown, text?: string) => handlers(text).get(name)!.execute(input, new AbortController().signal) as Promise<any>;
   return { root, work, library, store, agents, context, agent, run };

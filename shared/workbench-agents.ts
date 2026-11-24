@@ -25,7 +25,6 @@ export interface WorkbenchAgent extends KnowledgeAssistantSettings {
   sourceIds: string[];
   readDirectories: string[];
   workspaceDirectory?: string;
-  workspaceAccess?: 'new-files' | 'read-write';
   workspaceUpdatedAt?: string;
   deliveryFormat: 'markdown' | 'docx';
   schedule?: WorkbenchSchedule;
@@ -35,6 +34,7 @@ export interface WorkbenchAgent extends KnowledgeAssistantSettings {
   createdAt: string;
   updatedAt: string;
 }
+export type WorkbenchAssistantDraft = Pick<WorkbenchAgent, 'name' | 'description' | 'systemPrompt' | 'workflow' | 'knowledge' | 'sourceIds' | 'readDirectories' | 'workspaceDirectory' | 'deliveryFormat' | 'skills' | 'schedule'>;
 export interface WorkbenchArtifact {
   id: string;
   agentId: string;

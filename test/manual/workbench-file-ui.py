@@ -52,12 +52,10 @@ with sync_playwright() as p:
         page.locator('.wb-workspace-choice').click()
         page.get_by_label('这个助手的工作目录').fill(meta['work'])
         page.get_by_role('button', name='使用此目录', exact=True).click()
-        page.get_by_label('工作目录文件权限', exact=True).select_option('new-files')
-        expect(page.get_by_label('工作目录文件权限', exact=True)).to_be_enabled()
-        page.get_by_label('工作目录文件权限', exact=True).select_option('read-write')
-        expect(page.get_by_label('工作目录文件权限', exact=True)).to_be_enabled()
+        expect(page.locator('.wb-workspace-choice')).to_contain_text(meta['work'])
+        expect(page.get_by_label('工作目录文件权限', exact=True)).to_have_count(0)
         page.reload(wait_until='networkidle')
-        expect(page.get_by_label('工作目录文件权限', exact=True)).to_have_value('read-write')
+        expect(page.locator('.wb-workspace-choice')).to_contain_text(meta['work'])
         page.get_by_role('checkbox', name='知识库', exact=True).uncheck()
         work = pathlib.Path(meta['work'])
         path = work / 'PMBrain写的内容.md'
@@ -69,7 +67,7 @@ with sync_playwright() as p:
         send('把刚才文件里的「今天核对了文件操作能力」改成「今天完成了文件操作验收」，其他原文不要动。')
         assert '今天完成了文件操作验收' in path.read_text(encoding='utf-8')
         page.reload(wait_until='networkidle')
-        expect(page.get_by_label('工作目录文件权限', exact=True)).to_have_value('read-write')
+        expect(page.locator('.wb-workspace-choice')).to_contain_text(meta['work'])
         deleted = send('把当前工作目录里的旧稿.md 删除。')
         assert not (work / '旧稿.md').exists()
         assert any(call['name'] == 'local_delete' and call['status'] == 'complete' for call in deleted['messages'][-1].get('toolCalls', []))
@@ -84,7 +82,7 @@ with sync_playwright() as p:
         assert pathlib.Path(meta['library'], '原始资料.md').read_text(encoding='utf-8') == '受保护知识原文'
         assert not errors, errors
         page.screenshot(path=str((out / 'live-final.png').resolve()), full_page=True)
-        (out / 'receipt.json').write_text(json.dumps({'checks': ['目录与读写权限保存后重载', '真实MiMo追加保留原文', '局部编辑', '删除与刷新后恢复', '按指定文件名创建', '建目录复制并重命名', '知识原文保留'], 'errors': errors, 'root': meta['root']}, ensure_ascii=False, indent=2), encoding='utf-8')
+        (out / 'receipt.json').write_text(json.dumps({'checks': ['工作目录保存后重载并直接读写', '真实MiMo追加保留原文', '局部编辑', '删除与刷新后恢复', '按指定文件名创建', '建目录复制并重命名', '知识原文保留'], 'errors': errors, 'root': meta['root']}, ensure_ascii=False, indent=2), encoding='utf-8')
     finally:
         page.screenshot(path=str((out / 'last.png').resolve()), full_page=True)
         (out / 'last.txt').write_text(page.locator('body').inner_text(), encoding='utf-8')

@@ -16,7 +16,7 @@ function fixture() {
   const agents = new WorkbenchAgentStore(store);
   const engine = { executeRaw: async (sql: string) => sql.includes('source_path') ? [] : [{ id: 'default', local_path: library }] } as any;
   const context = { store: agents, engine, config: () => ({ engine: 'pglite' as const, desktop: { knowledge_directory: library } }) };
-  const agent = agents.create({ name: '文件助手', workspaceDirectory: work, workspaceAccess: 'read-write', readDirectories: [read] });
+  const agent = agents.create({ name: '文件助手', workspaceDirectory: work, readDirectories: [read] });
   const handlers = (text = '按要求修改文件', current = agent, currentContext = context) => agentHandlers(currentContext, { agent: current, userText: text, conversationId: 'test', messageId: 'turn', citations: [], cite: () => 1, active: () => true });
   const run = (name: string, input: unknown, text?: string) => handlers(text).get(name)!.execute(input, new AbortController().signal) as Promise<any>;
   return { root, work, read, library, agents, context, agent, handlers, run };
@@ -93,20 +93,42 @@ test('工作目录内可移动和改名已有文件，只读目录和知识库�
   } finally { rmSync(f.root, { recursive: true, force: true }); }
 });
 
-test('旧助手保留仅新建权限，授权读写后持久化；模型不能自行提升权限', async () => {
+test('旧助手选过工作目录就能新建和编辑，模型不能改到未经选择的目录', async () => {
   const f = fixture();
   try {
-    const legacy = f.agents.create({ name: '旧助手', workspaceDirectory: f.work });
-    expect(legacy.workspaceAccess ?? 'new-files').toBe('new-files');
+    const legacy = f.agents.create({ name: '旧助手', workspaceDirectory: f.work, readDirectories: [f.read] });
+    const statePath = join(f.root, 'state', 'agents.json');
+    const state = JSON.parse(readFileSync(statePath, 'utf8'));
+    state.agents.find((item: { id: string }) => item.id === legacy.id).workspaceAccess = 'new-files';
+    writeFileSync(statePath, JSON.stringify(state));
+    const agents = new WorkbenchAgentStore(new WorkbenchStore(join(f.root, 'state')));
+    const saved = agents.get(legacy.id);
+    expect(saved).not.toHaveProperty('workspaceAccess');
+    const loaded = f.handlers('读取、新建并编辑工作目录中的文件', saved, { ...f.context, store: agents });
+    const run = (name: string, input: object) => loaded.get(name)!.execute(input, new AbortController().signal);
     const path = join(f.work, '原有.md'); writeFileSync(path, '保留');
-    await expect(f.handlers('追加内容', legacy).get('local_write')!.execute({ path, mode: 'append', content: '禁止', baseHash: '0'.repeat(64) }, new AbortController().signal)).rejects.toThrow('读写');
+    await run('local_read', { path });
+    await run('local_write', { path, mode: 'append', content: '并补写' });
+    await run('local_write', { path: '新文件.md', mode: 'create', content: '新内容' });
+    expect(readFileSync(path, 'utf8')).toBe('保留并补写');
+    expect(readFileSync(join(f.work, '新文件.md'), 'utf8')).toBe('新内容');
+    const outside = join(f.read, '外部资料.md'); writeFileSync(outside, '只读资料');
+    const main = agents.get('main');
+    const readOnlySetup = f.handlers(`修改旧助手的说明，资料放在 "${f.read}"`, main, { ...f.context, store: agents });
+    const change = { id: saved.id, revision: saved.revision, workspaceDirectory: f.read };
+    await expect(readOnlySetup.get('assistant_update')!.execute(change, new AbortController().signal)).rejects.toThrow('用户明确指定');
+    const outsideTools = f.handlers(`请编辑 "${f.read}" 的文件`, saved, { ...f.context, store: agents });
+    const receipt = await outsideTools.get('local_read')!.execute({ path: outside }, new AbortController().signal) as { hash: string };
+    await expect(outsideTools.get('local_write')!.execute({ path: outside, mode: 'append', content: '禁止', baseHash: receipt.hash }, new AbortController().signal)).rejects.toThrow('工作目录');
+    expect(readFileSync(outside, 'utf8')).toBe('只读资料');
+    const selected = f.handlers(`修改旧助手的工作目录为 "${f.read}"`, main, { ...f.context, store: agents });
+    await selected.get('assistant_update')!.execute(change, new AbortController().signal);
+    await expect(run('local_write', { path: '失效.md', mode: 'create', content: '禁止' })).rejects.toThrow('工作目录');
+    expect(agents.get(saved.id).workspaceDirectory).toBe(f.read);
     expect(agentTools(f.agent, '文件里写了什么？', f.context).map(row => row.name)).not.toContain('local_delete');
     expect(fileRequestAction('怎样删除文件？')).toBeUndefined();
     expect(fileRequestAction('能帮我删除这个文件吗？')).toBe('delete');
     expect(agentTools(f.agent, '把旧文件删掉', f.context).map(row => row.name)).toContain('local_delete');
-    const stored = new WorkbenchAgentStore(new WorkbenchStore(join(f.root, 'state'))).get(f.agent.id);
-    expect(stored.workspaceAccess).toBe('read-write');
-    expect(readFileSync(path, 'utf8')).toBe('保留');
   } finally { rmSync(f.root, { recursive: true, force: true }); }
 });
 

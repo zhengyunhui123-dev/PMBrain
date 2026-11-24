@@ -118,7 +118,7 @@ test('unfinished tool protocol is reported as an error instead of a completed as
   const conversation = f.service.create({ knowledge: false });
   f.service.send(conversation.id, { text: '创建一个周报助手，按实际进展写周报' }); await f.service.settled(conversation.id);
   const reply = f.service.get(conversation.id).messages.at(-1)!;
-  expect(reply.status).toBe('error'); expect(reply.error).toMatch(/工具指令|没有写出正文/);
+  expect(reply.status).toBe('error'); expect(reply.error).toMatch(/工具指令|没有写出正文|未给出正文/);
   expect(reply.text).toBe(''); expect(f.agents.list()).toHaveLength(1);
 });
 test('specialist searches send the allowed Source scope and suppress mismatched results', async () => {

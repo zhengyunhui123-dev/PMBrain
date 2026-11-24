@@ -38,9 +38,27 @@ test('continuation stops before growing answer exceeds the next request budget',
   let calls = 0;
   const answer = knowledgeWorkbenchAnswer({} as any, { search: async () => ({ results: [] } as any), answer: async input => { calls++; return { text: '回答'.repeat(2000), model: input.model, stopReason: 'length' } as any; } });
   const result = await answer({ messages: [message('new', '问题')], model: 'm', knowledge: false, contextWindow: 4096, signal: new AbortController().signal, progress: () => {} });
-  expect(calls).toBe(1);
+  expect(calls).toBe(2);
   expect(result.text).toBe('回答'.repeat(2000));
   expect(result.stopReason).toBe('length');
+});
+
+test('模型续写中断时，重开保留已写正文但不能显示回答完成', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'pmbrain-incomplete-answer-'));
+  const store = new WorkbenchStore(dir);
+  const models = () => [{ id: 'small', name: '小模型', contextWindow: 4096 }];
+  const service = new WorkbenchService(store, models, async () => ({
+    text: '第一节已写好，后续章节尚未生成。', model: 'small',
+    citations: [{ sourceId: 'a', slug: 'project', title: '项目资料', snippet: '原文' }], stopReason: 'length',
+  }));
+  const thread = service.create({});
+  service.send(thread.id, { text: '给我写全文' });
+  await service.settled(thread.id);
+  const reply = new WorkbenchStore(dir).get(thread.id).messages.at(-1)!;
+  expect(reply.status).toBe('error');
+  expect(reply.errorCode).toBe('answer_incomplete');
+  expect(reply.text).toBe('第一节已写好，后续章节尚未生成。');
+  expect(reply.citations?.[0]?.slug).toBe('project');
 });
 
 test('summary batches respect a small summary model window and include the end of a large attachment', async () => {

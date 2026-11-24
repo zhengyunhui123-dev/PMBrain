@@ -14,13 +14,20 @@ export interface TurnEnvironment {
   workspaceCandidates: string[];
 }
 
-function userDirectories(text: string): string[] {
+export function userDirectories(text: string): string[] {
   const quoted = [...text.matchAll(/["“‘'`]((?:[A-Za-z]:[\\/]|\/)[^"”’'`\r\n]+)["”’'`]/g)].map(match => match[1]!);
   const plain = [...text.matchAll(/(?:^|[\s（(：:])((?:[A-Za-z]:[\\/]|\/)[^\s"”’'`，,。；;！？?<>]+)(?=$|[\s"”’'`，,。；;！？?<>])/g)].map(match => match[1]!);
   return [...new Set([...quoted, ...plain].filter(path => isAbsolute(path)).flatMap(path => {
     try { return existsSync(path) ? statSync(path).isDirectory() ? [realpathSync(path)] : [] : extname(path) ? [] : [resolve(path)]; }
     catch { return [resolve(path)]; }
   }))];
+}
+
+export function requestedWorkspaceDirectory(text: string): string | undefined {
+  if (!/(?:工作目录|输出目录|成果目录)\s*(?:设为|设置为|改为|改成|为|是|用|选|[：:])|(?:设置|设定|选择|指定).{0,120}(?:为|作为)(?:工作目录|输出目录|成果目录)/.test(text)) return;
+  const directories = userDirectories(text);
+  if (directories.length !== 1 || /(?:不要|不用|别|取消).{0,12}(?:工作目录|输出目录|成果目录)/.test(text)) return;
+  return directories[0];
 }
 
 export function buildTurnEnvironment(input: { agent?: WorkbenchAgent; messages: Array<Pick<WorkbenchMessage, 'id' | 'role' | 'text' | 'createdAt'>>; now?: string; timeZone?: string }): TurnEnvironment {
@@ -86,6 +93,18 @@ export function selectedDirectory(environment: TurnEnvironment, requested?: stri
   const rel = relative(realpathSync(root), realpathSync(path));
   if (isAbsolute(rel) || rel === '..' || rel.startsWith(`..${sep}`)) throw new Error(`目标与用户选定的工作目录不一致，请使用 ${root} 或先询问用户`);
   return path;
+}
+
+export function workspaceAllowsWriting(agent: WorkbenchAgent | undefined, environment: TurnEnvironment | undefined): boolean {
+  if (!agent?.workspaceDirectory || !environment?.workspace) return false;
+  try {
+    const root = realpathSync(agent.workspaceDirectory);
+    const path = realpathSync(environment.workspace.path);
+    const rel = relative(root, path);
+    return !isAbsolute(rel) && rel !== '..' && !rel.startsWith(`..${sep}`);
+  } catch {
+    return false;
+  }
 }
 
 export function validateRelativePeriod(text: string, name: string, environment: TurnEnvironment): void {
