@@ -93,9 +93,11 @@ test('重试时再次读取旧稿，会按本轮已有资料重新编号，不�
   const answer = knowledgeWorkbenchAnswer({} as never, {
     search: async () => ({ results: [] }) as never,
     answer: async () => { throw new Error('这条路径应走工具，不应直接回答'); },
-    loop: (async (request: { toolHandlers: Map<string, { execute: (raw: unknown, signal: AbortSignal, context?: { toolCallId: string }) => Promise<unknown> }> }) => {
+    loop: (async (request: { toolHandlers: Map<string, { execute: (raw: unknown, signal: AbortSignal, context?: { toolCallId: string }) => Promise<unknown> }>; onTextDelta: (text: string) => void }) => {
       captured = await request.toolHandlers.get('artifact_read')!.execute({ id: saved.id }, new AbortController().signal, { toolCallId: 'again' }) as typeof captured;
-      return { stopReason: 'end', messages: [] };
+      const finalText = '已核对旧稿，预算8800 [2]。';
+      request.onTextDelta(finalText);
+      return { stopReason: 'end', finalText, messages: [] };
     }) as never,
   }, undefined, { store, engine: {}, config: () => ({}) } as never);
   const result = await answer({

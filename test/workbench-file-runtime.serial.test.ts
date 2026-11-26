@@ -27,7 +27,7 @@ function fixture() {
   const engine = { executeRaw: async () => [], getConfig: async () => null, getPage: async () => null } as any;
   const context = { store: agents, engine, config: () => ({ engine: 'pglite' as const }) };
   const open = () => new WorkbenchService(store, () => [{ id: 'service-files:chat', name: '测试模型', contextWindow: 65536 }], knowledgeWorkbenchAnswer(engine, { search: async () => ({ results: [] } as any), answer: chat, loop: toolLoop }, undefined, context));
-  const agent = agents.create({ name: '写作助手', workspaceDirectory: work, workspaceAccess: 'read-write', deliveryFormat: 'markdown' });
+  const agent = agents.create({ name: '写作助手', workspaceDirectory: work, deliveryFormat: 'markdown' });
   return { root, work, store, agents, context, open, agent };
 }
 function toolOutput(options: any, name: string) {

@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { constants as fsConstants, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, extname, join, relative, isAbsolute, resolve, sep } from 'node:path';
 import { renderWorkbenchDocx } from './docx';
+import { docxBytesHash, docxSafetyError, patchDocxParagraph, readDocxParagraphs } from './docx-edit';
 import { marked } from 'marked';
 import type { BrainEngine } from '../../core/engine';
 import { resolveMainSourceId } from '../../core/source-resolver';
@@ -240,6 +241,60 @@ export async function reviseWorkbenchArtifact(store: WorkbenchAgentStore, input:
   const artifact: WorkbenchArtifact = { id, familyId: familyIdOf(base), parentId: base.id, revision: revisionOf(base) + 1, baseHash: base.hash, agentId: agent.id, conversationId, messageId, title, content, citations: structuredClone(citations), path: written.path, bytesHash: written.bytesHash, format, createdAt: new Date().toISOString(), hash: prepared.hash };
   if (word?.word) artifact.word = word.word;
   store.recordArtifact(artifact); return artifact;
+}
+function writeDocxBytes(store: WorkbenchAgentStore, id: string, bytes: Buffer) {
+  if (bytes.length > 32 * 1024 * 1024) throw new Error('写入后文件不能超过 32MB');
+  const directory = join(store.workbench.root, 'artifacts');
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const path = join(directory, `${id}.docx`);
+  if (!existsSync(path)) writeFileSync(path, bytes, { mode: 0o600, flag: 'wx' });
+  else if (!readFileSync(path).equals(bytes)) throw new Error('成果文件已改变，保留人工内容');
+  return { path, bytesHash: hashBytes(bytes) };
+}
+export async function readStoredDocx(store: WorkbenchAgentStore, input: { agentId: string; conversationId: string; artifactId: string }) {
+  const artifact = store.artifacts().find(row => row.id === input.artifactId && row.agentId === input.agentId && row.conversationId === input.conversationId);
+  if (!artifact || artifact.format !== 'docx') throw new Error('成果不是当前会话里的 Word 文件');
+  const drift = publicationDrift(artifact);
+  if (drift.missing) throw new Error('已保存成果的文件缺失');
+  const bytes = readFileSync(artifact.path);
+  const parsed = await readDocxParagraphs(bytes);
+  return { artifactId: artifact.id, path: artifact.path, title: artifact.title, hash: parsed.hash, paragraphs: parsed.paragraphs, ...(drift.conflict ? { note: '成果文件已被外部修改，不能在这一版上继续改' } : {}) };
+}
+export async function reviseDocxParagraph(store: WorkbenchAgentStore, input: { agent: WorkbenchAgent; conversationId: string; messageId: string; baseArtifactId: string; baseHash: string; paragraphIndex: number; oldText: string; newText: string; signal?: AbortSignal }) {
+  input.signal?.throwIfAborted();
+  const { agent, conversationId, messageId } = input;
+  const mine = store.artifacts().filter(row => row.agentId === agent.id && row.conversationId === conversationId);
+  const base = mine.find(row => row.id === input.baseArtifactId);
+  if (!base) throw new Error(mine.length ? `成果不存在。当前可选：${optionText(mine)}` : '成果不存在');
+  if (base.format !== 'docx') throw new Error('只有 Word 成果可以按段落原位修改');
+  if (!existsSync(base.path)) throw new Error('已保存成果的文件缺失');
+  const bytes = readFileSync(base.path);
+  const blocked = await docxSafetyError(bytes);
+  if (blocked) throw new Error(blocked);
+  if (docxBytesHash(bytes) !== input.baseHash) throw new Error('文件已改变或未核对哈希，请重新读取后再操作');
+  const patched = await patchDocxParagraph(bytes, { paragraphIndex: input.paragraphIndex, oldText: input.oldText, newText: input.newText });
+  const parsed = await readDocxParagraphs(patched);
+  const content = parsed.paragraphs.map(item => item.text).join('\n');
+  if (!content.trim() || content.length > 100000) throw new Error('原位修改后的正文为空或过长，未保存新版本');
+  const hash = createHash('sha256').update(JSON.stringify([base.hash, input.paragraphIndex, content])).digest('hex');
+  const id = createHash('sha256').update(JSON.stringify([conversationId, messageId, hash])).digest('hex');
+  const existing = store.artifacts().find(row => row.id === id);
+  if (existing) {
+    if (!existsSync(existing.path)) throw new Error('已保存成果的文件缺失');
+    if (!readFileSync(existing.path).equals(patched)) throw new Error('成果文件已改变，保留人工内容');
+    return existing;
+  }
+  const newer = mine.some(row => row.parentId === base.id || (familyIdOf(row) === familyIdOf(base) && revisionOf(row) > revisionOf(base)));
+  if (newer) throw new Error(`要改的不是最新一版。当前可选：${optionText(mine)}`);
+  const drift = publicationDrift(base);
+  if (drift.missing) throw new Error('已保存成果的文件缺失');
+  if (drift.conflict) throw new Error('成果文件已被外部修改，未覆盖');
+  input.signal?.throwIfAborted();
+  const written = writeDocxBytes(store, id, patched);
+  const artifact: WorkbenchArtifact = { id, familyId: familyIdOf(base), parentId: base.id, revision: revisionOf(base) + 1, baseHash: base.hash, agentId: agent.id, conversationId, messageId, title: base.title, content, citations: structuredClone(base.citations), path: written.path, bytesHash: written.bytesHash, format: 'docx', createdAt: new Date().toISOString(), hash };
+  if (base.word) artifact.word = structuredClone(base.word);
+  store.recordArtifact(artifact);
+  return artifact;
 }
 export function artifactFilename(title: string, format: WorkbenchArtifact['format']) {
   const stem = title.replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_').replace(/\s+/g, ' ').trim().slice(0, 80) || '成果';

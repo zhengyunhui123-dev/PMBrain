@@ -21,7 +21,7 @@ function actionOf(text: string): Action | undefined {
 function receiptMatches(action: Action, call: Call, row: Record<string, unknown>) {
   if (call.status !== 'complete' || typeof row.path !== 'string') return false;
   if (action === 'append') return call.name === 'local_write' && row.mode === 'append' && row.written === true && row.verified === true;
-  if (action === 'edit') return ['local_edit', 'local_write'].includes(call.name) && (row.edited === true || row.mode === 'overwrite') && row.verified === true || call.name === 'artifact_revise' && row.saved === true;
+  if (action === 'edit') return ['local_edit', 'local_write'].includes(call.name) && (row.edited === true || row.mode === 'overwrite') && row.verified === true || call.name === 'artifact_revise' && row.saved === true || call.name === 'docx_edit' && row.edited === true && row.verified === true;
   if (action === 'delete') return call.name === 'local_delete' && row.deleted === true && row.verified === true;
   if (action === 'move') return call.name === 'local_move' && row.moved === true && row.verified === true;
   if (action === 'rename') return call.name === 'local_rename' && row.renamed === true;
@@ -38,7 +38,7 @@ export function fileActionIssue(text: string, calls: Call[] = []): string | null
     const quoted = [...line.matchAll(/`((?:[A-Za-z]:[\\/]|\/)[^`]+\.[A-Za-z0-9]+)`/g)].map(match => normalizePath(match[1]!));
     const paths = quoted.length ? quoted : [...line.matchAll(/[A-Za-z]:[\\/][^\s`<>「」“”]+\.[A-Za-z0-9]+|\/[^\s`<>「」“”]+\.[A-Za-z0-9]+/g)].map(match => normalizePath(match[0]));
     const matching = outputs.filter(({ call, row }) => receiptMatches(action, call, row));
-    const knownPaths = new Set(matching.flatMap(({ row }) => [row.path, row.from, row.source].filter((value): value is string => typeof value === 'string').map(normalizePath)));
+    const knownPaths = new Set(matching.flatMap(({ row }) => [row.path, row.from, row.source, row.publishedPath].filter((value): value is string => typeof value === 'string').map(normalizePath)));
     for (let pass = 0; pass < outputs.length; pass++) {
       const before = knownPaths.size;
       for (const { call, row } of outputs) if (call.status === 'complete' && ['local_move', 'local_rename'].includes(call.name) && (row.moved === true || row.renamed === true) && typeof row.from === 'string' && typeof row.path === 'string' && knownPaths.has(normalizePath(row.from))) knownPaths.add(normalizePath(row.path));
@@ -56,7 +56,7 @@ export function fileRequestAction(text: string): Action | undefined {
   if (/追加|添加到.*末尾/.test(value)) return 'append';
   if (/删掉|删除|移除/.test(value) && !/恢复/.test(value)) return 'delete';
   if (/恢复/.test(value)) return 'restore';
-  if (/修改|编辑|替换|改成|改为/.test(value)) return 'edit';
+  if (/修改|编辑|替换|改成|改为|改掉/.test(value)) return 'edit';
   if (/移动|移到/.test(value)) return 'move';
   if (/重命名|改名/.test(value)) return 'rename';
   if (/复制/.test(value)) return 'copy';
@@ -71,6 +71,7 @@ export function fileRequestCompleted(action: Action, calls: Call[]): boolean {
 export function fileExecutionInstruction(text: string): string {
   const action = fileRequestAction(text);
   if (!action) return '';
-  const next = action === 'edit' ? '先调用 local_read 读取目标文件，然后调用 local_edit 实际替换' : action === 'append' ? '先调用 local_read，然后调用 local_write(mode=append) 追加' : action === 'delete' ? '先调用 local_stat，再调用 local_delete 实际删除' : action === 'restore' ? '调用 local_restore，使用此前删除或编辑的 backupId' : '调用对应的本地文件工具完成用户要求的操作';
+  const word = action === 'edit' && /word|\.docx/i.test(text);
+  const next = word ? '先调用 docx_read 读取目标 Word 的段落，然后调用 docx_edit 按段落原位修改，不要整篇重写' : action === 'edit' ? '先调用 local_read 读取目标文件，然后调用 local_edit 实际替换' : action === 'append' ? '先调用 local_read，然后调用 local_write(mode=append) 追加' : action === 'delete' ? '先调用 local_stat，再调用 local_delete 实际删除' : action === 'restore' ? '调用 local_restore，使用此前删除或编辑的 backupId' : '调用对应的本地文件工具完成用户要求的操作';
   return `\n<file_execution>本轮用户要求真实操作磁盘文件。${next}。声称文件不存在前也必须调用 local_stat 或 local_files 核对。历史工具成功回执不能代替本轮执行，正文中的 verified、哈希和工具名称也不能证明执行。未完成工具操作时只说明真实阻碍或询问缺失参数；执行成功后用实际动作和路径简短回答。</file_execution>\n`;
 }

@@ -7,7 +7,7 @@ import { knowledgeWorkbenchAnswer } from '../src/product/workbench/routes';
 import { WorkbenchService } from '../src/product/workbench/service';
 import { WorkbenchStore } from '../src/product/workbench/store';
 import type { WorkbenchToolCall } from '../shared/workbench';
-import { chatMessageTokens, KNOWLEDGE_TOOLS } from '../src/product/workbench/tools';
+import { chatMessageTokens, KNOWLEDGE_TOOLS, TOOL_INSTRUCTION } from '../src/product/workbench/tools';
 import { contextBudget, estimateTokens } from '../src/product/workbench/context';
 import { PGLiteEngine } from '../src/core/pglite-engine';
 
@@ -245,6 +245,81 @@ test('retrieval rounds reserve a final answer instead of failing after repeated 
   const result=await answer({messages:[question],model:'service-test:chat',knowledge:true,contextWindow:8192,signal:new AbortController().signal,progress:()=>{}});
   expect(requests).toBe(8);expect(result.text).toContain('预算十万元');expect(result.stopReason).toBe('end');expect(finalSystems[0]).toContain('本轮资料收集已结束');expect(finalSystems[0]).not.toContain('JSON receipt');
 });
+
+test('查完资料后跨多个长度上限写完全文，续写不带整篇前文也不重复查资料', async () => {
+  const first = '## 第一部分\n' + '项目经评审确认交付范围，负责部门逐项核对待办 [1]。\n'.repeat(72);
+  const seam = '最后需要根据项目评审记录，逐项核对项目交付清单并明确各项责任；';
+  const finishParagraph = '交付清单由业务方确认后正式生效。';
+  const second = '\n\n## 第二部分\n预算部分还需要核对审批依据 [1]。';
+  const third = '\n\n## 第三部分\n明确下一步和验收条件 [1]。';
+  const question = '请根据资料写出第一、第二和第三部分的完整正文';
+  let toolRequests = 0;
+  const writing: ChatOpts[] = [];
+  __setChatTransportForTests(async opts => {
+    if (opts.tools?.length) return call('knowledge_search', { query: `项目 ${++toolRequests}` }, `search-${toolRequests}`);
+    writing.push(opts);
+    if (writing.length === 1) return { ...text(first + seam), stopReason: 'length' };
+    if (writing.length === 2) return { ...text(second), stopReason: 'length' };
+    if (writing.length === 3) return { ...text(seam + finishParagraph + second), stopReason: 'length' };
+    return text(third);
+  });
+  const dir = mkdtempSync(join(tmpdir(), 'pmbrain-long-answer-'));
+  const models = () => [{ id: 'service-test:chat', name: '测试模型', contextWindow: 8192 }];
+  const answer = knowledgeWorkbenchAnswer({ getPage: async () => ({ compiled_truth: '原文为需求评审通过，等待审批。' }) } as any, { search, answer: chat, loop: toolLoop });
+  const service = new WorkbenchService(new WorkbenchStore(dir), models, answer);
+  const conversation = service.create({ knowledge: true });
+  service.send(conversation.id, { text: question });
+  await service.settled(conversation.id);
+  const saved = new WorkbenchStore(dir).get(conversation.id).messages.at(-1)!;
+  expect(saved.text).toBe(first + seam + finishParagraph + second + third);
+  expect(saved.status).toBe('complete');
+  expect(saved.stopReason).toBe('end');
+  expect(saved.citations?.[0]?.slug).toBe('project');
+  expect(toolRequests).toBe(7);
+  expect(writing).toHaveLength(4);
+  for (const request of writing.slice(1)) {
+    const messages = JSON.stringify(request.messages);
+    expect(messages).toContain(question);
+    expect(messages).toContain(seam);
+    expect(messages.match(/项目经评审确认交付范围/g)?.length ?? 0).toBeLessThan(25);
+    expect(request.tools?.length ?? 0).toBe(0);
+  }
+});
+
+test.each([
+  '',
+  '<think>我要继续找资料</think>',
+  '<tool_call>knowledge_read</tool_call>',
+  '<｜DSML｜function_calls>未闭合的工具指令',
+  '现在直接根据已获得的资料给出有引用的中文回答；证据不足的部分明确说明，不再调用工具，不编造资料。',
+  '预算是十万元 [99]。',
+])('收尾正文未通过时只补写一次，复用证据和原题（%s）', async invalid => {
+  let searches = 0;
+  const requests: ChatOpts[] = [];
+  __setChatTransportForTests(async opts => {
+    requests.push(opts);
+    if (opts.tools?.length) return {
+      ...call('knowledge_search', { query: `预算分项 ${requests.length}` }),
+      text: '这句只是查询之前的计划。',
+      blocks: [{ type: 'text', text: '这句只是查询之前的计划。' }, ...call('knowledge_search', { query: `预算分项 ${requests.length}` }).blocks],
+    };
+    return text(requests.length === 8 ? invalid : '预算是十万元 [1]，先核对审批表。');
+  });
+  const answer = knowledgeWorkbenchAnswer({ getPage: async () => ({ compiled_truth: '预算为十万元。' }) } as any, {
+    search: async () => { searches++; return search(); }, answer: chat, loop: toolLoop,
+  });
+  const result = await answer({ messages: [question], model: 'service-test:chat', knowledge: true, signal: AbortSignal.timeout(10000), progress: () => {} });
+  expect(result.text).toBe('预算是十万元 [1]，先核对审批表。');
+  expect(requests).toHaveLength(9);
+  expect(searches).toBe(8);
+  for (const request of requests.slice(-2)) {
+    expect(request.tools?.length ?? 0).toBe(0);
+    expect(request.system).not.toContain(TOOL_INSTRUCTION);
+    expect(JSON.stringify(request.messages)).not.toContain('这句只是查询之前的计划');
+    expect(JSON.stringify(request.messages.at(-1)?.content)).toContain(question.text);
+    expect(JSON.stringify(request.messages)).toContain('初步预算');
+  }
+});
 beforeEach(() => configureGateway({ generative_enabled: true, chat_model: 'service-test:chat', env: {} }));
 afterEach(() => { __setChatTransportForTests(null); resetGateway(); });
 
@@ -282,6 +357,54 @@ test('search, read, streamed answer and tool results persist and survive reopeni
   reopened.send(thread.id, { text: '为什么？' }); await reopened.settled(thread.id);
   expect(JSON.stringify(requests.at(-1)?.messages)).toContain('正式预算十万元');
 });
+
+test.each([
+  ['service-test:chat', '现在直接根据已获得的资料给出有引用的中文回答；证据不足的部分明确说明，不再调用工具，不编造资料。', 'error'],
+  ['service-other:chat', '项目已完成需求评审，下一步先确认交付范围 [1]。', 'complete'],
+] as const)('收尾请求应产出正文，重新打开时显示实际状态（%s）', async (model, output, expectedStatus) => {
+  const userQuestion = '评估一下这个项目，接下来要怎么做';
+  const requests: ChatOpts[] = [];
+  configureGateway({ generative_enabled: true, chat_model: model, env: {}, base_urls: { 'service-other': 'http://127.0.0.1:1/v1' } });
+  __setChatTransportForTests(async opts => {
+    requests.push(opts);
+    if (requests.length < 8) {
+      const calls = [
+        ...call('knowledge_search', { query: '项目进展' }, `search-${requests.length}-0`).blocks,
+        ...call(requests.length === 1 ? 'memory_recall' : 'knowledge_search', { query: '项目计划' }, `search-${requests.length}-1`).blocks,
+      ];
+      return { ...text(''), model, blocks: calls, stopReason: 'tool_calls' };
+    }
+    for (const chunk of output) opts.onTextDelta?.(chunk);
+    return { ...text(output), model };
+  });
+  const root = mkdtempSync(join(tmpdir(), 'pmbrain-tool-final-answer-'));
+  const store = new WorkbenchStore(root);
+  const models = () => [{ id: model, name: '测试模型', contextWindow: 32000 }];
+  const engine = { executeRaw: async () => [], getPage: async () => ({ compiled_truth: '已完成需求评审，下一步确认交付范围。' }) };
+  const answer = knowledgeWorkbenchAnswer(engine as any, { search, answer: chat, loop: toolLoop }, { store } as Parameters<typeof knowledgeWorkbenchAnswer>[2]);
+  const service = new WorkbenchService(store, models, answer);
+  const thread = service.create({ knowledge: true, sourceId: 'a' });
+  service.send(thread.id, { text: userQuestion });
+  await service.settled(thread.id);
+  const reply = new WorkbenchService(new WorkbenchStore(root), models, answer).get(thread.id).messages.at(-1)!;
+  expect(requests).toHaveLength(expectedStatus === 'error' ? 9 : 8);
+  expect(reply.toolCalls).toHaveLength(14);
+  expect(reply.toolCalls?.every(item => item.status === 'complete')).toBe(true);
+  expect(reply.toolCalls?.some(item => item.name === 'memory_recall')).toBe(true);
+  expect(reply.status).toBe(expectedStatus);
+  expect(reply.stage).toBeUndefined();
+  if (expectedStatus === 'error') {
+    expect(reply.text).toBe('');
+    expect(reply.error).toContain('复述');
+  } else {
+    expect(reply.text).toBe(output);
+    expect(reply.citations?.[0]?.slug).toBe('project');
+  }
+  const finalRequest = requests.at(-1)!;
+  expect(finalRequest.tools?.length ?? 0).toBe(0);
+  expect(finalRequest.messages.at(-1)?.role).toBe('user');
+  expect(JSON.stringify(finalRequest.messages.at(-1)?.content)).toContain(userQuestion);
+}, 15000);
 
 test('read rejects invented Source pairs without reading a different page', async () => {
   const reads: string[] = []; const events: WorkbenchToolCall[] = []; let turns = 0;

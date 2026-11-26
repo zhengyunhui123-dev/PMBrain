@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { TaskProgressAdapter, finishTaskProgress, taskRunSummary, taskErrorReason } from '../src/product/tasks/progress-adapter.ts';
 import { resumeMaintenanceCheckpoint } from '../src/product/tasks/checkpoint.ts';
-import {taskCanRetry,taskStatus,taskPhaseSummary,quickVectorSummary} from '../admin/src/product/task-presentation.ts';
+import {taskCanRetry,taskLiveStage,taskStatus,taskPhaseSummary,quickVectorSummary} from '../admin/src/product/task-presentation.ts';
 import type {ConsoleRun} from '../shared/contracts/common.ts';
 import type { MaintenanceCheckpoint } from '../src/product/tasks/types.ts';
 
@@ -64,6 +64,10 @@ describe('任务的产品进度', () => {
     expect(view.metrics).toContainEqual({ label: '失败文件', value: 3 });
     expect(taskStatus({ id: 'task-1', kind: 'import_path', status: 'failed', result, product: view } as ConsoleRun)).toBe('部分完成');
     expect(taskCanRetry({ id: 'task-1', kind: 'import_path', status: 'failed', result, product: view } as ConsoleRun)).toBe(true);
+    expect(taskStatus({ id: 'task-1', kind: 'import_path', status: 'running', result, product: view } as ConsoleRun)).toBe('执行中');
+    expect(taskLiveStage({ id: 'task-1', kind: 'import_path', status: 'running', result, product: view } as ConsoleRun)).toBe('执行中');
+    expect(taskStatus({ id: 'task-1', kind: 'import_path', status: 'queued', result, product: view } as ConsoleRun)).toBe('排队中');
+    expect(taskLiveStage({ id: 'task-1', kind: 'import_path', status: 'queued', result, product: view } as ConsoleRun)).toBe('排队中');
   });
 
   test('全部文档失败时仍然显示失败，处理数完成不代表导入成功', () => {

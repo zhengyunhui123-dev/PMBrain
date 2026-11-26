@@ -11,11 +11,12 @@ import { workbenchMemoryTools, nativeMemoryHandlers, type WorkbenchNative } from
 import { agentTools, agentHandlers, type WorkbenchAgentTools } from './agent-tools';
 import { completedDirectories, replayArtifactRead } from './files';
 import { classifyTurn, isDirectoryStep } from './turn-policy';
-import { answerIntegrityIssue, answerPreview, answerProtocolOffset, isClarificationAnswer, salvageWorkbenchAnswer } from './answer-integrity';
+import { answerIntegrityIssue, answerPreview, answerProtocolOffset, isClarificationAnswer, isWorkbenchDraftInstructionEcho, salvageWorkbenchAnswer, WORKBENCH_FINAL_ANSWER_PROMPT } from './answer-integrity';
 import { taskRequiresEvidence } from './task-context';
-import { workspaceSelectionContext } from './agent-runtime';
+import { workspaceAllowsWriting, workspaceSelectionContext } from './agent-runtime';
 import { fileActionIssue, fileExecutionInstruction, fileRequestAction, fileRequestCompleted } from './file-receipts';
 import { WORKSPACE_MUTATIONS, workspaceFileHandlers } from './workspace-files';
+import { answerContinuationContext, appendAnswerPart, CONTINUE_ANSWER_PROMPT, MAX_ANSWER_PARTS, skipsUnfinishedParagraph } from './answer-continuation';
 export { chatMessageTokens } from './context-runtime';
 
 export const KNOWLEDGE_TOOLS: ChatToolDef[] = [
@@ -67,7 +68,7 @@ export async function runWorkbenchTools(input: WorkbenchAnswerInput & {
   const allowed = new Map(citations.filter(item => item.sourceId && (!sourceIds || sourceIds.includes(item.sourceId))).map(item => [JSON.stringify([item.sourceId, item.slug]), item]));
   const calls = new Map<string, WorkbenchToolCall>();
   const reads = new Map<string,string>();
-  let allocation = new ToolResultBudget(0, []); let requestTokens = 0; let requestCount = 0;
+  let allocation = new ToolResultBudget(0, []); let requestTokens = 0;
   let composed = ''; let segment = ''; let turnPrefix='';let answeredModel = input.model;
   const publish = (call: WorkbenchToolCall) => { input.onTool?.({ ...call }); };
   const citation = (sourceId: string | null, slug: string, title: string, snippet: string) => {
@@ -108,11 +109,13 @@ export async function runWorkbenchTools(input: WorkbenchAnswerInput & {
     } }],
   ]);
   if(input.native&&input.sourceId&&input.conversationId)for(const [name,handler] of nativeMemoryHandlers(input.engine,input.sourceId,input.conversationId,input.native,row=>{let index=citations.findIndex(item=>item.kind==='memory'&&item.factId===row.factId&&item.sourceId===row.sourceId);if(index<0){index=citations.length;citations.push(row);}return index+1;},reads,input.grantedMemoryTools??[]))handlers.set(name,handler);
-  const userText = input.messages.filter(row=>row.role==='user').at(-1)?.text ?? '';
+  const latestUser = input.messages.filter(row=>row.role==='user').at(-1);
+  const userText = latestUser?.text ?? '';
+  const collaborationInbound = Boolean(latestUser?.collaborationFrom);
   const requireCitation = !isDirectoryStep(userText) && (classifyTurn(userText) === 'chat' || taskRequiresEvidence(userText, input.task));
   if (input.agents && input.agent && input.conversationId && input.messageId) {
     const current = () => input.agents!.store.workbench.get(input.conversationId!).messages.some(row => row.id === input.messageId && row.status === 'running');
-    for (const [name, handler] of agentHandlers(input.agents, { environment: input.environment, agent: input.agent, userText, conversationId: input.conversationId, messageId: input.messageId, citations, cite: row => citation(row.sourceId, row.slug, row.title, row.snippet), active: current, workingDirectory: () => input.task?.directory, managedPaths: () => input.task?.managedPaths ?? [], rememberManaged: (path, from) => { if (!input.task) return; const current = input.task.managedPaths ?? []; input.task.managedPaths = [...new Set([...(from ? current.filter(item => item !== from) : current), path])]; } })) handlers.set(name, handler.idempotent ? { ...handler, execute: async (raw, abort, execution) => {
+    for (const [name, handler] of agentHandlers(input.agents, { environment: input.environment, agent: input.agent, userText, collaborationInbound, conversationId: input.conversationId, messageId: input.messageId, citations, cite: row => citation(row.sourceId, row.slug, row.title, row.snippet), active: current, workingDirectory: () => input.task?.directory, managedPaths: () => input.task?.managedPaths ?? [], rememberManaged: (path, from) => { if (!input.task) return; const current = input.task.managedPaths ?? []; input.task.managedPaths = [...new Set([...(from ? current.filter(item => item !== from) : current), path])]; } })) handlers.set(name, handler.idempotent ? { ...handler, execute: async (raw, abort, execution) => {
       const output = await handler.execute(raw, abort, execution);
       const trimmed = trimToolOutput(output, allocation.limit(execution?.toolCallId ?? '')) as Record<string, unknown>;
       if (trimmed && Array.isArray(trimmed.results) && output && typeof output === 'object' && 'results' in output && Array.isArray(output.results) && trimmed.results.length < output.results.length) trimmed.nextOffset = Number('offset' in output ? output.offset : 0) + trimmed.results.length;
@@ -170,8 +173,7 @@ export async function runWorkbenchTools(input: WorkbenchAnswerInput & {
       return parsed;
     } });
   }
-  const tools=[...(input.knowledge?KNOWLEDGE_TOOLS:[]),...(input.native?workbenchMemoryTools(userText,input.knowledge,input.grantedMemoryTools??[]):[]),...(input.agents && input.agent ? agentTools(input.agent,userText,input.agents,input.environment) : [])];
-  let history = input.history;
+  const tools=[...(input.knowledge?KNOWLEDGE_TOOLS:[]),...(input.native?workbenchMemoryTools(userText,input.knowledge,input.grantedMemoryTools??[]):[]),...(input.agents && input.agent ? agentTools(input.agent,userText,input.agents,input.environment,{ collaborationInbound }) : [])];
   let checkedCompletion = false;
   let checkedDirectory = false;
   let checkedFile = false;
@@ -179,7 +181,7 @@ export async function runWorkbenchTools(input: WorkbenchAnswerInput & {
   const requestedFileAction = fileRequestAction(userText);
   const fileNeedsExecution = (answer: string) => {
     if (!requestedFileAction || fileRequestCompleted(requestedFileAction, fileReceipts()) || isClarificationAnswer(answer)) return false;
-    if (input.agent?.workspaceAccess !== 'read-write' && /权限|读写文件/.test(answer) && /开启|设置|选择/.test(answer)) return false;
+    if (!workspaceAllowsWriting(input.agent, input.environment) && /工作目录/.test(answer) && /选择|确认|设置/.test(answer)) return false;
     if (!input.environment?.workspace && /(?:选择|确认|提供).{0,12}(?:工作目录|路径)/.test(answer)) return false;
     return !([...calls.values()].some(call => call.status === 'error') && /(?:无法|未能|不能|没有|尚未|失败|权限|不存在)/.test(answer) && !/(?:已经|已)(?:成功)?(?:修改|编辑|删除|追加|恢复|移动|重命名|复制|写入)/.test(answer));
   };
@@ -189,16 +191,32 @@ export async function runWorkbenchTools(input: WorkbenchAnswerInput & {
   const evidenceCitationCount = (answer='') => {
     const receipts=[...calls.values(),...(input.settledTools??[])];
     if(receipts.some(call=>call.status==='error')&&/^\s*(?:无法|未能|未成功)(?:读取|检索)(?:指定的?|相关的?)?(?:资料|页面|文件)?[。.!]?\s*$/.test(answer))return undefined;
-    return input.knowledge&&!receipts.some(call=>call.status==='complete'&&!['knowledge_search','knowledge_read'].includes(call.name))?citations.length:undefined;
+    return input.knowledge&&!receipts.some(call=>call.status==='complete'&&!['knowledge_search','knowledge_read','memory_recall'].includes(call.name))?citations.length:undefined;
   };
-  let stopReason: 'end' | 'length' | 'other' = 'end';
-  let lastMessages = history;
-  const evidenceWritePrompt = () => `不要再调用工具，不要输出工具指令、标签或 JSON。已经查到的资料：${citations.map((item, index) => `[${index + 1}] ${item.title}`).join('；') || '本轮检索结果'}。现在直接写出完整中文回答，事实处标注对应编号。`;
   const gatheredEvidence = () => citations.length > 0 || [...calls.values(), ...(input.settledTools ?? [])].some(call => call.status === 'complete' && ['knowledge_search', 'knowledge_read', 'memory_recall'].includes(call.name));
-  while (requestCount < 8) {
-    segment = '';
-    const result = await input.loop({ model: input.model, system: input.system, initialMessages: history, tools, toolHandlers: handlers, toolConcurrency: 4, maxTurns: 8 - requestCount, maxTokens: input.context.outputTokens, abortSignal: signal, temperature: input.temperature, reportLengthStop: true, recordUnknownTools: true,
-      preserveHistory:true,disableReasoning:true,finalizeOnLastTurn:true,finalPrompt:'本轮资料收集已结束。现在直接根据已获得的资料给出有引用的中文回答；证据不足的部分明确说明，不再调用工具，不编造资料。',fitRequest:fitProviderRequest,contextWindow:input.contextWindow,
+  const prepareAnswerRequest = async (messages: readonly ChatMessage[], maxTokens: number, partial: string) => {
+    const results = messages.slice(input.history.length).flatMap(message =>
+      typeof message.content === 'string' ? [] : message.content.filter(block => block.type === 'tool-result'));
+    const observations = [...new Map(results.map(block => [JSON.stringify([block.toolName, block.output]), block])).values()];
+    const last = input.history.at(-1);
+    const original = last?.role === 'user' ? last.content : userText;
+    const question: ChatBlock[] = typeof original === 'string' ? [{ type: 'text', text: original }] : original;
+    const prior = last?.role === 'user' ? input.history.slice(0, -1) : input.history;
+    const continuation: ChatBlock[] = partial ? [{
+      type: 'text', text: `${CONTINUE_ANSWER_PROMPT}\n${answerContinuationContext(partial, input.contextWindow)}`,
+    }] : [];
+    const prepared = await input.context.prepare([
+      ...prior, { role: 'user', content: [...observations, ...question, ...continuation] },
+    ], maxTokens, true);
+    const finalMessage = prepared.messages.at(-1);
+    if (finalMessage && Array.isArray(finalMessage.content)) finalMessage.content = finalMessage.content.map(block => {
+      if (block.type !== 'tool-result') return block;
+      return { type: 'text', text: JSON.stringify({ tool: block.toolName, result: block.output }) };
+    });
+    return prepared;
+  };
+  const result = await input.loop({ model: input.model, system: input.system, initialMessages: input.history, tools, toolHandlers: handlers, toolConcurrency: 4, maxTurns: 7, maxTokens: input.context.outputTokens, abortSignal: signal, temperature: input.temperature, ...(typeof input.topP === 'number' ? { topP: input.topP } : {}), reportLengthStop: true, recordUnknownTools: true,
+      preserveHistory:true,disableReasoning:true,fitRequest:fitProviderRequest,contextWindow:input.contextWindow,
       parseToolText:normalizeToolText,toolTextPreview,
       validateCompletion:async(answer,canContinue)=>{
         const fileIssue = fileActionIssue(answer, fileReceipts()) ?? (fileNeedsExecution(answer) ? '本轮没有用户要求的文件操作成功回执，文件操作尚未完成。' : null);
@@ -219,8 +237,9 @@ export async function runWorkbenchTools(input: WorkbenchAnswerInput & {
         const missingQuestion=/[?？]/.test(userText)&&/(?:don't|do not|didn't|did not)\s+see.{0,32}(?:question|request)|no (?:previous|prior) question|(?:don't|do not)\s+see.{0,32}(?:prior |previous )?conversation history|没有(?:看到|收到).{0,12}(?:问题|请求)/i.test(answer);
         const refusal=/request (?:was|is|has been) rejected|considered high risk|safety policy|请求被拒绝|无法协助/i.test(answer);
         const salvaged=salvageWorkbenchAnswer(answer);
-        const issue=answerIntegrityIssue(salvaged.leaked?salvaged.text:answer,salvaged.leaked&&!salvaged.text?undefined:evidenceCitationCount(salvaged.leaked?salvaged.text:answer),requireCitation,citations)??(salvaged.leaked&&!salvaged.text?'助手还在调用工具，没有写出正文。':null);
+        const issue=answerIntegrityIssue(salvaged.leaked?salvaged.text:answer,salvaged.leaked&&!salvaged.text?undefined:evidenceCitationCount(salvaged.leaked?salvaged.text:answer),requireCitation,citations)??(!salvaged.text.trim()?(salvaged.leaked?'模型只输出了工具指令，未给出正文。':'模型未给出正文。'):null);
         finalIntegrity=issue;
+        if (issue && !canContinue) composed = turnPrefix;
         if(issue&&checkedCompletion&&answerProtocolOffset(answer)>=0){
           if(completedKnowledgeCall(calls.values())&&!salvaged.text.trim()&&!isDirectoryStep(userText))return null;
           input.onReplace?.('',answeredModel);
@@ -246,17 +265,12 @@ export async function runWorkbenchTools(input: WorkbenchAnswerInput & {
       },
       jsonToolFallback:true,jsonFinalAnswer:true,jsonToolPrompt:'本轮使用结构化执行协议。需要执行任何操作时仅输出 JSON：{"tool_calls":[{"name":"工具名称","arguments":{}}]}。工具会由应用真正执行，随后返回实际结果。未执行的文件操作不能输出成功回答。只有操作已完成或确有阻碍时才输出 {"answer":"给用户的中文回答"}。不要输出自造的工具回执或 verified；最后回答回合只输出 answer。',
       requestPolicy:assistantRequestPolicy(input.model),onRequestEvent:event=>{input.onRequestEvent?.(event);const stage=requestStage(event);if(stage)input.progress(stage);},
-      beforeModelCall: async ({ messages, maxTokens,finalTurn }) => {
-        const prepared = await input.context.prepare(messages, maxTokens,finalTurn);
-        if(finalTurn)prepared.messages=prepared.messages.flatMap(message=>{
-          if(typeof message.content==='string')return [message];
-          const content=message.content.flatMap(block=>block.type==='tool-call'?[]:block.type==='tool-result'?[{type:'text' as const,text:JSON.stringify(block.output)}]:[block]);
-          return content.length?[{...message,content}]:[];
-        });
+      beforeModelCall: async ({ messages, maxTokens }) => {
+        const prepared = await input.context.prepare(messages, maxTokens);
         signal.throwIfAborted(); requestTokens = input.context.tokens(prepared.messages);
-        requestCount++; segment = ''; visibleSegment = ''; finalIntegrity = null; input.progress('正在分析资料');
-        const requireFileTool = checkedFile && requestedFileAction && !fileRequestCompleted(requestedFileAction, fileReceipts()) && input.agent?.workspaceAccess === 'read-write' && input.environment?.workspace && ![...calls.values()].some(call => call.status === 'error');
-        return { ...prepared, ...(requireFileTool && !finalTurn ? { toolChoice: 'required' as const } : {}) };
+        segment = ''; visibleSegment = ''; finalIntegrity = null; input.progress('正在分析资料');
+        const requireFileTool = checkedFile && requestedFileAction && !fileRequestCompleted(requestedFileAction, fileReceipts()) && workspaceAllowsWriting(input.agent, input.environment) && ![...calls.values()].some(call => call.status === 'error');
+        return { ...prepared, ...(requireFileTool ? { toolChoice: 'required' as const } : {}) };
       },
       onTextDelta: delta => {
         segment += delta;
@@ -270,7 +284,7 @@ export async function runWorkbenchTools(input: WorkbenchAnswerInput & {
         signal.throwIfAborted(); answeredModel = model;
         turnPrefix=composed;
         const text = blocks.filter((block): block is Extract<ChatBlock, { type: 'text' }> => block.type === 'text').map(block => block.text).join('');
-        if(answerProtocolOffset(text)<0&&!blocks.some(block=>block.type==='tool-call')&&(!input.knowledge||citations.length||[...calls.values()].some(call=>call.status==='complete')))composed+=text;
+        if(!isWorkbenchDraftInstructionEcho(text)&&answerProtocolOffset(text)<0&&!blocks.some(block=>block.type==='tool-call')&&(!input.knowledge||citations.length||[...calls.values()].some(call=>call.status==='complete')))composed+=text;
         segment = ''; visibleSegment = ''; input.onReplace?.(composed, model);
         input.context.observeUsage(usage.input_tokens);
         allocation = input.context.allocate(requestTokens, blocks);
@@ -281,27 +295,15 @@ export async function runWorkbenchTools(input: WorkbenchAnswerInput & {
       },
       onToolCallComplete: async (id, output) => { signal.throwIfAborted(); const call = calls.get(id)!; call.status = 'complete'; call.output = JSON.stringify(output); call.completedAt = new Date().toISOString(); publish(call); },
       onToolCallFailed: async (id, error) => { signal.throwIfAborted(); const call = calls.get(id)!; call.status = 'error'; call.error = error; call.completedAt = new Date().toISOString(); publish(call); },
-    });
-    signal.throwIfAborted();
-    lastMessages = result.messages ?? lastMessages;
-    if (result.stopReason === 'length') {
-      stopReason = 'length';
-      const next: ChatMessage[] = [...result.messages, { role: 'user', content: '请从中断处接着写完，不要重复已经写过的内容。' }];
-      if (requestCount >= 8) break;
-      try { await input.context.prepare(next); } catch (error) { if (error instanceof Error && 'code' in error && error.code === 'pmbrain_context_budget') break; throw error; }
-      history = next; continue;
-    }
-    if (result.stopReason === 'max_turns') {
-      if (isDirectoryStep(userText) || !gatheredEvidence()) {
-        if (isDirectoryStep(userText)) input.onReplace?.('', answeredModel);
-        throw new Error(isDirectoryStep(userText) ? '目录尚未创建：本轮没有成功的创建目录回执。' : '知识工具已达到本轮调用上限，请继续提问。');
-      }
-      stopReason = 'other';
-      break;
-    }
-    stopReason = result.stopReason === 'end' ? 'end' : 'other'; break;
+  });
+  signal.throwIfAborted();
+  let stopReason: 'end' | 'length' | 'other' = result.stopReason === 'end' || result.stopReason === 'length' ? result.stopReason : 'other';
+  const needsFinalAnswer = result.stopReason === 'length' || result.stopReason === 'max_turns';
+  if (result.stopReason === 'max_turns' && isDirectoryStep(userText) && !completedDirectories(fileReceipts()).length) {
+    input.onReplace?.('', answeredModel);
+    throw new Error('目录尚未创建：本轮没有成功的创建目录回执。');
   }
-  for (const name of ['assistant_create', 'assistant_update', 'artifact_save', 'artifact_revise', 'task_submit', 'local_mkdir', ...WORKSPACE_MUTATIONS]) {
+  for (const name of ['assistant_create', 'assistant_update', 'assistant_delete', 'artifact_save', 'artifact_revise', 'task_submit', 'assistant_collaborate', 'docx_edit', 'local_mkdir', ...WORKSPACE_MUTATIONS]) {
     const last = [...calls.values()].filter(call => call.name === name).at(-1);
     if (last?.status === 'error' && !modelAnswerText(composed + segment).trim()) throw new Error(last.error ?? '助手操作未完成');
   }
@@ -310,48 +312,63 @@ export async function runWorkbenchTools(input: WorkbenchAnswerInput & {
   if (fileIssue) { input.onReplace?.('', answeredModel); throw new Error(fileIssue); }
   const salvaged = salvageWorkbenchAnswer(text);
   if (salvaged.leaked) text = salvaged.text;
-  if (!text.trim() && (salvaged.leaked || toolProtocolIssue(finalIntegrity)) && !(completedKnowledgeCall(calls.values()) && requestCount < 8 && !isDirectoryStep(userText))) {
+  const canWriteAnswer = !isDirectoryStep(userText) && (needsFinalAnswer || gatheredEvidence() && (!text.trim() || finalIntegrity !== null));
+  if (!canWriteAnswer && !text.trim() && (salvaged.leaked || toolProtocolIssue(finalIntegrity))) {
     input.onReplace?.('', answeredModel);
     throw new Error(salvaged.leaked ? '助手还在调用工具，没有写出正文。已检索的资料还在，请重新生成。' : finalIntegrity!);
   }
-  if (!text.trim() && gatheredEvidence() && requestCount < 8 && !isDirectoryStep(userText)) {
-    input.progress('正在根据已查到的资料写回答');
-    segment = ''; visibleSegment = '';
-    const writePrompt = evidenceWritePrompt();
-    const written = await input.loop({ model: input.model, system: input.system, initialMessages: [...lastMessages, { role: 'user', content: writePrompt }], tools: [], toolHandlers: handlers, toolConcurrency: 1, maxTurns: 1, maxTokens: input.context.outputTokens, abortSignal: signal, temperature: input.temperature, reportLengthStop: true, recordUnknownTools: true,
-      preserveHistory:true,disableReasoning:true,finalizeOnLastTurn:true,finalPrompt:writePrompt,fitRequest:fitProviderRequest,contextWindow:input.contextWindow,
-      parseToolText:normalizeToolText,toolTextPreview,
-      jsonToolFallback:false,jsonFinalAnswer:false,
-      requestPolicy:assistantRequestPolicy(input.model),onRequestEvent:event=>{input.onRequestEvent?.(event);const stage=requestStage(event);if(stage)input.progress(stage);},
-      beforeModelCall: async ({ messages, maxTokens,finalTurn }) => {
-        const prepared = await input.context.prepare(messages, maxTokens,finalTurn);
-        signal.throwIfAborted(); requestTokens = input.context.tokens(prepared.messages);
-        requestCount++; segment = ''; visibleSegment = ''; input.progress('正在根据已查到的资料写回答');
-        return prepared;
-      },
-      onTextDelta: delta => {
-        segment += delta;
-        const preview=answerPreview(toolTextPreview(segment));
-        if(preview.startsWith(visibleSegment))input.onDelta?.(preview.slice(visibleSegment.length));
-        else input.onReplace?.(composed+preview,answeredModel);
-        visibleSegment=preview;
-      },
-      onTextReset: model => { segment = ''; visibleSegment = ''; answeredModel = model; input.onReplace?.(composed, model); },
-      onAssistantTurn: async (_turn, _message, blocks, usage, model) => {
-        signal.throwIfAborted(); answeredModel = model;
-        const next = blocks.filter((block): block is Extract<ChatBlock, { type: 'text' }> => block.type === 'text').map(block => block.text).join('');
-        const kept = salvageWorkbenchAnswer(next);
-        if (kept.text) composed += kept.text;
-        segment = ''; visibleSegment = ''; input.onReplace?.(composed, model);
-        input.context.observeUsage(usage.input_tokens);
-      },
-    });
-    void written;
-    text = salvageWorkbenchAnswer(modelAnswerText(composed + segment)).text;
-    if (text) {
-      finalIntegrity = answerIntegrityIssue(text, evidenceCitationCount(text), false, citations);
+  if (canWriteAnswer) {
+    let partial = stopReason === 'length' ? text : '';
+    let correction: string | null = finalIntegrity;
+    let retried = false;
+    let parts = partial ? 1 : 0;
+    while (parts < MAX_ANSWER_PARTS) {
+      signal.throwIfAborted();
+      input.progress(partial ? '正在续写全文' : retried ? '正在重新生成正文，已查到的资料保留' : '正在根据本轮资料写回答');
+      const written = await input.loop({
+        model: input.model, system: input.system, initialMessages: result.messages ?? input.history, tools: [], toolHandlers: new Map(),
+        maxTurns: 1, maxTokens: input.context.outputTokens, abortSignal: signal, temperature: input.temperature,
+        ...(typeof input.topP === 'number' ? { topP: input.topP } : {}),
+        preserveHistory: true, disableReasoning: true, reportLengthStop: true, finalizeOnLastTurn: true,
+        finalPrompt: correction ? `${WORKBENCH_FINAL_ANSWER_PROMPT}\n请处理上一次正文的问题：${correction}` : WORKBENCH_FINAL_ANSWER_PROMPT,
+        fitRequest: fitProviderRequest, contextWindow: input.contextWindow,
+        requestPolicy: assistantRequestPolicy(input.model),
+        onRequestEvent: event => { input.onRequestEvent?.(event); const stage = requestStage(event); if (stage) input.progress(stage); },
+        beforeModelCall: ({ messages, maxTokens }) => prepareAnswerRequest(messages, maxTokens, partial),
+        onAssistantTurn: async (_turn, _message, _blocks, usage, model) => {
+          answeredModel = model;
+          input.context.observeUsage(usage.input_tokens);
+        },
+      });
+      const candidate = salvageWorkbenchAnswer(modelAnswerText(written.finalText)).text;
+      const joined = appendAnswerPart(partial, candidate);
+      const ended = written.stopReason === 'end';
+      const truncated = written.stopReason === 'length';
+      correction = !candidate.trim() || joined === partial ? '模型未给出正文。' :
+        partial && !ended && !truncated ? '模型未写完正文。' :
+        skipsUnfinishedParagraph(partial, candidate) ? '请先补完断点所在句子和段落，再开始下一节。' :
+        answerIntegrityIssue(candidate, undefined, false) ?? fileActionIssue(joined, fileReceipts()) ??
+        (fileNeedsExecution(joined) ? '本轮没有用户要求的文件操作成功回执，文件操作尚未完成。' : null) ??
+        answerIntegrityIssue(joined, evidenceCitationCount(joined), requireCitation && !truncated, citations);
+      if (!correction) {
+        text = joined;
+        partial = text;
+        stopReason = truncated ? 'length' : ended ? 'end' : 'other';
+        parts++;
+        input.onReplace?.(text, answeredModel);
+        if (!truncated) break;
+        continue;
+      }
+      if (retried || written.stopReason === 'refusal' || written.stopReason === 'content_filter') break;
+      retried = true;
+    }
+    if (correction && partial.trim() && !answerIntegrityIssue(partial, evidenceCitationCount(partial), false, citations)) {
+      text = partial;
+      stopReason = 'length';
+      correction = null;
       input.onReplace?.(text, answeredModel);
     }
+    finalIntegrity = correction;
   } else if (salvaged.leaked && text) {
     finalIntegrity = answerIntegrityIssue(text, evidenceCitationCount(text), requireCitation, citations);
     input.onReplace?.(text, answeredModel);
@@ -362,11 +379,12 @@ export async function runWorkbenchTools(input: WorkbenchAnswerInput & {
     if (directories.length) {
       text = directories.map(directory => `${directory.created ? '已创建文件夹' : '文件夹已存在，继续使用'}：${directory.path}`).join('\n');
       finalIntegrity = null;
+      stopReason = 'end';
       input.onReplace?.(text, answeredModel);
     }
   }
-  const integrity=finalIntegrity??answerIntegrityIssue(text,evidenceCitationCount(text),requireCitation,citations);
-  if(integrity){input.onReplace?.('',answeredModel);throw new Error(`${integrity} 本轮回答未通过核对，已完成的操作和原始资料保留，请重试。`);}
+  const integrity=finalIntegrity??answerIntegrityIssue(text,evidenceCitationCount(text),requireCitation&&stopReason!=='length',citations);
+  if(integrity){input.onReplace?.('',answeredModel);throw new Error(`${integrity} 已保存本轮问题与工具记录，可以重新生成。`);}
   if (input.agents) {
     let protocol: { name?: unknown; arguments?: unknown; tool_calls?: Array<{ name?: unknown }> } | undefined;
     try { protocol = JSON.parse(text); } catch {}

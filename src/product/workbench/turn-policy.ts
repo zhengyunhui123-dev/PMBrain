@@ -36,6 +36,10 @@ export function isWorkRequest(text: string): boolean {
   return /^(?:(?:请|帮我|替我|麻烦)(?:先|再)?)*(?:生成|整理|写|制作|做|分析|核对|导出|汇总|起草)/.test(value);
 }
 
+export function wantsCollaboration(text: string): boolean {
+  const value = text.replace(/\s+/g, '');
+  return /协作|跨助手|一起(?:做|完成|改|写)|交给.{0,40}助手|让.{0,40}助手|请.{0,40}助手(?:写|改|审|核对|做|完成|生成|看)|助手.{0,16}(?:写|改|审|核对|生成|完成)/.test(value);
+}
 export function isInformationRequest(text: string): boolean {
   if (isWorkRequest(text) || isTaskAmendment(text) || wantsDirectoryCreation(text)) return false;
   if (/(?:请|帮我|替我|给我|麻烦你|请你|继续|开始|直接)(?:先|再)?(?:创建|新建|生成|制作|写|保存|导出|复制|重命名|修改|整理|删除|删掉|追加|编辑|移动|恢复)/.test(text)) return false;

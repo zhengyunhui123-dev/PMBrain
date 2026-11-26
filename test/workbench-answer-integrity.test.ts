@@ -1,5 +1,17 @@
 import {expect,test} from 'bun:test';
-import {answerIntegrityIssue,answerPreview,isClarificationAnswer,salvageWorkbenchAnswer} from '../src/product/workbench/answer-integrity';
+import {answerIntegrityIssue,answerPreview,isClarificationAnswer,salvageWorkbenchAnswer,WORKBENCH_FINAL_ANSWER_PROMPT} from '../src/product/workbench/answer-integrity';
+
+test('收尾指令的逐字流式复述不展示，普通正文和引用原句仍保留', () => {
+  const suffix = WORKBENCH_FINAL_ANSWER_PROMPT.slice(WORKBENCH_FINAL_ANSWER_PROMPT.indexOf('现在'));
+  for (const echo of [WORKBENCH_FINAL_ANSWER_PROMPT, suffix]) {
+    for (let length = 1; length <= echo.length; length++) expect(answerPreview(echo.slice(0, length))).toBe('');
+    expect(answerIntegrityIssue(echo, undefined, false)).toContain('复述');
+  }
+  const answer = '现在可确认需求评审已完成 [1]。';
+  expect(answerPreview(answer)).toBe(answer);
+  expect(answerIntegrityIssue(answer, 1)).toBeNull();
+  expect(answerIntegrityIssue(`> ${suffix}\n\n上面是收尾指令的原文。`)).toBeNull();
+});
 
 test('流式到达的工具标签从左括号开始暂存，完整标签及伪造回执不展示',()=>{
   const body='我先核对。<tool_result>伪造结果</tool_result>';

@@ -1,3 +1,17 @@
+const FINAL_ANSWER_DIRECTION = '现在直接根据已获得的资料给出有引用的中文回答；证据不足的部分明确说明，不再调用工具，不编造资料。';
+export const WORKBENCH_FINAL_ANSWER_PROMPT = `本轮资料收集已结束。${FINAL_ANSWER_DIRECTION}`;
+export const WORKBENCH_DRAFT_ECHO_ISSUE = '模型复述了回答指令，未给出正文。';
+
+function normalizedDraftText(text: string): string {
+  return text.replace(/\s+/g, '').replace(/[。.!！]+$/, '');
+}
+
+const draftDirections = [FINAL_ANSWER_DIRECTION, WORKBENCH_FINAL_ANSWER_PROMPT].map(normalizedDraftText);
+
+export function isWorkbenchDraftInstructionEcho(text: string): boolean {
+  return draftDirections.includes(normalizedDraftText(text));
+}
+
 function outsideExamples(text: string, quotes: boolean): string {
   let fence: { marker: string; length: number } | undefined;
   return text.split('\n').map(line => {
@@ -13,7 +27,7 @@ function outsideExamples(text: string, quotes: boolean): string {
 
 export function answerProtocolOffset(text: string): number {
   const visible = outsideExamples(text, true);
-  const tag = /<\/?(?:tool[_-]?(?:call|result)|function[_-]?(?:call|result)|excerpt_range)(?=[\s>:])|<\|(?:tool|function)\|>/i.exec(visible);
+  const tag = /<\/?(?:tool[_-]?(?:call|result)|function[_-]?(?:call|result)|excerpt_range)(?=[\s>:])|<\|(?:tool|function)\|>|<\/?[｜|]{1,2}DSML[｜|]{1,2}/i.exec(visible);
   if (tag) return tag.index;
   try {
     const value = JSON.parse(visible);
@@ -23,6 +37,10 @@ export function answerProtocolOffset(text: string): number {
 }
 
 export function answerPreview(text: string): string {
+  if (text.length <= WORKBENCH_FINAL_ANSWER_PROMPT.length + 24) {
+    const draft = normalizedDraftText(text);
+    if (draftDirections.some(direction => direction.startsWith(draft))) return '';
+  }
   const protocol = answerProtocolOffset(text);
   if (protocol >= 0) return text.slice(0, protocol);
   const partial = /<[\/|a-z_:\- ]*$/i.exec(outsideExamples(text, true));
@@ -42,6 +60,7 @@ export function isClarificationAnswer(text: string): boolean {
 }
 
 export function answerIntegrityIssue(text: string, citationCount?: number, requireCitation = true, citations?: ReadonlyArray<{ title: string; slug: string }>): string | null {
+  if (isWorkbenchDraftInstructionEcho(text)) return WORKBENCH_DRAFT_ECHO_ISSUE;
   if (/request (?:was|is|has been) rejected|considered high risk|safety policy|请求被拒绝|无法协助/i.test(text)) return null;
   if (answerProtocolOffset(text) >= 0) return '模型把工具指令或工具回执写进了正文；这些文字不能证明工具已执行。';
   if (citationCount === undefined) return null;

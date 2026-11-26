@@ -131,7 +131,7 @@ export function useWorkbench({ serviceReady = true, databaseReady = true, surfac
         if (next.error) { setError(next.error); return; }
         if (active.current !== id || next.unchanged) return;
         const calls = next.message?.toolCalls ?? next.conversation?.messages.flatMap(message => message.toolCalls ?? []) ?? [];
-        const edits = calls.filter(call => (call.name === 'assistant_create' || call.name === 'assistant_update') && call.status === 'complete' && !seenAgentEdits.current.has(call.id));
+        const edits = calls.filter(call => (call.name === 'assistant_create' || call.name === 'assistant_update' || call.name === 'assistant_delete') && call.status === 'complete' && !seenAgentEdits.current.has(call.id));
         if (edits.length) {
           for (const call of edits) seenAgentEdits.current.add(call.id);
           setAgents(current => mergeRosterFromTools(current, edits));
@@ -247,5 +247,11 @@ export function useWorkbench({ serviceReady = true, databaseReady = true, surfac
     const saved = await workbenchRequest<WorkbenchAgent>(`/agents/${value.id}`, value, 'PUT');
     await refresh(); setAssistant(saved); if (saved.model) setModel(saved.model); if (!conversation) setKnowledge(saved.knowledge); return saved;
   };
-  return { rows: rows.filter(row => (row.assistantId ?? 'main') === assistantId), allRows: rows, agents, assistantId, selectAgent, saveAgent, refresh, models, modelsLoaded, conversation, model, setModel: chooseModel, knowledge, setKnowledge, assistant, saveAssistant, error, setError, loaded, pending, running, select, send, action, clearContext, undoRules, restoreRevision };
+  const deleteAgent = async (id: string) => {
+    const removed = await workbenchRequest<{ removed: true; id: string; name: string }>(`/agents/${id}`, undefined, 'DELETE');
+    await refresh();
+    if (assistantRef.current === id) await selectAgent('main');
+    return removed;
+  };
+  return { rows: rows.filter(row => (row.assistantId ?? 'main') === assistantId), allRows: rows, agents, assistantId, selectAgent, saveAgent, deleteAgent, refresh, models, modelsLoaded, conversation, model, setModel: chooseModel, knowledge, setKnowledge, assistant, saveAssistant, error, setError, loaded, pending, running, select, send, action, clearContext, undoRules, restoreRevision };
 }

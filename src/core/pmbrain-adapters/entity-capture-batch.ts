@@ -8,7 +8,7 @@ import type { EntityIngestContext } from './entity-ingest-workflow.ts';
 import type { CaptureReceipt } from './entity-capture-receipts.ts';
 import { withCaptureWrite } from './entity-capture-window.ts';
 import { sourceTimelineDates } from './entity-capture-plan.ts';
-import { assertCaptureLease, decideCapturedIdentity, ingestCandidatesChanged, isolateIngestItem, loadIngestCandidates, type IdentityCandidate } from './entity-identity-decision.ts';
+import { assertCaptureLease, decideCapturedIdentity, ingestSlugExists, isolateIngestItem, loadIngestCandidates, refreshIngestCandidates, type IdentityCandidate } from './entity-identity-decision.ts';
 
 type Step = { output: Record<string, unknown>; proof: NonNullable<CaptureReceipt['capture_proof']> };
 type Held = { slug: string; reason: string; candidates?: IdentityCandidate[] };
@@ -104,10 +104,8 @@ export function captureBatchTool(put: ToolDef, context: EntityIngestContext, che
         };
         try{
           await assertCaptureLease(ctx.engine,ctx.jobId,ctx.executionToken,ctx.signal);
-          if(await ingestCandidatesChanged(ctx.engine,candidates,sourceIds)){
-            candidates=await loadIngestCandidates(ctx.engine,sourceIds);
-            context.candidatePages=candidates;
-          }
+          candidates=await refreshIngestCandidates(ctx.engine,candidates,sourceIds);
+          context.candidatePages=candidates;
           const colon=entity.slug.indexOf(':');
           const sourceId=colon<0?context.sourceId:entity.slug.slice(0,colon);
           const slug=colon<0?entity.slug:entity.slug.slice(colon+1);
@@ -115,7 +113,7 @@ export function captureBatchTool(put: ToolDef, context: EntityIngestContext, che
           const title=String(parsed.data?.title??'');
           const type=String(parsed.data?.type??'');
           const decision=decideCapturedIdentity({
-            title,type,slug,sourceId,pageExists:!!(await ctx.engine.getPage(slug,{sourceId})),pages:candidates,chunkBody:context.chunkBody,
+            title,type,slug,sourceId,pageExists:candidates.some(page=>page.source_id===sourceId&&page.slug===slug)||await ingestSlugExists(ctx.engine,slug,sourceId),pages:candidates,chunkBody:context.chunkBody,
             confirmedNew:entity.identity_confirmed===true,distinguishingEvidence:entity.distinguishing_evidence,
           });
           if(decision.decision==='pending'){

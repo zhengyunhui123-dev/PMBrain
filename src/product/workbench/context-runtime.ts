@@ -101,24 +101,51 @@ export class RequestContext {
   readonly budget:number;
   readonly outputTokens:number;
   private readonly toolTokens:number;
+  private activeToolTokens:number;
   private currentSystem:string;
   private summaries=new Set<string>();
   private tokenRatio=1;
   private lastEstimate=0;
-  constructor(private options:{contextWindow?:number;threshold?:number;system:string;systemContext?:{prefix:string;content:string;suffix:string};tools:ChatToolDef[];signal:AbortSignal;model?:string;summarize?:WorkbenchSummarizer;compressionModel?:string;compressionWindow?:number;onCompact?:(note:string)=>void;outputLimit?:number}){
+  constructor(private options:{contextWindow?:number;threshold?:number;system:string;answerSystem?:string;systemContext?:{prefix:string;content:string;suffix:string};tools:ChatToolDef[];signal:AbortSignal;model?:string;summarize?:WorkbenchSummarizer;compressionModel?:string;compressionWindow?:number;onCompact?:(note:string)=>void;outputLimit?:number}){
     const window=options.contextWindow??32000;
     this.outputTokens=requestOutputTokens(options.model,options.contextWindow,options.outputLimit);
     this.budget=Math.min(contextBudget(options.contextWindow,options.threshold??.8,this.outputTokens),window-this.outputTokens-128);
     this.toolTokens=estimateTokens(JSON.stringify(options.tools));
+    this.activeToolTokens=this.toolTokens;
     this.currentSystem=options.system+(options.systemContext?options.systemContext.prefix+options.systemContext.content+options.systemContext.suffix:'');
   }
-  private get fixed(){return estimateTokens(this.currentSystem)+this.toolTokens;}
+  private get fixed(){return estimateTokens(this.currentSystem)+this.activeToolTokens;}
   tokens(messages:readonly ChatMessage[]){return Math.ceil((this.fixed+chatMessageTokens(messages))*this.tokenRatio);}
   observeUsage(inputTokens:number){if(Number.isFinite(inputTokens)&&inputTokens>0&&this.lastEstimate>0)this.tokenRatio=Math.max(this.tokenRatio,inputTokens/this.lastEstimate);}
-  get contextWindow(){return Math.min(this.options.contextWindow??32000,Math.max(2048,Math.ceil((this.budget+this.outputTokens+256)/1024)*1024));}
-  async prepare(history:readonly ChatMessage[],requested=this.outputTokens,finalTurn=false):Promise<{messages:ChatMessage[];maxTokens:number;contextWindow:number;system:string}>{
+  get contextWindow(){return this.options.contextWindow??32000;}
+  async prepare(history:readonly ChatMessage[],requested=this.outputTokens,finalTurn=false,pinnedMessages=1):Promise<{messages:ChatMessage[];maxTokens:number;contextWindow:number;system:string}>{
     this.options.signal.throwIfAborted();
+    const system=finalTurn?(this.options.answerSystem??this.options.system):this.options.system;
+    this.activeToolTokens=finalTurn?0:this.toolTokens;
+    const systemContext=this.options.systemContext;
+    this.currentSystem=system+(systemContext?systemContext.prefix+systemContext.content+systemContext.suffix:'');
     let messages=history.map(message=>({...message,content:typeof message.content==='string'?message.content:message.content.map(block=>({...block}))}));
+    if (finalTurn && messages.length > pinnedMessages) {
+      const costWithoutToolContent = messages.map(message => chatMessageTokens([{
+        ...message,
+        content: typeof message.content === 'string' ? message.content : message.content.map(block => block.type === 'tool-result' ? { ...block, output: '' } : block),
+      }]));
+      const messageCost = costWithoutToolContent.reduce((sum, cost) => sum + cost, 0);
+      const evidenceCost = chatMessageTokens(messages) - messageCost + estimateTokens(systemContext?.content ?? '');
+      const reserve = Math.min(evidenceCost, Math.floor(this.budget / 3));
+      const available = Math.floor(this.budget / this.tokenRatio) - estimateTokens(system + (systemContext?.prefix ?? '') + (systemContext?.suffix ?? '')) - reserve - 128;
+      let start = 0;
+      let used = messageCost;
+      const oldestProtected = messages.length - pinnedMessages;
+      while (start < oldestProtected && used > available) {
+        used -= costWithoutToolContent[start++]!;
+        while (start < oldestProtected && messages[start]?.role === 'assistant') used -= costWithoutToolContent[start++]!;
+      }
+      if (start) {
+        messages = messages.slice(start);
+        this.options.onCompact?.('已优先保留本轮问题、回答线索和相关资料；完整的历史对话仍可查看。');
+      }
+    }
     if(this.tokens(messages)>this.budget-Math.min(1024,Math.floor(this.budget*.15))) {
       for(const message of messages)if(message.role==='assistant'&&Array.isArray(message.content)&&message.content.some(block=>block.type==='tool-call'))message.content=message.content.filter(block=>block.type!=='text');
     }
@@ -132,11 +159,11 @@ export class RequestContext {
     const headroom=this.options.tools.length&&!finalTurn?Math.min(2048,Math.floor(this.budget*(fresh.size?.2:.3))):0;
     if(this.options.systemContext){
       const part=this.options.systemContext;
-      const standing=this.options.system+part.prefix+part.suffix;
+      const standing=system+part.prefix+part.suffix;
       const resultReserve=Math.min(Math.floor(this.budget*.4),fresh.size*2048+(outputs.length-fresh.size)*128);
-      const room=Math.max(0,Math.floor((this.budget-headroom-resultReserve)/this.tokenRatio)-estimateTokens(standing)-this.toolTokens-chatMessageTokens(baseline)-outputs.length*24-128);
+      const room=Math.max(0,Math.floor((this.budget-headroom-resultReserve)/this.tokenRatio)-estimateTokens(standing)-this.activeToolTokens-chatMessageTokens(baseline)-outputs.length*24-128);
       const content=estimateTokens(part.content)<=room?part.content:fitText(part.content,room,excerpt=>excerpt);
-      this.currentSystem=this.options.system+part.prefix+content+part.suffix;
+      this.currentSystem=system+part.prefix+content+part.suffix;
       if(content.length<part.content.length)this.options.onCompact?.('检索节选已按本次请求剩余空间缩短，完整资料仍保留。');
     }
     const available=Math.max(0,Math.floor((this.budget-headroom-this.tokens(baseline)-128)/this.tokenRatio));
@@ -151,7 +178,7 @@ export class RequestContext {
       for(const message of messages)if(Array.isArray(message.content))message.content=message.content.map(block=>block.type==='tool-result'?{...block,output:trimToolOutput(block.output,Math.max(24,estimateTokens(JSON.stringify(block.output))-reduction))}:block);
     }
     if(this.options.systemContext&&this.tokens(messages)>this.budget-headroom){
-      const part=this.options.systemContext;const prefix=this.options.system+part.prefix;
+      const part=this.options.systemContext;const prefix=system+part.prefix;
       const content=this.currentSystem.slice(prefix.length,this.currentSystem.length-part.suffix.length);
       const room=Math.max(0,estimateTokens(content)-Math.ceil((this.tokens(messages)-this.budget+headroom)/this.tokenRatio)-1);
       this.currentSystem=prefix+fitText(content,room,excerpt=>excerpt)+part.suffix;

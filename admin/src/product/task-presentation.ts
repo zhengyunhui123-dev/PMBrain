@@ -35,7 +35,14 @@ export function taskPhaseSummary(run: ConsoleRun, now = Date.now()) {
 export const taskStopping = (run: ConsoleRun) => run.status === 'running' && run.error === '正在停止任务…';
 export const taskCanRetry=(run:ConsoleRun)=>run.id.startsWith('task-')&&(['failed','cancelled'].includes(run.status)||(run.searchOptimize===true&&run.status==='paused')||(run.status==='completed'&&['import_path','dream_capture_entities','dream_quick','dream_cycle','dream_sync'].includes(run.kind)&&taskIsPartial(run)));
 export const taskRoundCompleted = (run: ConsoleRun) => run.kind.startsWith('dream_') && run.status === 'completed' && !taskWasSkipped(run);
-export const taskLiveStage = (run: ConsoleRun) => run.product?.deep ? deepStageTitle(run.product.deep) : run.product?.stage;
+const settledImportStage = /^(?:部分完成|导入失败|导入完成|导入成功|任务未完成|任务未执行|预览完成)/;
+export const taskLiveStage = (run: ConsoleRun) => {
+  if (run.product?.deep) return deepStageTitle(run.product.deep);
+  const stage = run.product?.stage;
+  const live = run.status === 'queued' || run.status === 'running';
+  if (live && run.kind === 'import_path' && stage && settledImportStage.test(stage)) return run.status === 'queued' ? '排队中' : '执行中';
+  return stage;
+};
 export const taskPercent = (run: ConsoleRun) => run.product?.deep?deepOrganizePercent(run.product.deep)
   :run.product?.maintenance?maintenancePercent(run.product.maintenance,run.product.syncFiles)
   :run.product?.importCounts&&run.product.total!=null?run.product.total?Math.min(100,Math.round((run.product.importCounts.imported+run.product.importCounts.unchanged)/run.product.total*1000)/10):100

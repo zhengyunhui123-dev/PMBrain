@@ -81,7 +81,7 @@ function HomeAsk({ onOpen, serviceReady, databaseReady }: { onOpen: () => void; 
     onOpen();
   };
   return <div className="home-ask knowledge-workbench">
-    {!serviceReady ? <p className="wb-muted" role="status">本地对话服务暂不可用</p> : !databaseReady && <p className="wb-muted" role="status">知识库正在准备，当前可进行普通对话。</p>}
+    {!serviceReady ? <p className="wb-muted" role="status">本地对话服务暂不可用</p> : wb.running ? <p className="wb-muted" role="status">知识助手正在回答。<button type="button" onClick={onOpen}>打开知识助手查看</button></p> : !databaseReady && <p className="wb-muted" role="status">知识库正在准备，当前可进行普通对话。</p>}
     {wb.error && <p className="wb-error" role="alert">{wb.error}</p>}
     {wb.loaded && !wb.models.length && !wb.error && <p className="wb-muted">请先在<button type="button" onClick={() => { window.location.hash = 'settings-models'; }}>模型服务</button>中配置并启用普通模型。</p>}
     <div className="wb-compose-area"><div className={dropping ? 'wb-composer dropping' : 'wb-composer'} onDragOver={event => { if (event.dataTransfer.types.includes('Files')) { event.preventDefault(); setDropping(true); } }} onDragLeave={() => setDropping(false)} onDrop={event => { event.preventDefault(); setDropping(false); addFiles(Array.from(event.dataTransfer.files ?? [])); }}>

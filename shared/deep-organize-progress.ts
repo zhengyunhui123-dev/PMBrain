@@ -103,10 +103,16 @@ export function deepOrganizeOutcome(round: DeepRoundProgress): string | null {
   return `本轮已结束：成功 ${sum('entities')}，待核对 ${sum('pendingReview')}，失败 ${sum('itemFailed')}，尚未处理 ${sum('remaining')}`;
 }
 
+export function deepOrganizeFinishedStages(round: DeepRoundProgress): number {
+  return DEEP_ORGANIZE_STAGES.filter(stage => {
+    const saved = round.stages.find(item => item.id === stage.id);
+    return saved?.status === 'completed' || saved?.status === 'skipped';
+  }).length;
+}
+
 export function deepOrganizePercent(round: DeepRoundProgress): number {
-  const done = deepOrganizeRecordedStages(round);
-  if (round.stage === 'done') return round.stages.some(stage => stage.status === 'failed' || stage.status === 'partial') ? 99 : 100;
-  return Math.min(99, Math.round(done / DEEP_ORGANIZE_STAGES.length * 100));
+  if (round.stage !== 'done') return Math.min(99, Math.round(deepOrganizeRecordedStages(round) / DEEP_ORGANIZE_STAGES.length * 100));
+  return Math.round(deepOrganizeFinishedStages(round) / DEEP_ORGANIZE_STAGES.length * 100);
 }
 
 export function deepOrganizeTotals(round: DeepRoundProgress) {

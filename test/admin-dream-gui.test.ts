@@ -69,6 +69,34 @@ describe('Dream GUI product contract', () => {
     expect(outcome.extractionItems).toContain('新增概念：1 个。');
     expect(outcome.extractionItems).toContain('更新概念：1 个，新的表述已替换旧表述，历史仍保留。');
     expect(outcome.extractionItems).toContain('待重新核验：1 个旧结论失去了有效证据，原文仍保留。');
+    const rewriteHeld = buildDreamOutcome(completedRun({
+      status: 'completed',
+      phases: [{
+        phase: 'synthesize_concepts',
+        status: 'warn',
+        summary: 'concepts',
+        details: {
+          concepts_rewrite_held: 1,
+          concepts_pending_verification: 1,
+          failures: [{ concept: 'concepts/acceptance', error: 'concept_length' }],
+        },
+      }],
+    }));
+    expect(rewriteHeld.extractionItems).toContain('待重新核验：1 个旧结论本次没有重写成功，原文仍保留。');
+    expect(rewriteHeld.extractionItems.join('\n')).not.toContain('失去了有效证据');
+    expect(rewriteHeld.failureItems).toContain('概念 concepts/acceptance：这次没有生成完整表述，旧结论仍保留');
+    expect(rewriteHeld.failureItems.join('\n')).not.toContain('已使用模板');
+    const mixed = buildDreamOutcome(completedRun({
+      status: 'completed',
+      phases: [{
+        phase: 'synthesize_concepts',
+        status: 'warn',
+        summary: 'concepts',
+        details: { concepts_rewrite_held: 1, concepts_pending_verification: 2 },
+      }],
+    }));
+    expect(mixed.extractionItems).toContain('待重新核验：1 个旧结论失去了有效证据，原文仍保留。');
+    expect(mixed.extractionItems).toContain('待重新核验：1 个旧结论本次没有重写成功，原文仍保留。');
     expect(outcome.extractionItems).toContain('冲突：1 个结论与现有证据不一致，旧表述仍保留。');
   });
 

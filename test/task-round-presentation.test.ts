@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import type { ConsoleRun } from '../shared/contracts/common.ts';
-import { taskCanRetry, taskHasRemaining, taskPercent, taskRoundCompleted, taskRoundSummary, taskStatus, taskPhaseSummary } from '../admin/src/product/task-presentation.ts';
+import { taskCanRetry, taskHasRemaining, taskLiveStage, taskPercent, taskRoundCompleted, taskRoundSummary, taskStatus, taskPhaseSummary } from '../admin/src/product/task-presentation.ts';
 
 const sample = (): ConsoleRun => ({ id:'task-7',kind:'dream_full',status:'completed',command:[],stdout:'',stderr:'',error:null,exitCode:0,startedAt:'2026-10-09T01:00:00Z',completedAt:'2026-10-09T01:01:00Z',durationMs:60000,
   product:{name:'AI 深度整理',stage:'部分完成，请查看未完成步骤',percent:0,phasePercent:null,completedSteps:1,processed:0,total:1482,file:null,
@@ -86,6 +86,38 @@ describe('整理按本轮成果展示',()=>{
     run.product!.stage = '任务未执行';
     expect(taskStatus(run)).toBe('未执行');
     expect(taskRoundCompleted(run)).toBe(false);
+  });
+  test('进行中的导入不被上一轮部分完成盖住，已失败且仍有结果时保留部分完成',()=>{
+    const run=sample();
+    run.kind='import_path';
+    run.product!.name='导入资料';
+    run.product!.stage='部分完成';
+    run.result={status:'partial',imported:5,skipped:4,errors:3,processed:9,total:9};
+    for(const status of ['running','queued'] as const){
+      run.status=status;
+      expect(taskStatus(run)).toBe(status==='running'?'执行中':'排队中');
+      expect(taskLiveStage(run)).toBe(status==='running'?'执行中':'排队中');
+      run.error='正在停止任务…';
+      expect(taskStatus(run)).toBe(status==='running'?'正在停止':'排队中');
+      run.error=null;
+    }
+    run.status='running';
+    run.product!.stage='图片识别 2 / 34';
+    expect(taskStatus(run)).toBe('执行中');
+    expect(taskLiveStage(run)).toBe('图片识别 2 / 34');
+    run.product!.stage='部分完成';
+    run.status='failed';
+    expect(taskStatus(run)).toBe('部分完成');
+    expect(taskLiveStage(run)).toBe('部分完成');
+    expect(taskCanRetry(run)).toBe(true);
+    run.status='cancelled';
+    expect(taskStatus(run)).toBe('已停止');
+    run.status='completed';
+    expect(taskStatus(run)).toBe('部分完成');
+    run.result={imported:9,skipped:0,errors:0,processed:9,total:9};
+    run.product!.stage='导入成功，已保存 9 份资料';
+    expect(taskStatus(run)).toBe('导入成功');
+    expect(taskLiveStage(run)).toBe('导入成功，已保存 9 份资料');
   });
   test('同步队列遗留失败和待处理仍能筛出并提供继续入口',()=>{
     const run=sample();run.kind='dream_quick';run.product!.stage='维护完成';run.product!.steps=[];run.product!.metrics=[];run.product!.errorReason=null;

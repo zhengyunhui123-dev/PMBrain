@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { decideCapturedIdentity, isolateIngestItem } from '../src/core/pmbrain-adapters/entity-identity-decision.ts';
+import { decideCapturedIdentity, ingestSlugExists, isolateIngestItem, refreshIngestCandidates } from '../src/core/pmbrain-adapters/entity-identity-decision.ts';
 import { continueIdentityRepair } from '../src/core/pmbrain-adapters/entity-ingest-workflow.ts';
 import { UnrecoverableError } from '../src/core/minions/types.ts';
 import type { LinkPageMetadata } from '../src/core/link-reconciliation.ts';
@@ -33,6 +33,55 @@ test('身份问题留在当前实体，数据库、权限和丢锁仍然停止�
   expect(isolateIngestItem(new UnrecoverableError('ingest source changed before entity write'))).toBe('stop');
   expect(isolateIngestItem(new Error('permission denied'))).toBe('stop');
   expect(isolateIngestItem(new Error('database connection failed'))).toBe('stop');
+});
+
+test('实体目录没有变化时继续用已读名单', async () => {
+  let calls = 0;
+  const engine = { async executeRaw<T>() { calls += 1; return [{ n: 1, same: 1 }] as T[]; } };
+  const loaded = [existing];
+  const pages = await refreshIngestCandidates(engine, loaded, ['vault']);
+  expect(pages).toBe(loaded);
+  expect(calls).toBe(1);
+});
+
+test('本批刚写下的实体只补那一页，不把全部别名再读一遍', async () => {
+  const kept = { ...existing, knowledge_revision: '11111111-1111-4111-8111-111111111111' };
+  const created = { slug: 'projects/new', source_id: 'vault', type: 'project', title: '新项目', aliases: ['新'], knowledge_revision: '33333333-3333-4333-8333-333333333333' };
+  const sql: string[] = [];
+  const engine = {
+    async executeRaw<T>(query: string) {
+      sql.push(query);
+      if (query.includes('AS same')) return [{ n: 2, same: 1 }] as T[];
+      if (query.includes('NOT (p.knowledge_revision')) return [created] as T[];
+      throw new Error('不应重读全部实体');
+    },
+  };
+  const pages = await refreshIngestCandidates(engine, [kept], ['vault', 'default']);
+  expect(pages.map(page => page.slug)).toEqual(['projects/wiki', 'projects/new']);
+  expect(sql.some(query => query.includes('ORDER BY p.source_id, p.slug'))).toBe(false);
+});
+
+test('有实体被删掉时才重新读取整本目录', async () => {
+  const kept = { ...existing, knowledge_revision: '11111111-1111-4111-8111-111111111111' };
+  const sql: string[] = [];
+  const engine = {
+    async executeRaw<T>(query: string) {
+      sql.push(query);
+      if (query.includes('AS same')) return [{ n: 0, same: 0 }] as T[];
+      if (query.includes('NOT (p.knowledge_revision')) return [];
+      return [];
+    },
+  };
+  expect(await refreshIngestCandidates(engine, [kept], ['vault'])).toEqual([]);
+  expect(sql.some(query => query.includes('ORDER BY p.source_id, p.slug'))).toBe(true);
+});
+
+test('确认页面是否存在时不读取正文', async () => {
+  const sql: string[] = [];
+  const engine = { async executeRaw(query: string) { sql.push(query); return []; } };
+  expect(await ingestSlugExists(engine, 'people/li', 'vault')).toBe(false);
+  expect(sql).toHaveLength(1);
+  expect(sql[0]).not.toContain('compiled_truth');
 });
 
 test('只有第一轮返回待确认身份时才再给一次纠正', () => {

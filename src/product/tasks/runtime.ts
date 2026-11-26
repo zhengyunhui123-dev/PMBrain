@@ -143,7 +143,8 @@ export class ProductTaskRuntime {
   private ocrOverviewRefreshing: Promise<void> | null = null;
   private ocrOverviewAt = 0;
   private ocrOverviewError: string | null = null;
-  private executions = new Map<number, { background?: boolean; pause?: () => void; cancel: (reason?:string) => void; done: Promise<unknown>; run: () => ConsoleRun; ownsLockedTransaction: () => boolean; adjust:(constrained:boolean)=>void }>();
+  private executions = new Map<number, { background?: boolean; detached?: boolean; pause?: () => void; cancel: (reason?:string) => void; done: Promise<unknown>; run: () => ConsoleRun; ownsLockedTransaction: () => boolean; adjust:(constrained:boolean)=>void }>();
+  private assistantAsides = new Map<number, { cancel: (reason?: string) => void; done: Promise<void>; outcome?: { ok: true; value: unknown } | { ok: false; error: unknown } }>();
   private cancelledExecutions = new WeakSet<object>();
   private resources:TaskResourceGuard;
   private background: BackgroundVectorizationScheduler;
@@ -684,7 +685,7 @@ export class ProductTaskRuntime {
     if (decision.mode === 'waiting') return decision;
     const deepOrganize = `data->'task'->>'type'='dream' AND data->'task'->'input'->>'preset'='full' AND data->'task'->'input'->>'dryRun' IS DISTINCT FROM 'true' AND COALESCE(data->>'vectorizationWait','') IS DISTINCT FROM 'true'`;
     const busy = await this.engine.executeRaw(`SELECT id FROM minion_jobs WHERE queue IN ($1,$2)
-      AND data->'task'->>'type' IN ('import','sync','sync-file','dream','assistant')
+      AND data->'task'->>'type' IN ('import','sync','sync-file','dream')
       AND (data->'task'->'input'->'ocrOnly' IS NULL OR (status='active' AND NOT $4::boolean))
       AND ($3::bigint IS NULL OR id<>$3)
       AND ((
@@ -1064,14 +1065,7 @@ export class ProductTaskRuntime {
         WHERE id=$1 AND status='active' AND lock_token=$2`,[context.id,record.lock_token]);
       return MINION_DEFERRED;
     }
-    if (structuredTask.type === 'assistant') {
-      if (!this.workbenchAssistant) return this.deferMaintenance(record, '等待助手服务启动');
-      const abort = new AbortController();
-      const agentContext = { ...context, signal: AbortSignal.any([context.signal, context.shutdownSignal, abort.signal]), updateProgress: async (progress: unknown) => { record.progress = progress; await context.updateProgress(progress); } };
-      const pending = this.workbenchAssistant(structuredTask.input, agentContext);
-      this.executions.set(context.id, { cancel: reason => abort.abort(new Error(reason ?? '任务已停止')), done: pending.then(() => undefined, () => undefined), run: () => toRun(record), ownsLockedTransaction: () => false, adjust: () => {} });
-      try { return await pending; } finally { this.executions.delete(context.id); }
-    }
+    if (structuredTask.type === 'assistant') return this.releaseAssistant(record, structuredTask.input, context);
     if (structuredTask.type === 'dream' && !structuredTask.input.dryRun) {
       const earlier = await this.engine.executeRaw(`SELECT id FROM minion_jobs WHERE queue=$1 AND id<$2
         AND data->'task'->>'type'='dream' AND data->'task'->'input'->>'dryRun' IS DISTINCT FROM 'true'
@@ -1667,6 +1661,61 @@ export class ProductTaskRuntime {
     this.sessionViews.delete(record.id);
   }
 
+  private libraryWork(exceptId: number): Promise<Array<{ id: number }>> {
+    return this.engine.executeRaw<{ id: number }>(`SELECT id FROM minion_jobs WHERE id<>$3 AND (
+      (queue=$1 AND name=$2 AND data->'task'->>'type' IN ('import','sync','sync-file','dream') AND status IN ('waiting','active','waiting-children'))
+      OR (queue=$4 AND status IN ('waiting','active'))
+    ) LIMIT 1`, [PRODUCT_TASK_QUEUE, TASK_NAME, exceptId, SYNC_FILE_QUEUE]);
+  }
+
+  private async releaseAssistant(record: MinionJob, input: import('../workbench/agent-tasks').WorkbenchAssistantTask, context: MinionJobContext): Promise<unknown> {
+    const aside = this.assistantAsides.get(context.id);
+    if (aside?.outcome) {
+      const outcome = aside.outcome;
+      this.assistantAsides.delete(context.id);
+      if (outcome.ok) return outcome.value;
+      throw outcome.error instanceof Error ? outcome.error : new Error(String(outcome.error));
+    }
+    if (aside) return this.deferMaintenance(record, '正在单独执行，不占用整理和维护', 2000);
+    if (!this.workbenchAssistant) return this.deferMaintenance(record, '等待助手服务启动');
+    if ((await this.libraryWork(context.id)).length) return this.deferMaintenance(record, '整理或维护正在使用知识库，助手任务稍后单独执行', 2000);
+    const abort = new AbortController();
+    const tracked: { cancel: (reason?: string) => void; done: Promise<void>; outcome?: { ok: true; value: unknown } | { ok: false; error: unknown } } = {
+      cancel: reason => abort.abort(new Error(reason ?? '任务已停止')),
+      done: Promise.resolve(),
+    };
+    const agentContext: MinionJobContext = {
+      ...context,
+      signal: AbortSignal.any([context.signal, context.shutdownSignal, abort.signal]),
+      isActive: async () => !abort.signal.aborted && !context.shutdownSignal.aborted,
+      updateProgress: async progress => {
+        record.progress = progress;
+        await this.engine.executeRaw(`UPDATE minion_jobs SET progress=$2::jsonb, updated_at=now() WHERE id=$1 AND status IN ('delayed','waiting','active')`, [context.id, progress]).catch(error => console.error('[assistant progress]', error instanceof Error ? error.message : error));
+      },
+    };
+    const pending = this.workbenchAssistant(input, agentContext).then(
+      value => { tracked.outcome = { ok: true, value }; },
+      error => { tracked.outcome = { ok: false, error }; },
+    );
+    tracked.done = pending.then(() => undefined);
+    this.assistantAsides.set(context.id, tracked);
+    this.executions.set(context.id, { detached: true, cancel: reason => tracked.cancel(reason), done: tracked.done, run: () => toRun({ ...record, status: 'active' }), ownsLockedTransaction: () => false, adjust: () => {} });
+    void pending.finally(() => {
+      if (this.executions.get(context.id)?.detached) this.executions.delete(context.id);
+      if (abort.signal.aborted) this.assistantAsides.delete(context.id);
+    });
+    try { return await this.deferMaintenance(record, '正在单独执行，不占用整理和维护', 2000); }
+    catch (error) {
+      tracked.cancel(error instanceof Error ? error.message : String(error));
+      this.assistantAsides.delete(context.id);
+      throw error;
+    }
+  }
+
+  private maintenanceExecutions() {
+    return [...this.executions.values()].filter(execution => !execution.detached);
+  }
+
   private async deferMaintenance(record: MinionJob, stage = '等待前面的整理任务完成',delayMs=1000,vectorizationWait=false): Promise<typeof MINION_DEFERRED> {
     const progress = (record.progress ?? {}) as Progress;
     delete progress.result;
@@ -1806,6 +1855,10 @@ export class ProductTaskRuntime {
         `UPDATE minion_jobs SET status = 'paused', error_text = '软件退出，任务已中断。请查看已完成内容后手动继续；模型请求可能已产生费用。'
          WHERE id = ANY($1::bigint[]) AND queue = $2 AND status = 'dead'`, [interrupted, PRODUCT_TASK_QUEUE],
       );
+      await this.engine.executeRaw(
+        `UPDATE minion_jobs SET status='paused', lock_token=NULL, lock_until=NULL, error_text='软件退出，助手任务已中断。请查看对话后手动继续。', updated_at=now()
+         WHERE id = ANY($1::bigint[]) AND queue = $2 AND data->'task'->>'type'='assistant' AND status IN ('delayed','waiting','active')`, [interrupted, PRODUCT_TASK_QUEUE],
+      );
     }
   }
 
@@ -1813,13 +1866,13 @@ export class ProductTaskRuntime {
     this.paused = true;
     this.worker.stop();
     this.fileWorker.stop();
-    await Promise.allSettled([...this.executions.values()].map(execution => execution.done));
+    await Promise.allSettled(this.maintenanceExecutions().map(execution => execution.done));
     await this.loop;
     await this.fileLoop;
     await this.importVectorHandoff;
     await this.searchOptimizeResume;
     await Promise.all([...this.idleFileThreads.splice(0),...this.idleMaintenanceThreads.splice(0)].map(thread => thread.terminate()));
-    await Promise.allSettled([...this.executions.values()].map(execution => execution.done));
+    await Promise.allSettled(this.maintenanceExecutions().map(execution => execution.done));
     this.loop = null;
   }
 
@@ -2003,7 +2056,7 @@ export class ProductTaskRuntime {
     for (const execution of this.executions.values()) execution.cancel();
     this.recoveringOwner = (async () => {
       await (this.engine as unknown as WorkerPgliteEngine).interruptAndRecover();
-      await withDeadline(Promise.allSettled([...this.executions.values()].map(execution => execution.done)), 10000, '数据库已恢复，旧任务未在 10 秒内结束');
+      await withDeadline(Promise.allSettled(this.maintenanceExecutions().map(execution => execution.done)), 10000, '数据库已恢复，旧任务未在 10 秒内结束');
       await this.engine.executeRaw(`UPDATE minion_jobs SET status='paused',lock_token=NULL,lock_until=NULL,
         data=jsonb_set(data,'{resumeOnRestart}','false'::jsonb),error_text='数据库执行曾中断，请查看已完成资料后手动继续。',updated_at=now()
         WHERE queue IN ($1,$2) AND status IN ('active','waiting-children')`, [PRODUCT_TASK_QUEUE, SYNC_FILE_QUEUE]);
@@ -2035,6 +2088,7 @@ export class ProductTaskRuntime {
   }
 
   private async applyStop(id:number, reason?:string){
+    this.assistantAsides.delete(id);
     await this.engine.executeRaw(`UPDATE minion_jobs SET status=$3,lock_token=NULL,lock_until=NULL,error_text=$4,
       data=jsonb_set(data,'{resumeOnRestart}','false'::jsonb),finished_at=now(),updated_at=now()
       WHERE id=$1 AND queue=$2 AND status<>'completed'`,[id,PRODUCT_TASK_QUEUE,reason?'failed':'cancelled',reason??null]);

@@ -788,6 +788,16 @@ function recordOf(value: unknown): Record<string, unknown> {
     : {};
 }
 
+function conceptFailureLine(item: Record<string, unknown>): string {
+  const name = String(item.concept ?? '未知');
+  const error = String(item.error ?? '');
+  if (/concept_retry_held/i.test(error)) return `概念 ${name}：同一批证据多次没有生成完整表述，旧结论仍保留`;
+  if (/concept_preservation_hold/i.test(error)) return `概念 ${name}：已有表述被改过，这次没有覆盖`;
+  if (/empty|truncat|length|schema|parse|invalid|refusal|content.?filter|concept_/i.test(error)) return `概念 ${name}：这次没有生成完整表述，旧结论仍保留`;
+  if (!error) return `概念 ${name}：这次没有生成完整表述，旧结论仍保留`;
+  return `概念 ${name}：${error}`;
+}
+
 function uniqueStrings(items: string[]): string[] {
   return [...new Set(items.map(item => item.trim()).filter(Boolean))];
 }
@@ -884,9 +894,7 @@ export function buildDreamOutcome(run: ConsoleRun): DreamOutcomeSummary {
   const conceptFailures = asArray(concepts.failures).map(recordOf);
   if (conceptFailures.length > 0) {
     failureCount += conceptFailures.length;
-    failureItems.push(...conceptFailures.slice(0, 8).map(item =>
-      `概念 ${String(item.concept ?? '未知')}：${String(item.error ?? '模型生成失败，已使用模板')}`,
-    ));
+    failureItems.push(...conceptFailures.slice(0, 8).map(conceptFailureLine));
   }
 
   const writtenSlugs = asStringArray(synth.written_slugs);
@@ -913,6 +921,7 @@ export function buildDreamOutcome(run: ConsoleRun): DreamOutcomeSummary {
   const conceptsNew = Math.max(0, Number(concepts.concepts_new ?? 0));
   const conceptsUpdated = Math.max(0, Number(concepts.concepts_updated ?? 0));
   const conceptsPending = Math.max(0, Number(concepts.concepts_pending_verification ?? 0));
+  const conceptsRewriteHeld = Math.max(0, Number(concepts.concepts_rewrite_held ?? 0));
   const conceptsConflict = Math.max(0, Number(concepts.concepts_conflict ?? 0));
   if (conceptsWritten > 0) {
     extractionItems.push(
@@ -923,7 +932,9 @@ export function buildDreamOutcome(run: ConsoleRun): DreamOutcomeSummary {
   }
   if (conceptsNew > 0) extractionItems.push(`新增概念：${conceptsNew} 个。`);
   if (conceptsUpdated > 0) extractionItems.push(`更新概念：${conceptsUpdated} 个，新的表述已替换旧表述，历史仍保留。`);
-  if (conceptsPending > 0) extractionItems.push(`待重新核验：${conceptsPending} 个旧结论失去了有效证据，原文仍保留。`);
+  const conceptsEvidenceLost = Math.max(0, conceptsPending - conceptsRewriteHeld);
+  if (conceptsEvidenceLost > 0) extractionItems.push(`待重新核验：${conceptsEvidenceLost} 个旧结论失去了有效证据，原文仍保留。`);
+  if (conceptsRewriteHeld > 0) extractionItems.push(`待重新核验：${conceptsRewriteHeld} 个旧结论本次没有重写成功，原文仍保留。`);
   if (conceptsConflict > 0) extractionItems.push(`冲突：${conceptsConflict} 个结论与现有证据不一致，旧表述仍保留。`);
   if (proposalsInserted > 0) {
     if (proposalSamples.length > 0) {

@@ -7,7 +7,7 @@ import { describeRunRecovery } from '../lib/run-recovery';
 import { useProductTasks } from '../product/TaskActivity';
 import { TaskProgressCard, taskStatus, taskStopping } from '../product/TaskProgress';
 import { taskName, taskUsesFileQueue, type DocumentOcrOverview } from '../../../shared/task-progress';
-import { taskCanRetry, taskRoundCompleted, taskRoundListSummary, taskPhaseSummary, taskPercent } from '../product/task-presentation';
+import { taskCanRetry, taskLiveStage, taskRoundCompleted, taskRoundListSummary, taskPhaseSummary, taskPercent } from '../product/task-presentation';
 import { taskModelSetupIssue } from '../product/model-readiness';
 import { desktopApi } from '../lib/product-fetch';
 import { DocumentOcrDrawer, DocumentOcrRow, documentOcrFallback, documentOcrMatchesFilter, documentOcrStatus } from '../product/DocumentOcrTasks';
@@ -368,7 +368,7 @@ export function TaskCenterPage() {
           <td><button type="button" onClick={() => { setSelectedRun(run); window.history.replaceState(null, '', `#tasks?run=${encodeURIComponent(run.id)}`); }}>{run.product?.name ?? taskName(run.kind)}</button><small>{run.product?.file ?? formatDate(run.startedAt, '-')}</small></td>
           <td><span className={statusClass(taskStatus(run)==='部分完成'?'partial':run.status)}>{statusLabel(run)}</span></td>
           <td>{taskPhaseSummary(run).count}{!taskRoundCompleted(run)&&taskPercent(run) != null && <div className="product-task-bar" aria-label={`当前进度 ${taskPercent(run)}%`}><i style={{ width: `${taskPercent(run)}%` }} /></div>}</td>
-          <td>{taskModelSetupIssue(run)?.title ?? (taskStatus(run)==='部分完成'?run.product?.stage??'部分完成':taskRoundCompleted(run)?taskRoundListSummary(run):run.product?.errorReason ?? (isActive(run) ? run.product?.stage ?? '等待执行' : taskResult(run) ?? run.product?.stage ?? statusLabel(run)))}</td>
+          <td>{taskModelSetupIssue(run)?.title ?? (taskStatus(run)==='部分完成'?run.product?.stage??'部分完成':taskRoundCompleted(run)?taskRoundListSummary(run):run.product?.errorReason ?? (isActive(run) ? taskLiveStage(run) ?? '等待执行' : taskResult(run) ?? run.product?.stage ?? statusLabel(run)))}</td>
           <td title={taskPhaseSummary(run).durationLabel}>{taskPhaseSummary(run).duration}</td>
           <td>{taskPhaseSummary(run).remaining}</td>
           <td><div className="task-table-actions"><button type="button" className="pm-ghost" onClick={() => { setSelectedRun(run); window.history.replaceState(null, '', `#tasks?run=${encodeURIComponent(run.id)}`); }}>查看详情</button>{taskModelSetupIssue(run) && desktopApi() && <button type="button" className="pm-ghost" onClick={() => { window.location.hash = 'settings-model-roles'; }}>去配置模型</button>}{isActive(run) && <button type="button" className="pm-ghost" disabled={cancelling === run.id} onClick={() => void cancel(run)}>{isSearchOptimize(run) ? '暂停' : '停止'}</button>}{taskCanRetry(run) && <button type="button" className="pm-ghost" disabled={retrying === run.id} onClick={() => void retry(run)}>{isSearchOptimize(run) ? '继续' : '重试'}</button>}</div></td>

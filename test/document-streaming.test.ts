@@ -24,6 +24,20 @@ test('资源充足时扩大批次，电脑繁忙或提交余量低时缩小，�
   expect(fast.batchSize).toBeGreaterThan(busy.batchSize);expect(fast.rows).toBeGreaterThan(busy.rows);expect(fast.concurrency).toBeGreaterThan(busy.concurrency);expect(fast.maxFileBytes).toBeGreaterThan(busy.maxFileBytes);expect(busy.waiting).toBe(false);expect(commit.waiting).toBe(true);
 });
 
+test('同一份资料的识图并发只降不升',async()=>{
+  let samples=0;
+  const rising=new DocumentRuntime({sample:()=>{
+    const available=(++samples===1?512:6*1024)*1024**2;
+    return {bytes:64*1024**2,availableBytes:available,totalBytes:8*1024**3,cpuBusyRatio:0};
+  }});
+  await rising.checkpoint(true);expect(rising.plan.concurrency).toBe(1);
+  await rising.checkpoint(true);expect(rising.plan.concurrency).toBe(1);
+  let tightened=0;
+  const easing=new DocumentRuntime({sample:()=>({bytes:64*1024**2,availableBytes:(++tightened===1?6*1024:512)*1024**2,totalBytes:8*1024**3,cpuBusyRatio:0})});
+  await easing.checkpoint(true);expect(easing.plan.concurrency).toBe(2);
+  await easing.checkpoint(true);expect(easing.plan.concurrency).toBe(1);
+});
+
 test('等待资源时可取消，后续工作不会执行',async()=>{
   const controller=new AbortController(),runtime=new DocumentRuntime({signal:controller.signal,sample:()=>({bytes:gib,availableBytes:64*1024**2,totalBytes:8*gib})});
   setTimeout(()=>controller.abort(new Error('isolated cancel')),10);let stopped=false;

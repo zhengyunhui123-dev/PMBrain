@@ -3,7 +3,7 @@ import { FileText } from 'lucide-react';
 import type { ConsoleRun } from '../lib/shared';
 import type { DatabaseOccupancy } from '../../../shared/database-occupancy';
 import { MAINTENANCE_STAGE_LABELS, maintenancePercent, maintenancePhaseDatabase, maintenanceStageSummary, type MaintenanceStageId } from '../../../shared/maintenance-progress';
-import { taskStatus, taskStopping } from './task-presentation';
+import { taskLiveStage, taskStatus, taskStopping } from './task-presentation';
 import { productFetch } from '../lib/product-fetch';
 import { ImportTaskResult } from './ImportTaskResult';
 import { TaskRelationsDetails } from './TaskRelations';
@@ -73,7 +73,7 @@ export function MaintenanceProgress({run,link=true,vectorRuns=[]}:{run:ConsoleRu
   const activeFiles=active(run)?view?.activeFiles?.length||((round?.current?.file||ordinary&&view?.file)?1:0):0;
   const inFlight=Math.min(summary.remaining??activeFiles,activeFiles),queued=summary.remaining==null?null:Math.max(0,summary.remaining-inFlight);
   const percent=round?maintenancePercent(round,files):delta==null?null:delta===0?100:Math.min(100,Math.round((imported+(counts?.unchanged??0))/delta*1000)/10);
-  const currentStage=round&&!round.scan.complete?'扫描资料':round?.stage==='done'?round.stages.some(stage=>stage.status==='partial')?'快速维护部分完成':'快速维护完成':round?MAINTENANCE_STAGE_LABELS[round.stage]:view?.stage??'导入资料';
+  const currentStage=round&&!round.scan.complete?'扫描资料':round?.stage==='done'?round.stages.some(stage=>stage.status==='partial')?'快速维护部分完成':'快速维护完成':round?MAINTENANCE_STAGE_LABELS[round.stage]:ordinary?taskLiveStage(run)??'导入资料':view?.stage??'导入资料';
   const stageLabel=taskStopping(run)?'正在停止任务':currentStage;
   const file=round&&!round.scan.complete?view?.syncScan?.path:round?.stage==='sync'?view?.activeFiles?.[0]?.path:round?.current?.file??(ordinary?view?.file:null);
   const failure=run.error??view?.errorReason,showCurrent=active(run)||['failed','cancelled'].includes(run.status);

@@ -15,7 +15,7 @@ export function compatibleSkill(detail: { frontmatter?: Record<string, unknown> 
   const tools = Array.isArray(detail.frontmatter?.tools) ? detail.frontmatter!.tools as string[] : [];
   return classifySkillTools(tools, { mutating: Boolean(detail.frontmatter?.mutating), writesPages: Boolean(detail.frontmatter?.writes_pages) });
 }
-function schedule(input: unknown): WorkbenchSchedule | undefined {
+export function normalizeSchedule(input: unknown): WorkbenchSchedule | undefined {
   if (input === undefined || input === null) return undefined;
   const value = input as WorkbenchSchedule;
   if (!Array.isArray(value.weekdays) || !value.weekdays.length || value.weekdays.some(day => !Number.isInteger(day) || day < 0 || day > 6)) throw new Error('请选择有效的执行日期');
@@ -55,17 +55,18 @@ function normalizeProfile(input: Record<string, unknown>, previous?: WorkbenchAg
     workspaceDirectory = realpathSync(workspaceInput);
   }
   const selectedAgain = Object.hasOwn(input, 'workspaceDirectory') && Object.hasOwn(input, 'workspaceUpdatedAt') && input.workspaceUpdatedAt !== previous?.workspaceUpdatedAt;
-  const workspaceAccess = input.workspaceAccess ?? previous?.workspaceAccess ?? 'new-files';
-  if (workspaceAccess !== 'new-files' && workspaceAccess !== 'read-write') throw new Error('工作目录文件权限无效');
   const workspaceUpdatedAt = workspaceDirectory === previous?.workspaceDirectory && !selectedAgain ? previous?.workspaceUpdatedAt : now;
   const retiredRules = previous?.retiredRules?.filter(item => item && typeof item.text === 'string' && typeof item.replacedBy === 'string');
-  return { ...base, id: previous?.id ?? randomUUID(), revision: (previous?.revision ?? 0) + 1, sourceIds: [...new Set(sourceIds)], skills: [...new Set(skills)], workflow, readDirectories: [...new Set(readDirectories)], workspaceDirectory, workspaceAccess, workspaceUpdatedAt, deliveryFormat, ...(standingRules ? { standingRules } : {}), ...(retiredRules?.length ? { retiredRules } : {}), ...(playbook ? { playbook } : {}), schedule: schedule(Object.hasOwn(input, 'schedule') ? input.schedule : previous?.schedule), createdAt: previous?.createdAt ?? now, updatedAt: now };
+  return { ...base, id: previous?.id ?? randomUUID(), revision: (previous?.revision ?? 0) + 1, sourceIds: [...new Set(sourceIds)], skills: [...new Set(skills)], workflow, readDirectories: [...new Set(readDirectories)], workspaceDirectory, workspaceUpdatedAt, deliveryFormat, ...(standingRules ? { standingRules } : {}), ...(retiredRules?.length ? { retiredRules } : {}), ...(playbook ? { playbook } : {}), schedule: normalizeSchedule(Object.hasOwn(input, 'schedule') ? input.schedule : previous?.schedule), createdAt: previous?.createdAt ?? now, updatedAt: now };
 }
 export class WorkbenchAgentStore {
   constructor(readonly workbench: WorkbenchStore) {}
   private read(): AgentState {
     const path = join(this.workbench.root, 'agents.json');
-    return existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : { agents: [], artifacts: [], schedules: {} };
+    if (!existsSync(path)) return { agents: [], artifacts: [], schedules: {} };
+    const state: AgentState = JSON.parse(readFileSync(path, 'utf8'));
+    for (const agent of state.agents) Reflect.deleteProperty(agent, 'workspaceAccess');
+    return state;
   }
   private write(value: AgentState) {
     mkdirSync(this.workbench.root, { recursive: true, mode: 0o700 });
@@ -82,10 +83,13 @@ export class WorkbenchAgentStore {
     if (!agent) throw new Error('助手不存在');
     return agent;
   }
-  create(input: Record<string, unknown>): WorkbenchAgent {
+  create(input: Record<string, unknown>, draftId?: string): WorkbenchAgent {
     const state = this.read();
+    const existing = draftId && state.agents.find(row => row.id === draftId);
+    if (existing) return existing;
     if (state.agents.length >= 100) throw new Error('助手数量已达上限');
     const agent = normalizeProfile(input);
+    if (draftId) agent.id = draftId;
     if (this.list().some(row => row.name === agent.name)) throw new Error('已有同名助手，请修改现有助手或使用其他名称');
     state.agents.push(agent); this.write(state); return agent;
   }
@@ -124,6 +128,17 @@ export class WorkbenchAgentStore {
     if (this.list().some(row => row.id !== id && row.name === next.name)) throw new Error('已有同名助手');
     if (id === 'main') this.workbench.saveAssistant(next);
     state.agents = [...state.agents.filter(row => row.id !== id), next]; this.write(state); return next;
+  }
+  remove(id: string): { removed: true; id: string; name: string } {
+    if (id === 'main') throw new Error('主助手不能删除');
+    const state = this.read();
+    const agent = state.agents.find(row => row.id === id);
+    if (!agent) throw new Error('助手不存在');
+    state.agents = state.agents.filter(row => row.id !== id);
+    const { [id]: _schedule, ...schedules } = state.schedules;
+    state.schedules = schedules;
+    this.write(state);
+    return { removed: true, id, name: agent.name };
   }
   artifacts(): WorkbenchArtifact[] { return this.read().artifacts; }
   artifact(id: string): WorkbenchArtifact {

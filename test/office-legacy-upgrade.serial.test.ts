@@ -80,7 +80,11 @@ test('旧资料缺块和同数量坏块从已存正文修补，不重新识图�
 test('失败图片识别一批后停止并重开，复用缓存且只请求剩余一张',async()=>{
   const f=await legacyFixture('resume',2,'OriginalLegacyNativeText',4),controller=new AbortController(),count=calls,original=await engine.getPage('report.docx',{sourceId:f.sourceId});
   onModel=()=>{if(calls-count===2)controller.abort(new Error('isolated stop'));};
-  const runtime=new DocumentRuntime({signal:controller.signal,sample:()=>({bytes:64*1024**2,availableBytes:512*1024**2,totalBytes:8*1024**3,cpuBusyRatio:0})});
+  let samples=0;
+  const runtime=new DocumentRuntime({signal:controller.signal,sample:()=>{
+    const available=(++samples===1?512:6*1024)*1024**2;
+    return {bytes:64*1024**2,availableBytes:available,totalBytes:8*1024**3,cpuBusyRatio:0};
+  }});
   let failure:unknown;try{await importOfficeFile(engine,f.path,'report.docx',{...f.options,runtime});}catch(error){failure=error;}finally{onModel=undefined;}expect(String(failure)).toContain('isolated stop');expect(calls-count).toBe(2);
   const partial=await engine.getPage('report.docx',{sourceId:f.sourceId});await engine.disconnect();engine=(database?new PostgresEngine():new WorkerPgliteEngine()) as unknown as BrainEngine;await engine.connect(database?{database_url:database}:{database_path:join(root,'database')});
   expect(partial!.compiled_truth).toBe(original!.compiled_truth);

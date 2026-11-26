@@ -26,6 +26,7 @@ export interface DocumentRuntimeOptions {signal?:AbortSignal;sample?:()=>Documen
 export class DocumentRuntime {
   private work=0;
   private cpu?:{idle:number;total:number};
+  private concurrencyCeiling:number|null=null;
   plan=documentResourcePlan(sampleDocumentResources());
   constructor(private options:DocumentRuntimeOptions={}){}
   get signal(){return this.options.signal;}
@@ -44,7 +45,11 @@ export class DocumentRuntime {
         this.cpu=next;
       }
       this.plan=documentResourcePlan(sample);
-      if(!this.plan.waiting)break;
+      if(!this.plan.waiting){
+        if(this.concurrencyCeiling==null)this.concurrencyCeiling=this.plan.concurrency;
+        else this.plan.concurrency=Math.min(this.plan.concurrency,this.concurrencyCeiling);
+        break;
+      }
       process.stderr.write(`${JSON.stringify({event:'tick',phase:'import.process',stage:'等待电脑释放资源，已完成的部分保留'})}\n`);
       await wait(1000,undefined,{signal:this.signal});
     }

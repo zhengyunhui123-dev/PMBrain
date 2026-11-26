@@ -60,6 +60,19 @@ test('specialists cannot manage other assistants or expand file permissions from
   const main = agentHandlers(f.context, { agent: f.agents.get('main'), userText: '确认创建周报助手', conversationId: 'unused', messageId: 'unused', cite: () => 1, citations: [], active: () => true });
   await expect(main.get('assistant_create')!.execute({ name: '越权助手', systemPrompt: '规则', workflow: '步骤', readDirectories: [f.root] }, new AbortController().signal)).rejects.toThrow('明确给出');
 });
+test('the main assistant deletes a specialist only after an explicit confirm', async () => {
+  const f = fixture();
+  const agent = f.agents.create({ name: '周报助手', workflow: '按事实写周报' });
+  expect(agentTools(f.agents.get('main'), '删除周报助手', f.context).map(tool => tool.name)).not.toContain('assistant_delete');
+  const confirmed = agentHandlers(f.context, { agent: f.agents.get('main'), userText: '确认删除周报助手', conversationId: 'unused', messageId: 'unused', cite: () => 1, citations: [], active: () => true });
+  expect(agentTools(f.agents.get('main'), '确认删除周报助手', f.context).map(tool => tool.name)).toContain('assistant_delete');
+  await expect(confirmed.get('assistant_delete')!.execute({ id: 'main' }, new AbortController().signal)).rejects.toThrow('主助手不能删除');
+  const result = await confirmed.get('assistant_delete')!.execute({ id: agent.id }, new AbortController().signal) as { removed: boolean; name: string };
+  expect(result).toMatchObject({ removed: true, id: agent.id, name: '周报助手' });
+  expect(f.agents.list().some(item => item.id === agent.id)).toBe(false);
+  const specialist = agentHandlers(f.context, { agent: f.agents.create({ name: '报销助手' }), userText: '确认删除周报助手', conversationId: 'unused', messageId: 'unused', cite: () => 1, citations: [], active: () => true });
+  await expect(specialist.get('assistant_delete')!.execute({ id: agent.id }, new AbortController().signal)).rejects.toThrow('没有授权');
+});
 test('the main assistant configures file access before it can use local reading tools', () => {
   const f = fixture();
   const tools = agentTools(f.agents.get('main'), `创建一个周报助手，读取 ${f.root}`, f.context).map(tool => tool.name);
@@ -105,7 +118,7 @@ test('unfinished tool protocol is reported as an error instead of a completed as
   const conversation = f.service.create({ knowledge: false });
   f.service.send(conversation.id, { text: '创建一个周报助手，按实际进展写周报' }); await f.service.settled(conversation.id);
   const reply = f.service.get(conversation.id).messages.at(-1)!;
-  expect(reply.status).toBe('error'); expect(reply.error).toMatch(/工具指令|没有写出正文/);
+  expect(reply.status).toBe('error'); expect(reply.error).toMatch(/工具指令|没有写出正文|未给出正文/);
   expect(reply.text).toBe(''); expect(f.agents.list()).toHaveLength(1);
 });
 test('specialist searches send the allowed Source scope and suppress mismatched results', async () => {

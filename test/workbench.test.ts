@@ -40,7 +40,8 @@ test('知识助手回答里的角标在悬停时显示对应引用', () => {
   const message = readFileSync(new URL('../admin/src/workbench/Message.tsx', import.meta.url), 'utf8');
   const article = readFileSync(new URL('../admin/src/pages/Documentation.tsx', import.meta.url), 'utf8');
   const css = readFileSync(new URL('../admin/src/workbench/workbench.css', import.meta.url), 'utf8');
-  expect(message).toContain("citations={message.role === 'assistant' ? message.citations : undefined}");
+  expect(message).toContain('<MarkdownArticle markdown={visibleText} citations={message.citations} />');
+  expect(message).toContain('<MarkdownArticle markdown={visibleText} />');
   expect(article).toContain('role="tooltip"');
   expect(article).toContain('citation.snippet');
   expect(css).toContain('.wb-cite-card');
@@ -232,7 +233,7 @@ test('对话变长后，更早的轮次压缩成摘要并继续发给模型，�
   expect(seen[1]?.messages.length).toBeLessThanOrEqual(24);
 });
 
-test('摘要失败时停止回答并保留历史与摘要进度', async () => {
+test('摘要失败时仍用最近对话回答，不推进摘要进度，完整记录保留', async () => {
   const seen: Array<{ messages: string[]; summary?: string }> = [];
   const service = new WorkbenchService(new WorkbenchStore(root()), () => [{ id: 'ollama:local', name: '本地' }], async input => {
     seen.push({ messages: input.messages.map(message => message.text), summary: input.summary });
@@ -248,8 +249,11 @@ test('摘要失败时停止回答并保留历史与摘要进度', async () => {
   (service as unknown as { store: WorkbenchStore }).store.save(seeded);
   service.send(thread.id, { text: '最新问题' });
   await service.settled(thread.id);
-  expect(seen).toHaveLength(0);
-  expect(service.get(thread.id).messages.at(-1)?.error).toContain('摘要失败');
+  expect(seen).toHaveLength(1);
+  expect(seen[0]?.messages).not.toContain('问题0');
+  expect(seen[0]?.messages).toContain('最新问题');
+  expect(service.get(thread.id).messages.at(-1)?.status).toBe('complete');
+  expect(service.get(thread.id).messages.at(-1)?.contextNote).toContain('没能压缩');
   expect(service.get(thread.id).summaryUntil).toBeUndefined();
   expect(service.get(thread.id).messages[0].text).toBe('问题0');
 });
@@ -333,11 +337,11 @@ test('模型因为长度停下时会自动续写，检索只做一次', async ()
 test('续写遇到空内容或非长度停止时不再循环，连续八次长度上限会停下来', async () => {
   const empty = knowledgeWorkbenchAnswer({} as any, {
     search: async () => { throw new Error('不应检索'); },
-    answer: async input => ({ text: input.messages.some((message: any) => message.content === '请从中断处接着写完，不要重复已经写过的内容。') ? '' : '甲', model: 'm', stopReason: 'length' }) as any,
+    answer: async input => ({ text: input.messages.some((message: any) => typeof message.content === 'string' && message.content.startsWith('请从中断处接着写完。')) ? '' : '甲', model: 'm', stopReason: 'length' }) as any,
   });
   const stopped = await empty({ model: 'm', knowledge: false, signal: new AbortController().signal, progress: () => {}, messages: [{ id: '1', role: 'user', text: '写', status: 'complete', createdAt: '' }] });
   expect(stopped.text).toBe('甲');
-  expect(stopped.stopReason).toBe('end');
+  expect(stopped.stopReason).toBe('length');
   let calls = 0;
   const capped = knowledgeWorkbenchAnswer({} as any, {
     search: async () => ({ results: [] } as any),

@@ -1,3 +1,5 @@
+import type { WorkbenchAssistantDraft } from './workbench-agents';
+
 export interface WorkbenchCitation { sourceId: string | null; slug: string; title: string; snippet: string; kind?: 'memory'; origin?: 'prior-artifact'; factId?: number; entitySlug?: string | null; conversationId?: string; messageId?: string; memoryHash?: string }
 export interface WorkbenchMemory {
   sourceId: string;
@@ -87,6 +89,7 @@ export interface WorkbenchMessage {
   memory?: WorkbenchMemory;
   artifacts?: Array<{ id: string; title: string; format: 'markdown' | 'docx'; publishedPath?: string; revision?: number }>;
   turnId?: string;
+  collaborationFrom?: { assistantId: string; conversationId: string };
 }
 export interface WorkbenchTaskMaterial {
   messageId: string;
@@ -97,13 +100,17 @@ export interface WorkbenchTaskMaterial {
   range?: string;
 }
 export interface WorkbenchPending {
-  kind: 'artifact-choice' | 'assistant-create';
+  kind: 'artifact-choice' | 'assistant-create' | 'assistant-delete';
   fingerprint: string;
   prompt: string;
   options?: Array<{ id: string; title: string; revision: number }>;
   createdAt: string;
   assistantRevision?: number;
   taskId?: string;
+  draft?: WorkbenchAssistantDraft;
+  draftId?: string;
+  reviewMessageId?: string;
+  confirmedMessageId?: string;
 }
 export interface WorkbenchTask {
   id: string;
@@ -168,6 +175,7 @@ export interface KnowledgeAssistantSettings {
   model: string;
   knowledge: boolean;
   temperature: number | null;
+  topP?: number | null;
   context: ContextPolicy;
   memorySourceId?: string;
   memoryWriteback?: { mode: 'off' | 'salient' | 'all'; ttl: string };
@@ -206,6 +214,7 @@ export function normalizeAssistant(input: unknown): KnowledgeAssistantSettings {
   const summaryModel = String(context.summaryModel ?? '').trim();
   if (summaryModel.length > 200) throw new Error('请选择摘要模型');
   let temperature: number | null = null;
+  let topP: number | null = null;
   const memorySourceId = String(raw.memorySourceId ?? 'default').trim();
   if (!isValidSourceId(memorySourceId)) throw new Error('请选择有效的记忆知识来源');
   if (raw.temperature !== null && raw.temperature !== undefined && raw.temperature !== '') {
@@ -213,8 +222,13 @@ export function normalizeAssistant(input: unknown): KnowledgeAssistantSettings {
     if (!Number.isFinite(value) || value < 0 || value > 2) throw new Error('温度需在 0 到 2 之间');
     temperature = Math.round(value * 10) / 10;
   }
+  if (raw.topP !== null && raw.topP !== undefined && raw.topP !== '') {
+    const value = Number(raw.topP);
+    if (!Number.isFinite(value) || value < 0 || value > 1) throw new Error('核采样需在 0 到 1 之间');
+    topP = Math.round(value * 100) / 100;
+  }
   return {
-    name, emoji, description, systemPrompt, model, knowledge: raw.knowledge !== false, temperature, memorySourceId,
+    name, emoji, description, systemPrompt, model, knowledge: raw.knowledge !== false, temperature, topP, memorySourceId,
     context: { maxMessages, threshold: Math.round(threshold * 100) / 100, summaryModel },
   };
 }
